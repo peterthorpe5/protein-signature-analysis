@@ -1,0 +1,176 @@
+name: quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --editable '.[app,dev]'
+      - name: Check shell syntax
+        run: |
+          bash -n run_tests.sh
+          bash -n run_protein_signature_analysis.sh
+          bash -n run_protein_signature_app.sh
+          bash -n start_from_inputs.sh
+      - name: Reject tracked secrets and transient artefacts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          paths = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+          forbidden_parts = {
+              ".git",
+              ".pytest_cache",
+              ".ruff_cache",
+              ".venv",
+              "__pycache__",
+          }
+          forbidden_names = {".env", ".envrc", "credentials.json", "secrets.toml"}
+          unsafe = []
+          for value in filter(None, paths):
+              path = Path(value)
+              if (
+                  forbidden_parts.intersection(path.parts)
+                  or path.name in forbidden_names
+                  or path.name.startswith(".env.")
+                  or path.suffix.lower() in {".key", ".p12", ".pem", ".pfx"}
+              ):
+                  unsafe.append(value)
+          if unsafe:
+              raise SystemExit(f"Tracked secret/transient filenames: {sorted(unsafe)}")
+          PY
+      - name: Run quality and test gates
+        run: ./run_tests.sh
+      - name: Build wheel and source distribution
+        run: python -m build
+      - name: Smoke-test wheel and source distribution
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import tarfile
+
+          source_distribution = next(Path("dist").glob("*.tar.gz"))
+          required = {
+              ".github/workflows/ci.yml",
+              "CHANGELOG.md",
+              "CITATION.cff",
+              "CONTRIBUTING.md",
+              "RELEASE_QA.md",
+              "SECURITY.md",
+              "configs/campaign.example.yaml",
+              "configs/profile.example.yaml",
+              "configs/profile.schema.json",
+              "configs/schema.json",
+              "docs/ARCHITECTURE.md",
+              "docs/STRUCTURAL_PRECURSOR.md",
+              "docs/TEST_TRACEABILITY.tsv",
+              "environment.yml",
+              "examples/minimal_e3/campaign.yaml",
+              "run_protein_signature_analysis.sh",
+              "run_protein_signature_app.sh",
+              "run_tests.sh",
+              "start_from_inputs.sh",
+              "tests/conftest.py",
+          }
+          with tarfile.open(source_distribution, mode="r:gz") as archive:
+              records = archive.getmembers()
+              if any(member.issym() or member.islnk() for member in records):
+                  raise SystemExit("Source distribution must not contain links")
+              members = set()
+              for member in records:
+                  path = Path(member.name)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(f"Unsafe source-distribution path: {member.name}")
+                  if len(path.parts) > 1:
+                      members.add(path.relative_to(path.parts[0]).as_posix())
+          missing = sorted(required - members)
+          if missing:
+              raise SystemExit(f"Source distribution is missing release files: {missing}")
+          forbidden_fragments = (
+              "/.protein_signature_cache/",
+              "/__pycache__/",
+              "/.pytest_cache/",
+              "/.ruff_cache/",
+              "/.git/",
+              "/.venv/",
+          )
+          unsafe = sorted(
+              path for path in members
+              if any(fragment in f"/{path}/" for fragment in forbidden_fragments)
+              or path.endswith((".pyc", ".pyo", ".pem", ".key", ".p12", ".pfx"))
+              or Path(path).name in {".env", ".envrc", "secrets.toml"}
+          )
+          if unsafe:
+              raise SystemExit(f"Source distribution contains forbidden files: {unsafe}")
+          PY
+
+          smoke_root="$(mktemp -d)"
+          wheel_path="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          sdist_path="$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          test -n "${wheel_path}"
+          test -n "${sdist_path}"
+
+          python -m venv --system-site-packages "${smoke_root}/wheel"
+          "${smoke_root}/wheel/bin/python" -m pip install --no-deps "${wheel_path}"
+          "${smoke_root}/wheel/bin/protein-signatures" --version
+          "${smoke_root}/wheel/bin/protein-signatures" describe-profile \
+              --profile e3 >/dev/null
+          "${smoke_root}/wheel/bin/protein-signature-app" --help >/dev/null
+
+          python -m venv --system-site-packages "${smoke_root}/sdist"
+          "${smoke_root}/sdist/bin/python" -m pip install \
+              --no-build-isolation --no-deps "${sdist_path}"
+          "${smoke_root}/sdist/bin/protein-signatures" --version
+
+  macos-smoke:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --editable '.[app]'
+      - name: Exercise macOS Bash 3.2 launch surfaces
+        run: |
+          /bin/bash --version | head -n 1
+          /bin/bash -n run_tests.sh
+          /bin/bash -n run_protein_signature_analysis.sh
+          /bin/bash -n run_protein_signature_app.sh
+          /bin/bash -n start_from_inputs.sh
+          /bin/bash start_from_inputs.sh --help >/dev/null
+          /bin/bash run_protein_signature_analysis.sh --help >/dev/null
+          /bin/bash run_protein_signature_app.sh --help >/dev/null
+      - name: Smoke-test installed commands and bundled E3 profile
+        run: |
+          protein-signatures --version
+          protein-signatures describe-profile --profile e3 >/dev/null
+          protein-signature-app --help >/dev/null

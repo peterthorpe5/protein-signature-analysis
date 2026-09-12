@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local analysis caches and disposable QA runs
+.protein_signature_cache/
+example_result/
+qa_*/

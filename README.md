@@ -1,0 +1,425 @@
+# Protein Signature Analysis
+
+[![CI](https://github.com/peterthorpe5/protein-signature-analysis/actions/workflows/ci.yml/badge.svg)](https://github.com/peterthorpe5/protein-signature-analysis/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+`protein-signature-analysis` is a standalone, protein-agnostic workflow for finding
+sequence, domain, fold and structural features that are common in—and statistically
+associated with—a reviewed protein type. It publishes an immutable, file-first scientific
+result bundle plus a read-only Streamlit application for optional interrogation.
+
+The bundled default profile is a detailed core plant/human E3-system hierarchy. E3 is a use
+case, not an architectural assumption: a custom YAML profile can describe any protein family,
+mechanism, complex role or control set.
+
+> A signature is prioritisation and hypothesis-generation evidence. It is not proof of
+> catalytic activity, binding, ubiquitination, degradation, selectivity or in-vivo function.
+
+## What the package answers
+
+- Which exact amino-acid k-mers, Pfam domains, domain architectures, folds, structural
+  clusters and imported pocket features recur in a named protein class?
+- Which of those features are enriched against an explicit biological background?
+- Which findings preserve their direction and significance in homology-safe held-out data?
+- Which folds or structural neighbourhoods distinguish one type from its controls?
+- Can an independently validated classifier discriminate the class, and which features
+  drive each prediction according to genuine SHAP values?
+- Where was evidence not assessed, unavailable, sample-limited or contradictory?
+
+## Design at a glance
+
+```mermaid
+flowchart TD
+    A["Reviewed sequences and labels"] --> B["Homology and redundancy blocks"]
+    C["Pfam and external features"] --> D["Discovery feature matrix"]
+    E["Models and structural alignments"] --> D
+    B --> F["Frozen discovery / validation split"]
+    F --> D
+    D --> G["Fisher tests + two FDR levels"]
+    D --> H["Elastic-net model + SHAP"]
+    G --> I["Numbered TSV/XLSX + PNG/SVG/PDF"]
+    H --> I
+    I --> J["Parquet + DuckDB + optional app"]
+```
+
+The workflow consumes supplied OrthoFinder output and never launches OrthoFinder. The raw
+adapter is tested against 2.5.5 and 3.x layouts. Until the raw-input completion gate is
+strengthened, confirm the upstream scheduler job and OrthoFinder log completed successfully;
+the current raw adapter proves that the required authorities are readable, not that every
+upstream stage finished. A published `orthofinder-results` resource remains the preferred,
+checksum-complete route.
+
+## Implemented evidence layers
+
+| Layer | Native behaviour | Important boundary |
+|---|---|---|
+| Amino-acid sequence | Exact, overlapping protein-level k-mer presence | This is not a de-novo probabilistic motif model |
+| Domains | Coordinate-resolved Pfam/other-domain hits, extracted domain sequence and ordered architecture | Domain scans are supplied; absence is distinct from not assessed |
+| Folds | Imported fold identifiers as categorical features | A common fold alone does not establish function |
+| Structures | Supplied models, AlphaFold DB acquisition, supplied pairwise alignments, or cached all-versus-all Foldseek | AlphaFold DB retrieval does not run structure prediction locally |
+| Structural clusters | Thresholded, bilateral-coverage connected components | Components are frozen in discovery; validation members are projected only through discovery edges |
+| Prior E3 structural work | Checksum-verified import of global US-align/TM-align and pocket evidence | Existing within-group pocket analysis remains a separate authority |
+| Association | Independence-block Fisher exact tests, Wilson intervals and Benjamini–Hochberg FDR | Association is not causation and depends on the supplied control design |
+| Explainable modelling | Group-aware elastic-net logistic regression, held-out metrics, permutation importance and SHAP | A corroborating model, never a replacement for hypothesis-tested association |
+
+External MEME/STREME/FIMO, HMMER, conservation, disorder or experimentally curated motif
+calls can be supplied through the generic `features.tsv` contract. Definitions must be
+prespecified or learned only on the frozen discovery cohort to enter confirmatory inference;
+all-data-derived definitions remain explicitly exploratory. Version 0.1.0 does not silently
+invoke those tools or describe an imported feature as natively calculated.
+
+## Quick start: executable offline example
+
+The example is synthetic and small enough to run without network access or Foldseek.
+
+```bash
+git clone https://github.com/peterthorpe5/protein-signature-analysis.git
+cd protein-signature-analysis
+
+conda env create --file environment.yml
+conda activate protein_signature_analysis
+python -m pip install --no-deps --editable '.[app,dev]'
+
+protein-signatures validate --config examples/minimal_e3/campaign.yaml
+protein-signatures run-all \
+  --config examples/minimal_e3/campaign.yaml \
+  --output-dir example_result
+
+protein-signature-app --resource example_result
+```
+
+The application opens at `http://localhost:8501` by default. Plotly PDF downloads use
+Kaleido and require Chrome/Chromium. If neither is already installed, run
+`plotly_get_chrome` once inside the environment before launching the app. Pipeline PDFs do
+not depend on Chrome.
+
+## Start a real campaign from explicit inputs
+
+The production launcher creates or synchronises a named Conda environment. For a defensible
+analysis, first use it to write and validate the campaign YAML without starting the run:
+
+Minimum inputs are a protein FASTA and an evidence-bearing label-assignment TSV. A useful
+association study also needs reviewed target and background proteins. A complete structural
+study should additionally supply AlphaFold accessions, existing models or a completed
+structural resource.
+
+```bash
+./start_from_inputs.sh \
+  --work-dir /data/signature_campaigns/e3_1000 \
+  --campaign-id e3_1000_2026_09 \
+  --profile e3 \
+  --sequences-fasta /data/authorities/e3_1000.faa \
+  --label-assignments /data/authorities/e3_labels.reviewed.tsv \
+  --domains /data/authorities/interproscan_pfam.tsv \
+  --alphafold-accessions /data/authorities/alphafold_accessions.tsv \
+  --enable-alphafold \
+  --orthofinder-resource /data/orthofinder/published_result \
+  --enable-foldseek \
+  --threads 24 \
+  --initialise-only
+```
+
+Review `/data/signature_campaigns/e3_1000/campaign.yaml` before analysis. In particular,
+pre-specify the comparisons, FDR, discovery/validation fraction, k-mer bounds, structural
+TM-score and bilateral-coverage thresholds, and explainable-model settings. Use
+[configs/campaign.example.yaml](configs/campaign.example.yaml) as the annotated reference.
+Then validate and run that exact reviewed YAML:
+
+```bash
+./start_from_inputs.sh \
+  --work-dir /data/signature_campaigns/e3_1000 \
+  --resume \
+  --threads 24
+```
+
+When `campaign.yaml` already exists, it is the sole configuration authority. `--resume` is
+required, and config-defining options such as `--profile`, `--domains` or
+`--enable-foldseek` are rejected rather than silently ignored. If the result does not yet
+exist, this invocation starts it; if a result exists, it is reused only when its completion,
+checksums, run identity and original input authorities verify. A partial or changed result is
+never continued or overwritten. Omit `--initialise-only` on the first invocation only when
+the generated defaults have already been reviewed and are intentionally accepted.
+
+For raw OrthoFinder input, replace `--orthofinder-resource` in the initialisation command
+with `--orthofinder-results`. The two options are intentionally mutually exclusive. Raw
+layout support is restricted to OrthoFinder 2.5.5 and 3.x and requires OrthoFinder's exact
+`OrthoFinder run completed` log marker; this package never executes OrthoFinder. See
+[the precursor boundary](docs/ORTHOFINDER_PRECURSOR.md).
+
+Verify a copied result independently with:
+
+```bash
+protein-signatures verify --resource /data/signature_campaigns/e3_1000/result
+```
+
+## Preparing the supplied E3 seed catalogue
+
+The catalogue preparer converts the sequence-bearing TSV into FASTA and review templates.
+It deliberately does **not** promote noisy associated categories to reviewed E3 labels.
+
+```bash
+protein-signatures prepare-catalogue \
+  --catalogue e3_seed_catalogue.tsv \
+  --output-dir e3_seed_starter \
+  --id-column seed_id \
+  --sequence-column protein_sequence \
+  --name-column associated_seed_protein_names \
+  --proposed-category-column associated_seed_categories
+```
+
+Every generated assignment is `UNMAPPED` and excluded from analysis until the copied
+`label_assignments.REVIEW_REQUIRED.tsv` is curated deliberately. Canonical-looking UniProt
+accessions are also emitted to an AlphaFold review template.
+
+## Required input principles
+
+1. FASTA identifiers are the campaign authority and are never normalised implicitly.
+2. Only `REVIEWED_POSITIVE` label assignments enter target or background membership.
+3. Targets and controls must be separate in every comparison.
+4. Pfam assessment must distinguish `ASSESSED_WITH_HIT`, `ASSESSED_NO_HIT`,
+   `NOT_ASSESSED` and `FAILED`.
+5. Local coordinate files are checksum-verified and copied into the portable result.
+6. Every OrthoFinder identity retains `(run_id, group_type, hierarchy_node, group_id)`.
+7. TSV is the scientific text-exchange format; comma-separated scientific inputs are not
+   accepted.
+
+Exact headers, types and examples are in [Input contracts](docs/INPUT_CONTRACTS.md). A
+complete configuration example is [configs/campaign.example.yaml](configs/campaign.example.yaml),
+and [configs/schema.json](configs/schema.json) documents schema version 1.
+
+## E3 defaults
+
+The bundled `e3` profile currently contains 118 controlled labels and generates 73 separate
+target-versus-reference comparisons. Each default resolves to one of 14 prespecified
+mechanism- or component-role-specific control labels; none silently reuses the generic
+fallback. Production users must curate those reference memberships before looking at
+signatures and document the matching variables. Parent and child target sets can overlap, so
+these hypotheses are correlated; the study-wide FDR is provided for broad profile surveys.
+The profile keeps catalytic mechanism, multiprotein system and component role separate.
+
+| Stratum | Included distinctions |
+|---|---|
+| RING | H2, HC/HCa/HCb and other canonical subclasses, TRIM-like, MARCH and reviewed other RING |
+| U-box | PUB/ARM, CHIP-like, UFD2/E4-like and other reviewed U-box |
+| HECT | Plant UPL, NEDD4, HERC, UBE3, HECTD, HUWE and other reviewed HECT |
+| RBR/RCR/RNF213 | Ariadne, Parkin, HOIP, HHARI, MYCBP2-like RCR and RNF213 RZ-finger |
+| Cullin–RING | CRL1–5 and CRL7 roles, RBX/Elongin BC, receptor families and CUL9 |
+| Other systems | APC/C components plus specific SUMO, NEDD8 and UFM1 mechanisms or roles |
+| Uncertain records | Non-catalytic components, putative proteins, pseudoenzymes, ambiguous PHD/RING-like and unresolved records |
+| Controls | Fourteen mechanism/role-matched references plus exploratory and technical alternatives |
+
+F-box is therefore a substrate-receptor role within CRL1/SCF, whereas U-box is a distinct
+RING-like catalytic E3 mechanism. The vocabulary is versioned and extensible; assignments
+still require evidence-bearing review. Structural evidence is mandatory for this bundled
+profile, while custom profiles may opt out. Inspect the live policy with:
+
+```bash
+protein-signatures describe-profile --profile e3 > e3_profile.json
+```
+
+See [E3 profile guide](docs/E3_PROFILE.md) for the exact interpretation and custom-profile
+instructions.
+
+## Structural workflow
+
+There are four composable routes:
+
+1. **Supply a structure inventory.** `structures.tsv` can carry model provenance,
+   confidence, coordinate checksums and reviewed fold calls with the exact classification
+   authority release and evidence reference.
+2. **Acquire AlphaFold DB models.** Enable `alphafold` and provide an exact
+   protein-to-UniProt accession table. Responses are HTTPS-restricted to EBI, retried,
+   cached and checksummed; sequence agreement and mean PDB B-factor/pLDDT are recorded.
+   Downloaded low-confidence, confidence-unavailable and sequence-unverified models remain
+   in the provenance tables and cache, but only an exact sequence match at or above the
+   configured mean-pLDDT threshold is analysis-eligible.
+3. **Run Foldseek.** Enable `foldseek` to query every usable local model against the campaign
+   collection. Pre-flight and runtime both require `maximum_hits` (1,000 by default) to be at
+   least the candidate-model count, preventing silent result-cap truncation. The configured
+   E-value still filters the retained edge graph, so it is not an unfiltered matrix. The
+   command is constructed without a shell, the tool version and parameters enter a cache key,
+   and only a checksum-valid completed cache is reused.
+4. **Import the predecessor structural result.** A completed
+   `e3_structural_alignment` resource contributes global alignments, supported pocket
+   features and group summaries after its manifest is verified.
+
+Structural clusters use a minimum TM score and minimum coverage for both proteins. To avoid
+structural leakage, discovery-to-discovery edges define the cluster. A validation protein
+may join only by a passing edge to the frozen discovery component; validation-to-validation
+edges cannot create or merge a signature cluster. Components are also isolated by declared
+comparison universe, coverage denominator, tool and tool version, so disconnected campaigns
+cannot be stitched into one apparent fold. Supplied universe membership and completed-search
+query inventories define assessed absences; retained hits alone never do.
+
+See [Structural runbook](docs/CLUSTER_RUNBOOK.md) for the 1,000-cluster hand-off.
+
+## What “common” and “associated” mean
+
+- **Common** is descriptive: the fraction of independent target blocks carrying a feature,
+  reported with a two-sided 95% Wilson interval.
+- **Associated** is comparative: a two-sided Fisher exact test contrasts feature presence
+  in target and background independence blocks.
+- `q_value` controls Benjamini–Hochberg FDR within one comparison, partition and feature
+  family.
+- `study_q_value` additionally corrects across every configured comparison in the same
+  partition and feature family.
+- Discovery significance creates a candidate. Its prefix records inferential scope:
+  `DECISION_CANDIDATE__` for study-wide biological discoveries,
+  `EXPLORATORY_LOCAL_ONLY__` for local-FDR-only discoveries,
+  `EXPLORATORY_ALL_DATA_DERIVATION__` for definitions derived from the full campaign,
+  or `QC_TECHNICAL_NON_BIOLOGICAL__` for availability features. The suffix records
+  held-out support as `VALIDATED_STUDY_WIDE`, `VALIDATED_WITHIN_COMPARISON`,
+  `DISCOVERY_ONLY`, `DIRECTION_DISCORDANT` or `NO_VALIDATION_DATA`.
+
+An independence block is the connected closure of supplied OrthoFinder membership, exact
+sequence identity and optional near-redundancy clusters. A block contributes at most one
+presence/absence vote. Blocks containing both target and background members are excluded
+from that comparison and counted explicitly.
+
+The two FDR columns answer different questions. Use the within-comparison value for a
+predeclared single class; prefer the study-wide value when surveying many E3 subclasses.
+Full rationale and equations are in [Methods](docs/METHODS.md).
+
+## Mandatory explainable modelling and SHAP
+
+Every campaign attempts one model for every comparison. `explainable_ml.enabled: false` is
+rejected. Comparisons without enough samples, independent groups or variable features
+publish an explicit non-fitted status instead of fabricating a model or plot.
+
+Eligible comparisons use:
+
+- label-blind round-robin feature selection across evidence types;
+- inverse-block-size and class-balanced elastic-net logistic regression;
+- `StratifiedGroupKFold` hyperparameter selection with partition blocks kept intact;
+- a final model fitted only on discovery data;
+- untouched validation ROC AUC, average precision, balanced accuracy, MCC and Brier score;
+- held-out permutation importance where both validation classes exist; and
+- genuine `shap.LinearExplainer` values using an independent discovery-data masker.
+
+SHAP is reported in the linear model's additive log-odds space. Each fitted comparison
+publishes native SHAP beeswarm and global bar plots plus deterministic waterfall plots for
+the most confident explained proteins. Every graphic is available as PNG, SVG and PDF, is
+listed in `ml_plot_inventory`, checksummed in the result manifest, displayed in the app and
+offered for download. Correlated features should be interpreted as a set; SHAP explains
+this fitted model and does not establish a biological mechanism.
+
+The implementation follows the official
+[`LinearExplainer`](https://shap.readthedocs.io/en/latest/generated/shap.LinearExplainer.html),
+[`beeswarm`](https://shap.readthedocs.io/en/latest/generated/shap.plots.beeswarm.html),
+[`bar`](https://shap.readthedocs.io/en/latest/generated/shap.plots.bar.html) and
+[`waterfall`](https://shap.readthedocs.io/en/latest/generated/shap.plots.waterfall.html)
+interfaces.
+
+## Result bundle
+
+```text
+result/
+├── COMPLETED.json
+├── manifest.json
+├── run_metadata.json
+├── protein_signatures.duckdb
+├── analysis/
+│   ├── 00_run_information/     # reading guide and complete report inventory
+│   ├── 01_proteins_and_curation/
+│   ├── 02_homology_and_partitions/
+│   ├── 03_sequence_and_domains/
+│   ├── 04_structures_and_folds/
+│   ├── 05_association_statistics/
+│   ├── 06_explainable_models/ # includes native SHAP graphics
+│   └── 99_final_results/       # decision-facing table/figure copies
+├── assets/structures/          # portable coordinate models when supplied
+└── tables/
+    ├── associations.tsv
+    ├── associations.parquet
+    ├── signatures.tsv
+    ├── signatures.parquet
+    ├── ml_plot_inventory.tsv
+    ├── ml_plot_inventory.parquet
+    └── ...                     # every canonical table in both formats
+```
+
+Every canonical table has a human-facing TSV and formatted, filterable Excel workbook in its
+numbered analysis stage. Static scientific figures are emitted as PNG, SVG and PDF. Start
+with `analysis/00_run_information/report_inventory.tsv`, or open `99_final_results` for the
+principal decision tables and figures.
+
+The root `tables/` directory remains the machine authority in TSV and typed Parquet. The
+physical DuckDB contains every canonical table and a `signature_evidence` view. The app
+queries only this published database in read-only mode. Original inputs are not required to
+view a portable result, but computational resume verifies that they are still byte-identical.
+
+See [Output contracts](docs/OUTPUT_CONTRACTS.md) for every table.
+
+## Application
+
+```bash
+./run_protein_signature_app.sh --resource /data/signature_campaigns/e3_1000/result
+```
+
+The nine pages cover campaign overview, candidate signatures, explainable prediction and
+SHAP graphics, protein/Pfam evidence, class roles, structures/folds, orthology/partitions, a
+complete canonical-data browser and data quality/provenance. Explicit feature-assessment
+states, association denominators and structure eligibility/comparison-universe fields remain
+browsable. Every one of the 26 canonical datasets has a bounded preview plus complete,
+manifested TSV and formatted Excel downloads; every interactive or displayed static plot has
+a PDF download. The app performs no scientific recomputation, opens only checksum-verified
+results, and restricts read-only queries to canonical result tables.
+
+## Custom protein types
+
+Set `campaign.profile` to a custom YAML path and either use its `profile_defaults` policy or
+declare exact comparisons in the campaign YAML. The smallest useful profile has one root,
+one target label and one reviewed background label. See
+[configs/profile.example.yaml](configs/profile.example.yaml).
+
+Custom feature types are accepted through `features.tsv` with explicit assessment,
+definition-digest and derivation-scope fields. `DISCOVERY_DERIVED` attests label-blind
+derivation on the exact discovery cohort; label-aware discovery features must use the
+audit-only `DISCOVERY_SUPERVISED` scope. FDR families and round-robin model selection are
+keyed by `feature_type`, so use stable, scientifically meaningful type names.
+
+## Reproducibility and failure behaviour
+
+- Inputs and copied assets receive SHA-256 checksums.
+- Configuration paths are resolved before the run identity is calculated.
+- Partitions, feature ordering, model seeds and SHAP plot jitter are deterministic.
+- Caches are content/tool/parameter keyed and completion marked.
+- Publication occurs in a sibling staging directory followed by one atomic rename.
+- Existing outputs are never overwritten.
+- Domain, AlphaFold and structural assessment tables keep missing, failed and not-assessed
+  states distinct. All generic input rows are preserved in `feature_assessments`; only
+  assessed-positive, confirmatory-eligible rows enter the canonical inference features.
+- Shell-facing external calls use argument vectors rather than interpolated shell commands.
+
+## Development and quality gates
+
+```bash
+conda activate protein_signature_analysis
+./run_tests.sh
+```
+
+The quality gate compiles the package, enforces Ruff and PEP 8, checks Google-style
+docstrings, runs the complete unit/integration/app suite with branch coverage and requires
+at least 95% coverage. CI runs on Python 3.11 and 3.12.
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Input contracts](docs/INPUT_CONTRACTS.md)
+- [Output contracts](docs/OUTPUT_CONTRACTS.md)
+- [Methods and statistics](docs/METHODS.md)
+- [Scientific boundaries](docs/SCIENTIFIC_BOUNDARIES.md)
+- [OrthoFinder precursor boundary](docs/ORTHOFINDER_PRECURSOR.md)
+- [Structural precursor boundary](docs/STRUCTURAL_PRECURSOR.md)
+- [E3 profile guide](docs/E3_PROFILE.md)
+- [Structural cluster runbook](docs/CLUSTER_RUNBOOK.md)
+- [Release QA and validated boundaries](RELEASE_QA.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
+
+## Licence and citation
+
+The code is released under the [MIT License](LICENSE). Citation metadata is provided in
+[`CITATION.cff`](CITATION.cff). Cite the exact package release, campaign manifest and all
+external evidence/tool authorities used in a scientific analysis.

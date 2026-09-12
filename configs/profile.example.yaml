@@ -1,0 +1,95 @@
+profile_id: kinase_example
+profile_version: "1.0.0"
+display_name: Example kinase classification profile
+require_structural_evidence: false
+
+default_comparison:
+  target_root_label_id: protein:kinase
+  background_label_id: control:matched_non_kinase
+  # The root itself is excluded so defaults analyse its children independently.
+  excluded_label_ids: [protein:kinase]
+  excluded_subtree_label_ids: []
+  description: >-
+    Profile-defined comparison against a preselected biological background.
+
+labels:
+  - label_id: protein
+    display_name: Protein
+    parent_label_id: ""
+    level: root
+    system_class: ""
+    mechanistic_class: ""
+    component_role: UNKNOWN
+    family: ""
+    active_site_expected: UNKNOWN
+    active_site_residue: ""
+    aliases: []
+    description: Root of this controlled protein hierarchy.
+
+  - label_id: protein:kinase
+    display_name: Protein kinase
+    parent_label_id: protein
+    level: mechanistic_class
+    system_class: PHOSPHORYLATION
+    mechanistic_class: KINASE
+    component_role: CATALYTIC_PROTEIN
+    family: KINASE
+    active_site_expected: "YES"
+    active_site_residue: CATALYTIC_ASPARTATE
+    aliases: [kinase]
+    description: Reviewed catalytic protein kinase.
+
+  - label_id: protein:kinase:serine_threonine
+    display_name: Serine/threonine protein kinase
+    parent_label_id: protein:kinase
+    level: subclass
+    system_class: PHOSPHORYLATION
+    mechanistic_class: KINASE
+    component_role: CATALYTIC_PROTEIN
+    family: SERINE_THREONINE_KINASE
+    active_site_expected: "YES"
+    active_site_residue: CATALYTIC_ASPARTATE
+    default_analysis: true
+    aliases: [STK]
+    description: Reviewed serine/threonine protein kinase.
+
+  - label_id: protein:kinase:tyrosine
+    display_name: Tyrosine protein kinase
+    parent_label_id: protein:kinase
+    level: subclass
+    system_class: PHOSPHORYLATION
+    mechanistic_class: KINASE
+    component_role: CATALYTIC_PROTEIN
+    family: TYROSINE_KINASE
+    active_site_expected: "YES"
+    active_site_residue: CATALYTIC_ASPARTATE
+    default_analysis: true
+    default_background_label_id: control:matched_non_tyrosine_kinase
+    aliases: [TK]
+    description: Reviewed tyrosine protein kinase.
+
+  - label_id: control:matched_non_kinase
+    display_name: Matched non-kinase control
+    parent_label_id: protein
+    level: control
+    system_class: CONTROL
+    mechanistic_class: NON_KINASE
+    component_role: CONTROL
+    family: ""
+    active_site_expected: "NO"
+    active_site_residue: ""
+    aliases: [matched control]
+    description: Pre-selected proteins matched independently of observed signatures.
+
+  - label_id: control:matched_non_tyrosine_kinase
+    display_name: Matched non-tyrosine-kinase control
+    parent_label_id: protein
+    level: control
+    system_class: CONTROL
+    mechanistic_class: NON_TYROSINE_KINASE
+    component_role: CONTROL
+    family: ""
+    active_site_expected: "NO"
+    active_site_residue: ""
+    aliases: [matched TK control]
+    description: Pre-selected background for the tyrosine-kinase stratum.

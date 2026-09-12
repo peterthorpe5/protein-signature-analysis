@@ -1,0 +1,80 @@
+schema_version: 1
+
+campaign:
+  campaign_id: kinase_signature_campaign_001
+  # Built-in `e3`, or a path relative to this YAML such as `profile.example.yaml`.
+  profile: profile.example.yaml
+
+inputs:
+  sequences_fasta: /absolute/path/proteins.faa
+  label_assignments: /absolute/path/label_assignments.reviewed.tsv
+  features: /absolute/path/external_features.tsv
+  domains: /absolute/path/domain_assessments_and_hits.tsv
+  redundancy_clusters: /absolute/path/near_redundancy_clusters.tsv
+  structures: /absolute/path/structures.tsv
+  structure_comparisons: /absolute/path/pairwise_structure_comparisons.tsv
+  structural_alignment_resource: null
+  alphafold_accessions: /absolute/path/alphafold_accessions.tsv
+  orthofinder:
+    # Choose a published resource OR a raw completed OrthoFinder directory.
+    resource_dir: /absolute/path/published_orthofinder_resource
+    results_dir: null
+    group_type: HOG
+    hierarchy_node: N0
+    run_id: ""
+
+analysis:
+  # Tripeptides are the production-safe default. Adding 4 creates a much
+  # larger discovery test family and should be a deliberate cluster choice.
+  kmer_lengths: [3]
+  minimum_target_proteins: 3
+  minimum_background_proteins: 3
+  minimum_feature_proteins: 2
+  maximum_kmer_features: 10000
+  validation_fraction: 0.20
+  fdr_threshold: 0.05
+  random_seed: 1729
+  structural_tm_score_threshold: 0.50
+  structural_minimum_coverage: 0.50
+
+alphafold:
+  enabled: true
+  cache_dir: .protein_signature_cache/alphafold
+  timeout_seconds: 60
+  retries: 3
+  minimum_mean_plddt: 50
+
+foldseek:
+  enabled: true
+  executable: foldseek
+  cache_dir: .protein_signature_cache/foldseek
+  e_value_threshold: 0.001
+  sensitivity: 9.5
+  maximum_hits: 1000
+
+explainable_ml:
+  # Mandatory: false is rejected. Ineligible comparisons publish a non-fitted status.
+  enabled: true
+  minimum_samples_per_class: 10
+  minimum_groups_per_class: 3
+  maximum_features: 500
+  regularisation_strengths: [0.01, 0.1, 1.0]
+  l1_ratio: 0.20
+  cross_validation_folds: 5
+  maximum_iterations: 2000
+  convergence_tolerance: 0.0001
+  permutation_repeats: 10
+  maximum_permutation_features: 50
+  top_local_explanations: 10
+  maximum_waterfall_plots: 8
+  plot_cache_dir: .protein_signature_cache/shap
+  exclude_technical_features: true
+
+# Use `profile_defaults` to create one independent comparison for each profile label
+# permitted by its policy. Otherwise declare a pre-specified list as shown below.
+comparisons:
+  - comparison_id: kinase_vs_matched_non_kinase
+    display_name: Kinases versus matched non-kinases
+    target_label_ids: [protein:kinase]
+    background_label_ids: [control:matched_non_kinase]
+    description: Pre-specified primary contrast.

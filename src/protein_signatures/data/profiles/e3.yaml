@@ -1,0 +1,1405 @@
+profile_id: e3_default
+profile_version: "1.1.0"
+display_name: Core plant and human E3 ubiquitin-ligase systems and comparison proteins
+require_structural_evidence: true
+
+default_comparison:
+  target_root_label_id: e3
+  background_label_id: control:prespecified_non_e3_reference
+  excluded_label_ids: [e3, e3:ubiquitin, e3:ubl]
+  excluded_subtree_label_ids: [e3:associated]
+  description: >-
+    Prespecified comparison against the mechanism- or component-role-specific
+    reference resolved for the target. Each reference must be curated before
+    signature inspection and matched for its stated biological and technical
+    covariates; confirmatory campaigns must document that matching explicitly.
+
+# This is a controlled vocabulary, not an automatic annotation rule set.
+# Exact protein-to-label assignments require evidence-bearing curation rows.
+labels:
+  - label_id: protein
+    reviewed_positive_allowed: false
+    display_name: Protein
+    parent_label_id: ""
+    level: root
+    system_class: ""
+    mechanistic_class: ""
+    component_role: UNKNOWN
+    aliases: []
+    description: Root of the configurable protein-type hierarchy.
+
+  - label_id: e3
+    reviewed_positive_allowed: false
+    display_name: E3 or E3-system protein
+    parent_label_id: protein
+    level: system_group
+    system_class: E3_SYSTEM
+    mechanistic_class: ""
+    component_role: UNKNOWN
+    aliases: [E3 ligase, ubiquitin ligase system]
+    description: Reviewed catalytic E3 proteins and separately identified components of E3 systems.
+
+  - label_id: e3:ubiquitin
+    reviewed_positive_allowed: false
+    display_name: Ubiquitin E3 system
+    parent_label_id: e3
+    level: modifier_system
+    system_class: UBIQUITIN_E3
+    mechanistic_class: ""
+    component_role: UNKNOWN
+    aliases: [ubiquitin E3]
+    description: E3 systems acting on ubiquitin rather than another ubiquitin-like modifier.
+
+  - label_id: e3:ubiquitin:ring
+    default_analysis: true
+    default_background_label_id: control:matched_ring_mechanism_reference
+    assignment_exclusivity_group: ubiquitin_e3_primary_mechanism
+    display_name: RING E3 ligase
+    parent_label_id: e3:ubiquitin
+    level: mechanistic_class
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    family: RING
+    active_site_expected: "NO"
+    active_site_residue: E2_RECRUITMENT_DOMAIN
+    aliases: [RING, RING finger, RING-type E3]
+    description: RING-domain E3s that promote direct ubiquitin transfer from E2 to substrate.
+
+  - label_id: e3:ubiquitin:ring:ring_h2
+    default_analysis: true
+    display_name: RING-H2
+    parent_label_id: e3:ubiquitin:ring
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [RING H2]
+    description: Canonical C3H2C3 RING subclass with histidines at metal-ligand positions four and five.
+
+  - label_id: e3:ubiquitin:ring:ring_hc
+    default_analysis: true
+    display_name: RING-HC group
+    parent_label_id: e3:ubiquitin:ring
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [RING HC, C3HC4 RING]
+    description: Canonical C3HC4 RING group, retained as a parent for the plant HCa and HCb spacing subclasses.
+
+  - label_id: e3:ubiquitin:ring:ring_hc:ring_hca
+    default_analysis: true
+    display_name: RING-HCa
+    parent_label_id: e3:ubiquitin:ring:ring_hc
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [RING HCa]
+    description: Plant RING-HCa C3HC4 subclass, typically with two residues between metal-ligand positions seven and eight.
+
+  - label_id: e3:ubiquitin:ring:ring_hc:ring_hcb
+    default_analysis: true
+    display_name: RING-HCb
+    parent_label_id: e3:ubiquitin:ring:ring_hc
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [RING HCb]
+    description: Plant RING-HCb C3HC4 subclass, distinguished from HCa by three or four residues between metal-ligand positions seven and eight.
+
+  - label_id: e3:ubiquitin:ring:ring_c2
+    default_analysis: true
+    display_name: RING-C2
+    parent_label_id: e3:ubiquitin:ring
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [RING C2]
+    description: Reviewed RING-C2 subclass.
+
+  - label_id: e3:ubiquitin:ring:ring_d
+    default_analysis: true
+    display_name: RING-D
+    parent_label_id: e3:ubiquitin:ring
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [RING D]
+    description: Reviewed RING-D subclass.
+
+  - label_id: e3:ubiquitin:ring:ring_g
+    default_analysis: true
+    display_name: RING-G
+    parent_label_id: e3:ubiquitin:ring
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [RING G]
+    description: Reviewed RING-G subclass.
+
+  - label_id: e3:ubiquitin:ring:ring_s_t
+    default_analysis: true
+    display_name: RING-S or RING-T
+    parent_label_id: e3:ubiquitin:ring
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [RING S/T, RING S, RING T]
+    description: Reviewed RING subclass with serine or threonine in a metal-ligand position.
+
+  - label_id: e3:ubiquitin:ring:ring_v
+    default_analysis: true
+    display_name: RING-v
+    parent_label_id: e3:ubiquitin:ring
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [RING v]
+    description: Reviewed variant RING subclass.
+
+  - label_id: e3:ubiquitin:ring:trim
+    default_analysis: true
+    display_name: TRIM-like RING E3
+    parent_label_id: e3:ubiquitin:ring
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [TRIM]
+    description: Tripartite-motif or supported TRIM-like RING proteins.
+
+  - label_id: e3:ubiquitin:ring:march
+    default_analysis: true
+    display_name: MARCH RING E3
+    parent_label_id: e3:ubiquitin:ring
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [MARCH]
+    description: Membrane-associated RING-CH family.
+
+  - label_id: e3:ubiquitin:ring:other_reviewed
+    default_analysis: true
+    display_name: Other reviewed RING E3
+    parent_label_id: e3:ubiquitin:ring
+    level: subclass
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RING
+    component_role: CATALYTIC_E3
+    aliases: [other RING E3]
+    description: Reviewed RING E3 that cannot yet be assigned to a more specific subclass.
+
+  - label_id: e3:ubiquitin:u_box
+    default_analysis: true
+    default_background_label_id: control:matched_u_box_mechanism_reference
+    assignment_exclusivity_group: ubiquitin_e3_primary_mechanism
+    display_name: U-box E3 ligase
+    parent_label_id: e3:ubiquitin
+    level: mechanistic_class
+    system_class: UBIQUITIN_E3
+    mechanistic_class: U_BOX
+    component_role: CATALYTIC_E3
+    family: U_BOX
+    active_site_expected: "NO"
+    active_site_residue: E2_RECRUITMENT_DOMAIN
+    aliases: [U-box, Ubox]
+    description: RING-like U-box E3s analysed separately from canonical zinc-binding RING proteins.
+
+  - label_id: e3:ubiquitin:u_box:pub_arm
+    default_analysis: true
+    display_name: Plant U-box ARM-repeat protein
+    parent_label_id: e3:ubiquitin:u_box
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: U_BOX
+    component_role: CATALYTIC_E3
+    aliases: [PUB, PUB-ARM]
+    description: Plant U-box proteins with ARM-repeat substrate-interaction regions.
+
+  - label_id: e3:ubiquitin:u_box:chip
+    default_analysis: true
+    display_name: CHIP-like U-box E3
+    parent_label_id: e3:ubiquitin:u_box
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: U_BOX
+    component_role: CATALYTIC_E3
+    aliases: [CHIP]
+    description: CHIP-like chaperone-associated U-box proteins.
+
+  - label_id: e3:ubiquitin:u_box:ufd2_e4
+    default_analysis: true
+    display_name: UFD2 or E4-like U-box protein
+    parent_label_id: e3:ubiquitin:u_box
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: U_BOX
+    component_role: CHAIN_ELONGATION_FACTOR
+    aliases: [UFD2, E4 ubiquitination factor]
+    description: U-box-containing ubiquitin-chain elongation factors retained as a distinct role.
+
+  - label_id: e3:ubiquitin:u_box:other_reviewed
+    default_analysis: true
+    display_name: Other reviewed U-box E3
+    parent_label_id: e3:ubiquitin:u_box
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: U_BOX
+    component_role: CATALYTIC_E3
+    aliases: [other U-box E3]
+    description: Reviewed U-box E3 without a more specific supported family assignment.
+
+  - label_id: e3:ubiquitin:hect
+    default_analysis: true
+    default_background_label_id: control:matched_hect_mechanism_reference
+    assignment_exclusivity_group: ubiquitin_e3_primary_mechanism
+    display_name: HECT E3 ligase
+    parent_label_id: e3:ubiquitin
+    level: mechanistic_class
+    system_class: UBIQUITIN_E3
+    mechanistic_class: HECT
+    component_role: CATALYTIC_E3
+    family: HECT
+    active_site_expected: "YES"
+    active_site_residue: CATALYTIC_CYSTEINE
+    aliases: [HECT]
+    description: HECT-domain E3s with an E3-ubiquitin thioester intermediate.
+
+  - label_id: e3:ubiquitin:hect:upl_plant
+    default_analysis: true
+    display_name: Plant UPL HECT E3
+    parent_label_id: e3:ubiquitin:hect
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: HECT
+    component_role: CATALYTIC_E3
+    aliases: [UPL, ubiquitin-protein ligase]
+    description: Plant ubiquitin protein ligase HECT family.
+
+  - label_id: e3:ubiquitin:hect:nedd4
+    default_analysis: true
+    display_name: NEDD4-family HECT E3
+    parent_label_id: e3:ubiquitin:hect
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: HECT
+    component_role: CATALYTIC_E3
+    aliases: [NEDD4]
+    description: NEDD4-family C2-WW-HECT proteins.
+
+  - label_id: e3:ubiquitin:hect:herc
+    default_analysis: true
+    display_name: HERC-family HECT E3
+    parent_label_id: e3:ubiquitin:hect
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: HECT
+    component_role: CATALYTIC_E3
+    aliases: [HERC]
+    description: HERC-family RCC1-like repeat and HECT proteins.
+
+  - label_id: e3:ubiquitin:hect:ube3
+    default_analysis: true
+    display_name: UBE3-family HECT E3
+    parent_label_id: e3:ubiquitin:hect
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: HECT
+    component_role: CATALYTIC_E3
+    aliases: [E6AP, UBE3]
+    description: UBE3 or E6AP-like HECT family.
+
+  - label_id: e3:ubiquitin:hect:hectd
+    default_analysis: true
+    display_name: HECTD-family E3
+    parent_label_id: e3:ubiquitin:hect
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: HECT
+    component_role: CATALYTIC_E3
+    aliases: [HECTD]
+    description: HECTD-family catalytic E3 proteins.
+
+  - label_id: e3:ubiquitin:hect:huwe
+    default_analysis: true
+    display_name: HUWE-like HECT E3
+    parent_label_id: e3:ubiquitin:hect
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: HECT
+    component_role: CATALYTIC_E3
+    aliases: [HUWE]
+    description: HUWE-like large HECT E3 proteins.
+
+  - label_id: e3:ubiquitin:hect:other_reviewed
+    default_analysis: true
+    display_name: Other reviewed HECT E3
+    parent_label_id: e3:ubiquitin:hect
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: HECT
+    component_role: CATALYTIC_E3
+    aliases: [other HECT E3]
+    description: Reviewed HECT E3 without a more specific supported family assignment.
+
+  - label_id: e3:ubiquitin:rbr
+    default_analysis: true
+    default_background_label_id: control:matched_rbr_mechanism_reference
+    assignment_exclusivity_group: ubiquitin_e3_primary_mechanism
+    display_name: RBR E3 ligase
+    parent_label_id: e3:ubiquitin
+    level: mechanistic_class
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RBR
+    component_role: CATALYTIC_E3
+    family: RBR
+    active_site_expected: "YES"
+    active_site_residue: RING2_CATALYTIC_CYSTEINE
+    aliases: [RBR, RING-between-RING, RING1-IBR-RING2]
+    description: Hybrid RBR E3s with RING1 recruitment and RING2 catalytic cysteine chemistry.
+
+  - label_id: e3:ubiquitin:rbr:ariadne
+    default_analysis: true
+    display_name: Ariadne-family RBR E3
+    parent_label_id: e3:ubiquitin:rbr
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RBR
+    component_role: CATALYTIC_E3
+    aliases: [ARI, Ariadne]
+    description: Ariadne-family RBR proteins, including supported plant ARI proteins.
+
+  - label_id: e3:ubiquitin:rbr:parkin
+    default_analysis: true
+    display_name: Parkin-family RBR E3
+    parent_label_id: e3:ubiquitin:rbr
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RBR
+    component_role: CATALYTIC_E3
+    aliases: [Parkin]
+    description: Parkin-family RBR proteins.
+
+  - label_id: e3:ubiquitin:rbr:hoip
+    default_analysis: true
+    display_name: HOIP-family RBR E3
+    parent_label_id: e3:ubiquitin:rbr
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RBR
+    component_role: CATALYTIC_E3
+    aliases: [HOIP]
+    description: HOIP-family RBR catalytic proteins.
+
+  - label_id: e3:ubiquitin:rbr:hhari
+    default_analysis: true
+    display_name: HHARI-family RBR E3
+    parent_label_id: e3:ubiquitin:rbr
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RBR
+    component_role: CATALYTIC_E3
+    aliases: [HHARI]
+    description: HHARI-family RBR catalytic proteins.
+
+  - label_id: e3:ubiquitin:rbr:other_reviewed
+    default_analysis: true
+    display_name: Other reviewed RBR E3
+    parent_label_id: e3:ubiquitin:rbr
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RBR
+    component_role: CATALYTIC_E3
+    aliases: [other RBR E3]
+    description: Reviewed RBR E3 without a more specific supported family assignment.
+
+  - label_id: e3:ubiquitin:rcr
+    default_analysis: true
+    default_background_label_id: control:matched_rcr_mechanism_reference
+    assignment_exclusivity_group: ubiquitin_e3_primary_mechanism
+    display_name: RING-Cys-relay E3 ligase
+    parent_label_id: e3:ubiquitin
+    level: mechanistic_class
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RCR
+    component_role: CATALYTIC_E3
+    family: RCR
+    active_site_expected: "YES"
+    active_site_residue: RELAY_CYSTEINE
+    aliases: [RCR, RING-Cys relay]
+    description: E3s using a RING-Cys-relay mechanism, kept separate from RING and RBR.
+
+  - label_id: e3:ubiquitin:rcr:mycbp2_like
+    default_analysis: true
+    display_name: MYCBP2-like RCR E3
+    parent_label_id: e3:ubiquitin:rcr
+    level: family
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RCR
+    component_role: CATALYTIC_E3
+    aliases: [MYCBP2]
+    description: Reviewed MYCBP2-like RING-Cys-relay E3 proteins.
+
+  - label_id: e3:ubiquitin:rnf213_rz
+    default_analysis: true
+    default_background_label_id: control:matched_rnf213_mechanism_reference
+    assignment_exclusivity_group: ubiquitin_e3_primary_mechanism
+    display_name: RNF213 RZ-finger E3 ligase
+    parent_label_id: e3:ubiquitin
+    level: mechanistic_class
+    system_class: UBIQUITIN_E3
+    mechanistic_class: RZ_FINGER
+    component_role: CATALYTIC_E3
+    family: RNF213
+    active_site_expected: "YES"
+    active_site_residue: RZ_FINGER_CATALYTIC_CYSTEINE
+    aliases: [RNF213, mysterin]
+    description: Noncanonical RNF213 family with a catalytic cysteine in the RZ-finger domain.
+
+  - label_id: e3:ubiquitin:crl
+    reviewed_positive_allowed: false
+    display_name: Cullin-RING ligase system
+    parent_label_id: e3:ubiquitin
+    level: mechanistic_system
+    system_class: CULLIN_RING_LIGASE
+    mechanistic_class: CRL
+    component_role: MULTIPROTEIN_SYSTEM
+    aliases: [CRL, Cullin RING ligase]
+    description: Multi-protein Cullin-RING systems with catalytic, scaffold, adaptor and receptor roles.
+
+  - label_id: e3:ubiquitin:crl:rbx
+    default_analysis: true
+    default_background_label_id: control:matched_ring_component_reference
+    display_name: RBX RING catalytic component
+    parent_label_id: e3:ubiquitin:crl
+    level: component_family
+    system_class: CULLIN_RING_LIGASE
+    mechanistic_class: CRL
+    component_role: RING_CATALYTIC_COMPONENT
+    aliases: [RBX, ROC1, RBX1, RBX2]
+    description: RING catalytic component shared by Cullin-RING systems.
+
+  - label_id: e3:ubiquitin:crl:elongin_bc
+    default_analysis: true
+    default_background_label_id: control:matched_adaptor_reference
+    display_name: Elongin B-C adaptor module
+    parent_label_id: e3:ubiquitin:crl
+    level: component_family
+    system_class: CULLIN_RING_LIGASE
+    mechanistic_class: CRL
+    component_role: ADAPTOR
+    aliases: [Elongin BC]
+    description: Shared Elongin B-C adaptor module used by CRL2 and CRL5 systems.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf
+    reviewed_positive_allowed: false
+    display_name: CRL1 or SCF system
+    parent_label_id: e3:ubiquitin:crl
+    level: system_subclass
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: MULTIPROTEIN_SYSTEM
+    aliases: [SCF, CRL1]
+    description: CUL1-SKP1-F-box Cullin-RING system.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf:cul1
+    default_analysis: true
+    default_background_label_id: control:matched_scaffold_reference
+    display_name: CUL1 scaffold
+    parent_label_id: e3:ubiquitin:crl:crl1_scf
+    level: component_family
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: SCAFFOLD
+    aliases: [CUL1, Cullin 1]
+    description: Cullin scaffold component of CRL1 or SCF.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf:skp1
+    default_analysis: true
+    default_background_label_id: control:matched_adaptor_reference
+    display_name: SKP1 adaptor
+    parent_label_id: e3:ubiquitin:crl:crl1_scf
+    level: component_family
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: ADAPTOR
+    aliases: [SKP1]
+    description: Adaptor joining CUL1 to an F-box substrate receptor.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf:f_box
+    default_analysis: true
+    default_background_label_id: control:matched_substrate_receptor_reference
+    display_name: F-box substrate receptor
+    parent_label_id: e3:ubiquitin:crl:crl1_scf
+    level: component_family
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    family: F_BOX
+    active_site_expected: "NO"
+    active_site_residue: SKP1_BINDING_DOMAIN
+    aliases: [F-box, Fbox, F-box protein]
+    description: SKP1-binding substrate receptor; not independently labelled as the catalytic E3 component.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf:f_box:kelch
+    default_analysis: true
+    display_name: F-box Kelch receptor
+    parent_label_id: e3:ubiquitin:crl:crl1_scf:f_box
+    level: receptor_subclass
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [F-box/Kelch, FBK]
+    description: F-box receptor with Kelch substrate-interaction repeats.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf:f_box:lrr
+    default_analysis: true
+    display_name: F-box LRR receptor
+    parent_label_id: e3:ubiquitin:crl:crl1_scf:f_box
+    level: receptor_subclass
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [F-box/LRR, FBL]
+    description: F-box receptor with leucine-rich repeats.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf:f_box:wd40
+    default_analysis: true
+    display_name: F-box WD40 receptor
+    parent_label_id: e3:ubiquitin:crl:crl1_scf:f_box
+    level: receptor_subclass
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [F-box/WD40, FBW]
+    description: F-box receptor with WD40 substrate-interaction repeats.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf:f_box:fba
+    default_analysis: true
+    display_name: F-box associated-domain receptor
+    parent_label_id: e3:ubiquitin:crl:crl1_scf:f_box
+    level: receptor_subclass
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [F-box associated, FBA]
+    description: F-box receptor carrying an F-box-associated domain.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf:f_box:tubby
+    default_analysis: true
+    display_name: F-box Tubby receptor
+    parent_label_id: e3:ubiquitin:crl:crl1_scf:f_box
+    level: receptor_subclass
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [F-box/Tubby]
+    description: F-box receptor with a Tubby-like substrate-interaction domain.
+
+  - label_id: e3:ubiquitin:crl:crl1_scf:f_box:other_reviewed
+    default_analysis: true
+    display_name: Other reviewed F-box receptor
+    parent_label_id: e3:ubiquitin:crl:crl1_scf:f_box
+    level: receptor_subclass
+    system_class: CRL1_SCF
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [other F-box receptor]
+    description: Reviewed F-box receptor without a more specific architecture assignment.
+
+  - label_id: e3:ubiquitin:crl:crl2_vhl
+    reviewed_positive_allowed: false
+    display_name: CRL2 or VHL-box system
+    parent_label_id: e3:ubiquitin:crl
+    level: system_subclass
+    system_class: CRL2_VHL
+    mechanistic_class: CRL
+    component_role: MULTIPROTEIN_SYSTEM
+    aliases: [CRL2]
+    description: CUL2-Elongin BC system using VHL-box substrate receptors.
+
+  - label_id: e3:ubiquitin:crl:crl2_vhl:cul2
+    default_analysis: true
+    default_background_label_id: control:matched_scaffold_reference
+    display_name: CUL2 scaffold
+    parent_label_id: e3:ubiquitin:crl:crl2_vhl
+    level: component_family
+    system_class: CRL2_VHL
+    mechanistic_class: CRL
+    component_role: SCAFFOLD
+    aliases: [CUL2, Cullin 2]
+    description: Cullin scaffold component of CRL2 systems.
+
+  - label_id: e3:ubiquitin:crl:crl2_vhl:vhl_box
+    default_analysis: true
+    default_background_label_id: control:matched_substrate_receptor_reference
+    display_name: VHL-box substrate receptor
+    parent_label_id: e3:ubiquitin:crl:crl2_vhl
+    level: component_family
+    system_class: CRL2_VHL
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [VHL-box]
+    description: VHL-box substrate receptor within a CRL2 system.
+
+  - label_id: e3:ubiquitin:crl:crl3_btb
+    reviewed_positive_allowed: false
+    display_name: CRL3 or BTB system
+    parent_label_id: e3:ubiquitin:crl
+    level: system_subclass
+    system_class: CRL3_BTB
+    mechanistic_class: CRL
+    component_role: MULTIPROTEIN_SYSTEM
+    aliases: [CRL3]
+    description: CUL3 system using BTB-domain substrate adaptors or receptors.
+
+  - label_id: e3:ubiquitin:crl:crl3_btb:cul3
+    default_analysis: true
+    default_background_label_id: control:matched_scaffold_reference
+    display_name: CUL3 scaffold
+    parent_label_id: e3:ubiquitin:crl:crl3_btb
+    level: component_family
+    system_class: CRL3_BTB
+    mechanistic_class: CRL
+    component_role: SCAFFOLD
+    aliases: [CUL3, Cullin 3]
+    description: Cullin scaffold component of CRL3 systems.
+
+  - label_id: e3:ubiquitin:crl:crl3_btb:btb
+    default_analysis: true
+    default_background_label_id: control:matched_substrate_receptor_reference
+    display_name: BTB substrate adaptor or receptor
+    parent_label_id: e3:ubiquitin:crl:crl3_btb
+    level: component_family
+    system_class: CRL3_BTB
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR_ADAPTOR
+    aliases: [BTB, BTB/POZ]
+    description: BTB-domain protein combining Cullin binding with substrate-recognition functions.
+
+  - label_id: e3:ubiquitin:crl:crl3_btb:btb_kelch
+    default_analysis: true
+    display_name: BTB BACK Kelch receptor
+    parent_label_id: e3:ubiquitin:crl:crl3_btb:btb
+    level: receptor_subclass
+    system_class: CRL3_BTB
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR_ADAPTOR
+    aliases: [BTB-BACK-Kelch, BBK]
+    description: BTB-BACK-Kelch architecture within CRL3 systems.
+
+  - label_id: e3:ubiquitin:crl:crl3_btb:math_btb
+    default_analysis: true
+    display_name: MATH BTB receptor
+    parent_label_id: e3:ubiquitin:crl:crl3_btb:btb
+    level: receptor_subclass
+    system_class: CRL3_BTB
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR_ADAPTOR
+    aliases: [MATH-BTB, BPM]
+    description: MATH-BTB substrate receptor architecture, including supported plant BPM proteins.
+
+  - label_id: e3:ubiquitin:crl:crl3_btb:other_reviewed
+    default_analysis: true
+    display_name: Other reviewed BTB receptor
+    parent_label_id: e3:ubiquitin:crl:crl3_btb:btb
+    level: receptor_subclass
+    system_class: CRL3_BTB
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR_ADAPTOR
+    aliases: [other BTB receptor]
+    description: Reviewed CRL3 BTB receptor without a more specific architecture assignment.
+
+  - label_id: e3:ubiquitin:crl:crl4_dcaf
+    reviewed_positive_allowed: false
+    display_name: CRL4 or DCAF system
+    parent_label_id: e3:ubiquitin:crl
+    level: system_subclass
+    system_class: CRL4_DCAF
+    mechanistic_class: CRL
+    component_role: MULTIPROTEIN_SYSTEM
+    aliases: [CRL4]
+    description: CUL4-DDB1 system using DCAF substrate receptors.
+
+  - label_id: e3:ubiquitin:crl:crl4_dcaf:cul4
+    default_analysis: true
+    default_background_label_id: control:matched_scaffold_reference
+    display_name: CUL4 scaffold
+    parent_label_id: e3:ubiquitin:crl:crl4_dcaf
+    level: component_family
+    system_class: CRL4_DCAF
+    mechanistic_class: CRL
+    component_role: SCAFFOLD
+    aliases: [CUL4, CUL4A, CUL4B, Cullin 4]
+    description: Cullin scaffold component of CRL4 systems.
+
+  - label_id: e3:ubiquitin:crl:crl4_dcaf:ddb1
+    default_analysis: true
+    default_background_label_id: control:matched_adaptor_reference
+    display_name: DDB1 adaptor
+    parent_label_id: e3:ubiquitin:crl:crl4_dcaf
+    level: component_family
+    system_class: CRL4_DCAF
+    mechanistic_class: CRL
+    component_role: ADAPTOR
+    aliases: [DDB1]
+    description: DDB1 adaptor component of CRL4 systems.
+
+  - label_id: e3:ubiquitin:crl:crl4_dcaf:dcaf
+    default_analysis: true
+    default_background_label_id: control:matched_substrate_receptor_reference
+    display_name: DCAF substrate receptor
+    parent_label_id: e3:ubiquitin:crl:crl4_dcaf
+    level: component_family
+    system_class: CRL4_DCAF
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [DCAF, DWD protein]
+    description: DDB1-CUL4-associated substrate receptor, often carrying WD40 repeats.
+
+  - label_id: e3:ubiquitin:crl:crl5_socs
+    reviewed_positive_allowed: false
+    display_name: CRL5 or SOCS-box system
+    parent_label_id: e3:ubiquitin:crl
+    level: system_subclass
+    system_class: CRL5_SOCS
+    mechanistic_class: CRL
+    component_role: MULTIPROTEIN_SYSTEM
+    aliases: [CRL5]
+    description: CUL5-Elongin BC system using SOCS-box substrate receptors.
+
+  - label_id: e3:ubiquitin:crl:crl5_socs:cul5
+    default_analysis: true
+    default_background_label_id: control:matched_scaffold_reference
+    display_name: CUL5 scaffold
+    parent_label_id: e3:ubiquitin:crl:crl5_socs
+    level: component_family
+    system_class: CRL5_SOCS
+    mechanistic_class: CRL
+    component_role: SCAFFOLD
+    aliases: [CUL5, Cullin 5]
+    description: Cullin scaffold component of CRL5 systems.
+
+  - label_id: e3:ubiquitin:crl:crl5_socs:socs_box
+    default_analysis: true
+    default_background_label_id: control:matched_substrate_receptor_reference
+    display_name: SOCS-box substrate receptor
+    parent_label_id: e3:ubiquitin:crl:crl5_socs
+    level: component_family
+    system_class: CRL5_SOCS
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [SOCS-box]
+    description: SOCS-box substrate receptor within a CRL5 system.
+
+  - label_id: e3:ubiquitin:crl:crl7_fbxw8
+    reviewed_positive_allowed: false
+    display_name: CRL7 or CUL7-FBXW8 system
+    parent_label_id: e3:ubiquitin:crl
+    level: system_subclass
+    system_class: CRL7_FBXW8
+    mechanistic_class: CRL
+    component_role: MULTIPROTEIN_SYSTEM
+    aliases: [CRL7, CUL7-FBXW8]
+    description: Metazoan CUL7-SKP1-FBXW8 Cullin-RING system.
+
+  - label_id: e3:ubiquitin:crl:crl7_fbxw8:cul7
+    default_analysis: true
+    default_background_label_id: control:matched_scaffold_reference
+    display_name: CUL7 scaffold
+    parent_label_id: e3:ubiquitin:crl:crl7_fbxw8
+    level: component_family
+    system_class: CRL7_FBXW8
+    mechanistic_class: CRL
+    component_role: SCAFFOLD
+    aliases: [CUL7, Cullin 7]
+    description: Cullin scaffold component of the CRL7-FBXW8 system.
+
+  - label_id: e3:ubiquitin:crl:crl7_fbxw8:fbxw8
+    default_analysis: true
+    default_background_label_id: control:matched_substrate_receptor_reference
+    display_name: FBXW8 substrate receptor
+    parent_label_id: e3:ubiquitin:crl:crl7_fbxw8
+    level: component_family
+    system_class: CRL7_FBXW8
+    mechanistic_class: CRL
+    component_role: SUBSTRATE_RECEPTOR
+    aliases: [FBXW8, F-box/WD repeat-containing protein 8]
+    description: F-box and WD-repeat substrate receptor of CRL7.
+
+  - label_id: e3:ubiquitin:crl:cul9
+    default_analysis: true
+    default_background_label_id: control:matched_cul9_reference
+    display_name: CUL9 or PARC E3 ligase
+    parent_label_id: e3:ubiquitin:crl
+    level: family
+    system_class: CUL9_E3
+    mechanistic_class: CULLIN_RING_FUSION
+    component_role: CATALYTIC_E3
+    family: CUL9
+    active_site_expected: "NO"
+    active_site_residue: RING_E2_RECRUITMENT_DOMAIN
+    aliases: [CUL9, PARC]
+    description: Atypical cullin-family E3 containing its own C-terminal RING domain.
+
+  - label_id: e3:ubiquitin:crl:other_reviewed
+    display_name: Other reviewed Cullin-RING system
+    parent_label_id: e3:ubiquitin:crl
+    level: system_subclass
+    system_class: CULLIN_RING_LIGASE
+    mechanistic_class: CRL
+    component_role: UNKNOWN
+    aliases: [other CRL]
+    description: Reviewed Cullin-RING system or component outside the named default subclasses.
+
+  - label_id: e3:ubiquitin:apc_c
+    reviewed_positive_allowed: false
+    display_name: Anaphase-promoting complex or cyclosome
+    parent_label_id: e3:ubiquitin
+    level: mechanistic_system
+    system_class: APC_C
+    mechanistic_class: MULTISUBUNIT_RING
+    component_role: MULTIPROTEIN_SYSTEM
+    aliases: [APC/C, cyclosome]
+    description: Multisubunit RING E3 complex retained separately from canonical CRLs.
+
+  - label_id: e3:ubiquitin:apc_c:apc2
+    default_analysis: true
+    default_background_label_id: control:matched_scaffold_reference
+    display_name: APC2 scaffold
+    parent_label_id: e3:ubiquitin:apc_c
+    level: component_family
+    system_class: APC_C
+    mechanistic_class: MULTISUBUNIT_RING
+    component_role: SCAFFOLD
+    aliases: [APC2]
+    description: Cullin-like scaffold component of APC/C.
+
+  - label_id: e3:ubiquitin:apc_c:apc11
+    default_analysis: true
+    default_background_label_id: control:matched_ring_component_reference
+    display_name: APC11 RING catalytic component
+    parent_label_id: e3:ubiquitin:apc_c
+    level: component_family
+    system_class: APC_C
+    mechanistic_class: MULTISUBUNIT_RING
+    component_role: RING_CATALYTIC_COMPONENT
+    aliases: [APC11]
+    description: RING catalytic component of APC/C.
+
+  - label_id: e3:ubiquitin:apc_c:coactivator
+    default_analysis: true
+    default_background_label_id: control:matched_substrate_receptor_reference
+    display_name: APC or C coactivator receptor
+    parent_label_id: e3:ubiquitin:apc_c
+    level: component_family
+    system_class: APC_C
+    mechanistic_class: MULTISUBUNIT_RING
+    component_role: COACTIVATOR_SUBSTRATE_RECEPTOR
+    aliases: [CDC20, CDH1, CCS52]
+    description: Coactivator and substrate-recognition components of APC/C.
+
+  - label_id: e3:ubiquitin:atypical_reviewed
+    display_name: Other or atypical reviewed ubiquitin E3
+    parent_label_id: e3:ubiquitin
+    level: mechanistic_class
+    system_class: UBIQUITIN_E3
+    mechanistic_class: OTHER_REVIEWED
+    component_role: CATALYTIC_E3
+    aliases: [atypical E3]
+    description: Explicitly supported ubiquitin E3 mechanism not represented by another branch.
+
+  - label_id: e3:ubl
+    reviewed_positive_allowed: false
+    display_name: Ubiquitin-like modifier E3 system
+    parent_label_id: e3
+    level: modifier_system
+    system_class: UBL_E3
+    mechanistic_class: ""
+    component_role: UNKNOWN
+    aliases: [UBL E3]
+    description: E3 systems for ubiquitin-like modifiers, kept separate from ubiquitin E3s.
+
+  - label_id: e3:ubl:sumo
+    reviewed_positive_allowed: false
+    default_background_label_id: control:matched_sumo_e3_reference
+    display_name: SUMO E3 system
+    parent_label_id: e3:ubl
+    level: modifier_subclass
+    system_class: SUMO_E3
+    mechanistic_class: UBL_LIGASE
+    component_role: UNKNOWN
+    aliases: [SUMO E3]
+    description: SUMO E3 systems, including reviewed SIZ or PIAS, RanBP2 and ZNF451 mechanisms.
+
+  - label_id: e3:ubl:sumo:siz_pias
+    default_analysis: true
+    assignment_exclusivity_group: sumo_e3_family
+    display_name: SIZ or PIAS SP-RING SUMO E3
+    parent_label_id: e3:ubl:sumo
+    level: family
+    system_class: SUMO_E3
+    mechanistic_class: SP_RING
+    component_role: CATALYTIC_E3
+    family: SIZ_PIAS
+    active_site_expected: "NO"
+    active_site_residue: SP_RING_E2_RECRUITMENT_DOMAIN
+    aliases: [SIZ, PIAS, SP-RING, PIAL]
+    description: SIZ/PIAS-family SP-RING SUMO ligases, including supported plant PIAL proteins.
+
+  - label_id: e3:ubl:sumo:nse2_mms21
+    default_analysis: true
+    assignment_exclusivity_group: sumo_e3_family
+    display_name: NSE2 or MMS21 SP-RING SUMO E3
+    parent_label_id: e3:ubl:sumo
+    level: family
+    system_class: SUMO_E3
+    mechanistic_class: SP_RING
+    component_role: CATALYTIC_E3
+    family: NSE2_MMS21
+    active_site_expected: "NO"
+    active_site_residue: SP_RING_E2_RECRUITMENT_DOMAIN
+    aliases: [NSE2, MMS21, HPY2]
+    description: NSE2/MMS21-family SP-RING SUMO ligases, including Arabidopsis HPY2.
+
+  - label_id: e3:ubl:sumo:ranbp2
+    default_analysis: true
+    assignment_exclusivity_group: sumo_e3_family
+    display_name: RanBP2-family SUMO E3
+    parent_label_id: e3:ubl:sumo
+    level: family
+    system_class: SUMO_E3
+    mechanistic_class: RANBP2_SUMO_LIGASE
+    component_role: CATALYTIC_E3
+    family: RANBP2
+    active_site_expected: "NO"
+    active_site_residue: UBC9_SUMO_RECRUITMENT_REGION
+    aliases: [RanBP2, NUP358]
+    description: RanBP2-family SUMO E3 mechanism, separate from SP-RING ligases.
+
+  - label_id: e3:ubl:sumo:znf451
+    default_analysis: true
+    assignment_exclusivity_group: sumo_e3_family
+    display_name: ZNF451-family SUMO E3 or E4
+    parent_label_id: e3:ubl:sumo
+    level: family
+    system_class: SUMO_E3
+    mechanistic_class: ZNF451_SUMO_LIGASE
+    component_role: CHAIN_ELONGATION_FACTOR
+    family: ZNF451
+    active_site_expected: "NO"
+    active_site_residue: TANDEM_SUMO_INTERACTION_MOTIFS
+    aliases: [ZNF451]
+    description: ZNF451-family SUMO ligase and SUMO-chain elongation mechanism.
+
+  - label_id: e3:ubl:nedd8
+    reviewed_positive_allowed: false
+    default_background_label_id: control:matched_nedd8_e3_reference
+    display_name: NEDD8 E3 system
+    parent_label_id: e3:ubl
+    level: modifier_subclass
+    system_class: NEDD8_E3
+    mechanistic_class: UBL_LIGASE
+    component_role: UNKNOWN
+    aliases: [NEDD8 E3]
+    description: NEDD8 E3 systems retained as a separate modifier stratum.
+
+  - label_id: e3:ubl:nedd8:rbx
+    default_analysis: true
+    display_name: RBX-family NEDD8 E3 component
+    parent_label_id: e3:ubl:nedd8
+    level: component_family
+    system_class: NEDD8_E3
+    mechanistic_class: RING_LIKE_NEDD8_TRANSFER
+    component_role: RING_CATALYTIC_COMPONENT
+    family: RBX
+    active_site_expected: "NO"
+    active_site_residue: NEDD8_E2_RECRUITMENT_DOMAIN
+    aliases: [NEDD8 RBX E3]
+    description: RBX-family RING component acting with a NEDD8 E2 during cullin neddylation.
+
+  - label_id: e3:ubl:nedd8:dcn1
+    default_analysis: true
+    display_name: DCN1-family NEDD8 co-E3
+    parent_label_id: e3:ubl:nedd8
+    level: component_family
+    system_class: NEDD8_E3
+    mechanistic_class: DCN1_CO_E3
+    component_role: CO_E3
+    family: DCN1
+    active_site_expected: "NO"
+    active_site_residue: NEDD8_E2_AND_CULLIN_RECRUITMENT_SURFACES
+    aliases: [DCN1, DCUN1D]
+    description: DCN1-family co-E3 that positions the NEDD8 E2 and cullin substrate.
+
+  - label_id: e3:ubl:ufm1
+    reviewed_positive_allowed: false
+    default_background_label_id: control:matched_ufm1_e3_reference
+    display_name: UFM1 E3 system
+    parent_label_id: e3:ubl
+    level: modifier_subclass
+    system_class: UFM1_E3
+    mechanistic_class: UBL_LIGASE
+    component_role: UNKNOWN
+    aliases: [UFM1 E3, UFL1 complex]
+    description: UFM1 ligase systems retained separately from ubiquitin E3s.
+
+  - label_id: e3:ubl:ufm1:ufl1
+    default_analysis: true
+    display_name: UFL1 UFM1-ligase core component
+    parent_label_id: e3:ubl:ufm1
+    level: component_family
+    system_class: UFM1_E3
+    mechanistic_class: UFL1_COMPLEX
+    component_role: LIGASE_CORE_COMPONENT
+    family: UFL1
+    aliases: [UFL1, RCAD]
+    description: UFL1 component of the heteromeric UFM1 E3 ligase complex.
+
+  - label_id: e3:ubl:ufm1:ufbp1
+    default_analysis: true
+    display_name: UFBP1 UFM1-ligase scaffold
+    parent_label_id: e3:ubl:ufm1
+    level: component_family
+    system_class: UFM1_E3
+    mechanistic_class: UFL1_COMPLEX
+    component_role: SCAFFOLD
+    family: UFBP1
+    aliases: [UFBP1, DDRGK1]
+    description: UFBP1 or DDRGK1 scaffold component of the heteromeric UFM1 ligase.
+
+  - label_id: e3:ubl:ufm1:cdk5rap3
+    default_analysis: true
+    display_name: CDK5RAP3 UFM1-ligase regulatory component
+    parent_label_id: e3:ubl:ufm1
+    level: component_family
+    system_class: UFM1_E3
+    mechanistic_class: UFL1_COMPLEX
+    component_role: REGULATORY_COMPONENT
+    family: CDK5RAP3
+    aliases: [CDK5RAP3, C53, LZAP]
+    description: CDK5RAP3 regulatory component of the heteromeric UFM1 ligase complex.
+
+  - label_id: e3:ubl:other_reviewed
+    display_name: Other reviewed UBL E3 system
+    parent_label_id: e3:ubl
+    level: modifier_subclass
+    system_class: UBL_E3
+    mechanistic_class: UBL_LIGASE
+    component_role: UNKNOWN
+    aliases: [other UBL E3]
+    description: Reviewed ubiquitin-like modifier ligase outside the named branches.
+
+  - label_id: e3:associated
+    reviewed_positive_allowed: false
+    display_name: E3-associated or unresolved protein
+    parent_label_id: e3
+    level: evidence_group
+    system_class: E3_ASSOCIATED
+    mechanistic_class: UNKNOWN
+    component_role: UNKNOWN
+    aliases: [E3-associated]
+    description: Non-training branch for associated, putative, ambiguous or unresolved records.
+
+  - label_id: e3:associated:component_not_catalytic
+    reviewed_positive_allowed: false
+    display_name: Reviewed E3-system component not independently catalytic
+    parent_label_id: e3:associated
+    level: evidence_state
+    system_class: E3_ASSOCIATED
+    mechanistic_class: UNKNOWN
+    component_role: NON_CATALYTIC_COMPONENT
+    aliases: [non-catalytic E3 component]
+    description: Reviewed component of an E3 system that must not be treated as an independent catalytic E3.
+
+  - label_id: e3:associated:putative
+    reviewed_positive_allowed: false
+    display_name: Putative E3 protein
+    parent_label_id: e3:associated
+    level: evidence_state
+    system_class: E3_ASSOCIATED
+    mechanistic_class: UNKNOWN
+    component_role: PUTATIVE_CATALYTIC_E3
+    aliases: [putative E3]
+    description: Proposed E3 assignment excluded from positive training sets by default.
+
+  - label_id: e3:associated:pseudoenzyme
+    reviewed_positive_allowed: false
+    display_name: E3 pseudoenzyme
+    parent_label_id: e3:associated
+    level: evidence_state
+    system_class: E3_ASSOCIATED
+    mechanistic_class: UNKNOWN
+    component_role: PSEUDOENZYME
+    aliases: [E3 pseudoligase]
+    description: E3-like protein lacking evidence for the expected catalytic mechanism.
+
+  - label_id: e3:associated:phd_ambiguous
+    reviewed_positive_allowed: false
+    display_name: Ambiguous PHD or RING-like protein
+    parent_label_id: e3:associated
+    level: evidence_state
+    system_class: E3_ASSOCIATED
+    mechanistic_class: UNKNOWN
+    component_role: AMBIGUOUS
+    aliases: [PHD ambiguous, PHD finger]
+    description: PHD or RING-like fold annotation without sufficient evidence of E3 activity.
+
+  - label_id: e3:associated:unknown
+    reviewed_positive_allowed: false
+    display_name: Unresolved E3-related record
+    parent_label_id: e3:associated
+    level: evidence_state
+    system_class: E3_ASSOCIATED
+    mechanistic_class: UNKNOWN
+    component_role: UNKNOWN
+    aliases: [unknown E3-related]
+    description: E3-related record for which class and role remain unresolved.
+
+  - label_id: control
+    reviewed_positive_allowed: false
+    display_name: Comparison protein
+    parent_label_id: protein
+    level: comparison_group
+    system_class: CONTROL
+    mechanistic_class: ""
+    component_role: CONTROL
+    aliases: []
+    description: Explicit comparison proteins; not inferred from absence of an E3 label.
+
+  - label_id: control:prespecified_non_e3_reference
+    display_name: Prespecified non-E3 reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: NON_E3_REFERENCE
+    component_role: CONTROL
+    aliases: [prespecified reference]
+    description: Prespecified exploratory non-E3 reference set; it is not claimed to be matched independently to every E3 stratum.
+
+  - label_id: control:matched_ring_mechanism_reference
+    display_name: Matched RING-mechanism reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: RING_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [RING-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to the RING analysis cohort for
+      taxon, length, domain complexity, cellular context and structure availability.
+
+  - label_id: control:matched_u_box_mechanism_reference
+    display_name: Matched U-box-mechanism reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: U_BOX_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [U-box-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to the U-box analysis cohort for
+      taxon, length, domain complexity, cellular context and structure availability.
+
+  - label_id: control:matched_hect_mechanism_reference
+    display_name: Matched HECT-mechanism reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: HECT_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [HECT-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to the HECT analysis cohort for
+      taxon, length, domain complexity, cellular context and structure availability.
+
+  - label_id: control:matched_rbr_mechanism_reference
+    display_name: Matched RBR-mechanism reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: RBR_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [RBR-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to the RBR analysis cohort for
+      taxon, length, domain complexity, cellular context and structure availability.
+
+  - label_id: control:matched_rcr_mechanism_reference
+    display_name: Matched RCR-mechanism reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: RCR_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [RCR-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to the RCR analysis cohort for
+      taxon, length, domain complexity, cellular context and structure availability.
+
+  - label_id: control:matched_rnf213_mechanism_reference
+    display_name: Matched RNF213-mechanism reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: RNF213_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [RNF213-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to the RNF213 analysis cohort for
+      taxon, length, domain complexity, cellular context and structure availability.
+
+  - label_id: control:matched_ring_component_reference
+    display_name: Matched RING-component reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: RING_COMPONENT_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [RING-component-matched reference]
+    description: >-
+      Prespecified proteins matched to multisubunit RING catalytic components for
+      taxon, length, complex role, cellular context and structure availability.
+
+  - label_id: control:matched_scaffold_reference
+    display_name: Matched ligase-scaffold reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: SCAFFOLD_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [scaffold-matched reference]
+    description: >-
+      Prespecified proteins matched to ligase scaffolds for taxon, length, complex
+      role, domain complexity, cellular context and structure availability.
+
+  - label_id: control:matched_adaptor_reference
+    display_name: Matched ligase-adaptor reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: ADAPTOR_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [adaptor-matched reference]
+    description: >-
+      Prespecified proteins matched to ligase adaptors for taxon, length, complex
+      role, domain complexity, cellular context and structure availability.
+
+  - label_id: control:matched_substrate_receptor_reference
+    display_name: Matched substrate-receptor reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: SUBSTRATE_RECEPTOR_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [substrate-receptor-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to ligase substrate receptors for
+      taxon, length, receptor architecture, cellular context and structure availability.
+
+  - label_id: control:matched_cul9_reference
+    display_name: Matched CUL9 reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: CUL9_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [CUL9-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to CUL9 for taxon, length, multidomain
+      architecture, cellular context and structure availability.
+
+  - label_id: control:matched_sumo_e3_reference
+    display_name: Matched SUMO-E3 reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: SUMO_E3_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [SUMO-E3-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to the SUMO-E3 cohort for taxon,
+      length, domain complexity, cellular context and structure availability.
+
+  - label_id: control:matched_nedd8_e3_reference
+    display_name: Matched NEDD8-E3 reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: NEDD8_E3_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [NEDD8-E3-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to NEDD8-E3 roles for taxon, length,
+      complex role, cellular context and structure availability.
+
+  - label_id: control:matched_ufm1_e3_reference
+    display_name: Matched UFM1-E3 reference
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: UFM1_E3_MATCHED_REFERENCE
+    component_role: CONTROL
+    aliases: [UFM1-E3-matched reference]
+    description: >-
+      Prespecified non-target proteins matched to UFM1-ligase complex roles for taxon,
+      length, complex role, cellular context and structure availability.
+
+  - label_id: control:matched_non_e3
+    display_name: Matched non-E3 control
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: NON_E3
+    component_role: CONTROL
+    aliases: [matched control]
+    description: Reviewed non-E3 proteins matched for relevant biological and technical covariates.
+
+  - label_id: control:within_superfamily_non_e3
+    display_name: Within-superfamily non-E3 control
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: NON_E3
+    component_role: CONTROL
+    aliases: [within-superfamily control]
+    description: Defensible non-E3 or non-catalytic proteins from a related structural superfamily.
+
+  - label_id: control:housekeeping
+    display_name: Housekeeping comparison protein
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: HOUSEKEEPING
+    component_role: COMPARISON
+    aliases: [housekeeping]
+    description: Reference groups used to calibrate evolutionary compactness, not universal negatives.
+
+  - label_id: control:nlr_resistance
+    display_name: NLR or resistance-protein comparison
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: NLR_RESISTANCE
+    component_role: COMPARISON
+    aliases: [NLR, R gene]
+    description: Diversified resistance-protein groups used to calibrate evolutionary dispersion.
+
+  - label_id: control:shuffled_sequence
+    display_name: Shuffled-sequence technical control
+    parent_label_id: control
+    level: comparison_class
+    system_class: CONTROL
+    mechanistic_class: SHUFFLED_SEQUENCE
+    component_role: TECHNICAL_CONTROL
+    aliases: [shuffled control]
+    description: Composition-aware technical control that never replaces a biological negative set.

@@ -1,0 +1,39 @@
+requirement_id	implementation_scope	verification	test_authority	status
+REQ-CLI	protein_signatures.cli.*	Every command, exit boundary and JSON result is exercised.	tests/test_pipeline_app.py;tests/test_profiles_config_redundancy.py	COVERED
+REQ-CONFIG	protein_signatures.config.*	Defaults, types, bounds, path resolution, comparison overlap and mandatory SHAP are exercised.	tests/test_profiles_config_redundancy.py;tests/test_core_io.py	COVERED
+REQ-VALIDATION	protein_signatures.validation.*	Identifiers, bounded text, mappings, sequences, integers and finite floats cover valid and invalid branches.	tests/test_core_io.py;tests/test_tables_edge_cases.py	COVERED
+REQ-FASTA	protein_signatures.fasta.*	Plain/gzip FASTA, residues, stops, duplicate IDs, record construction and k-mers are exercised.	tests/test_core_io.py	COVERED
+REQ-TABLE-INPUTS	protein_signatures.tables.*	Every scientific TSV parser, coordinate rule, missing state and collision boundary is exercised.	tests/test_core_io.py;tests/test_tables_edge_cases.py	COVERED
+REQ-CATALOGUE	protein_signatures.catalogue.*	Conservative mapping, accession review, wrapping, duplicate/malformed input and atomic output are exercised.	tests/test_core_io.py;tests/test_profiles_config_redundancy.py	COVERED
+REQ-ASSESSMENT	protein_signatures.assessment.*	Tri-state feature universes, positive/no-hit/unknown composition, duplicate handling and provenance conflicts are exercised.	tests/test_feature_assessment.py	COVERED
+REQ-CHECKSUMS	protein_signatures.checksums.*	File and canonical-JSON SHA-256 helpers cover stable values, streaming input and invalid paths.	tests/test_core_io.py;tests/test_publication_edges.py	COVERED
+REQ-FEATURE-PROVENANCE	protein_signatures.feature_provenance.*	Definition/cohort digests, confirmatory eligibility, supervised-discovery exclusion and status propagation are exercised.	tests/test_feature_provenance.py	COVERED
+REQ-IO	protein_signatures.io_utils.*	Plain/gzip reads, strict TSV shape, atomic TSV/JSON/text writes and failure cleanup are exercised.	tests/test_core_io.py;tests/test_publication_edges.py	COVERED
+REQ-MODELS	protein_signatures.models.*;protein_signatures.errors.*	Frozen records, enumerated evidence states, serialisation properties and typed package errors are exercised through every parser and pipeline boundary.	tests/test_core_io.py;tests/test_tables_edge_cases.py;tests/test_pipeline_branches.py	COVERED
+REQ-STARTER	protein_signatures.starter.*	Explicit-input configuration creation, path handling, overwrite refusal and optional-resource mappings are exercised.	tests/test_starter_paths.py;tests/test_profiles_config_redundancy.py	COVERED
+REQ-PROFILES	protein_signatures.profiles.*	Built-in/custom loading, aliases, ancestors, hierarchy failures, membership expansion and 73 defaults are exercised.	tests/test_profiles_config_redundancy.py;tests/test_pipeline_branches.py	COVERED
+REQ-E3-VOCAB	protein_signatures/data/profiles/e3.yaml	Profile count, representative mechanisms/roles, exclusions and default comparisons are asserted.	tests/test_profiles_config_redundancy.py;tests/test_pipeline_branches.py	COVERED
+REQ-REDUNDANCY	protein_signatures.redundancy.*	Exact and supplied cluster derivation, thresholds, duplicates and unknown proteins are exercised.	tests/test_profiles_config_redundancy.py	COVERED
+REQ-PARTITIONS	protein_signatures.partitions.*	Connected HOG/exact/near blocks, deterministic hashing, bounds and leakage prevention are exercised.	tests/test_profiles_config_redundancy.py	COVERED
+REQ-ORTHOFINDER-RAW	protein_signatures.orthofinder.*	2.5.5/3 discovery, HOG/legacy parsing, ID maps, headings, selection and malformed layouts are exercised.	tests/test_orthofinder_adapters.py	COVERED
+REQ-ORTHOFINDER-RESOURCE	protein_signatures.orthofinder_resource.*	Schemas 3/4, checksums, safe paths, DuckDB relations, aliases, identities and group context are exercised.	tests/test_orthofinder_adapters.py	COVERED
+REQ-ALPHAFOLD	protein_signatures.alphafold.*	Mapping input, URL restriction, API selection, retries, caching, PDB pLDDT and every outcome are exercised.	tests/test_alphafold.py	COVERED
+REQ-FOLDSEEK	protein_signatures.foldseek.*	Safe argv, executable/version validation, parser, cache identity, locking, links and numeric bounds are exercised.	tests/test_foldseek.py	COVERED
+REQ-STRUCTURAL-IMPORT	protein_signatures.structural_resource.*	Root resolution, manifests, checksums, Parquet schemas, alignments, pockets, summaries and parse failures are exercised.	tests/test_structural_resource.py	COVERED
+REQ-STRUCTURAL-SIGNATURE	protein_signatures.structural_signatures.*	Bilateral thresholds, connected components, discovery freeze, validation projection and feature creation are exercised.	tests/test_statistics_associations.py	COVERED
+REQ-SEQUENCE-SIGNATURE	protein_signatures.sequence_signatures.*	Deterministic protein-level k-mer presence and feature bounds are exercised.	tests/test_core_io.py	COVERED
+REQ-STATISTICS	protein_signatures.statistics.*	Fisher exact, undefined/infinite odds, BH ties/bounds, Wilson intervals and hypergeometric helpers are exercised.	tests/test_statistics_associations.py	COVERED
+REQ-ASSOCIATION	protein_signatures.associations.*	Block counts, mixed exclusion, local/study FDR, insufficient/no-feature rows and every validation class are exercised.	tests/test_statistics_associations.py	COVERED
+REQ-XAI	protein_signatures.explainable_ml.*	Eligibility states, label-blind selection, matrices, grouped CV, fitting, metrics, permutation, SHAP values/plots and failures are exercised.	tests/test_explainable_ml.py	COVERED
+REQ-EXPORTS	protein_signatures.exports.*	Defensive frames, deterministic TSV, formatted/split XLSX, literal formula text, PDF validation and filenames are exercised.	tests/test_exports.py	COVERED
+REQ-REPORTING	protein_signatures.reporting.*	Numbered routing, all table exports, populated/empty figures, SHAP mirrors, safe names and atomic failures are exercised.	tests/test_reporting.py	COVERED
+REQ-SCHEMAS	protein_signatures.schemas.*	Every canonical table is published through its fixed Arrow schema; unknown names fail.	tests/test_pipeline_app.py;tests/test_publication_edges.py	COVERED
+REQ-PUBLICATION	protein_signatures.publication.*	TSV/Parquet/DuckDB creation, asset safety, staging, completion, manifest/input verification and tampering are exercised.	tests/test_pipeline_app.py;tests/test_publication_edges.py	COVERED
+REQ-PIPELINE	protein_signatures.pipeline.*	Offline end-to-end, resume, run identity, optional structural routes, collision helpers and evidence statuses are exercised.	tests/test_pipeline_app.py;tests/test_pipeline_branches.py	COVERED
+REQ-LOGGING	protein_signatures.logging_config.*	Level validation, stream/file handlers and reconfiguration are exercised.	tests/test_core_io.py	COVERED
+REQ-APP-BACKEND	protein_signature_app.backend.*	Result verification, safe read-only SQL, relation/column allowlists, counts and metadata boundaries are exercised.	tests/test_pipeline_app.py	COVERED
+REQ-APP-LAUNCHER	protein_signature_app.launcher.*	Parser, safe subprocess argv, port/address validation and exit propagation are exercised.	tests/test_pipeline_app.py	COVERED
+REQ-APP-UI	protein_signature_app.app.*	All eight pages, empty states, model states, safe assets, table TSV/XLSX and plot PDF controls are exercised.	tests/test_app_ui.py	COVERED
+REQ-SHELL	run_tests.sh;run_protein_signature_analysis.sh;run_protein_signature_app.sh;start_from_inputs.sh	Bash syntax is checked; help, required argument and validation behaviour are release-gated.	release quality gate	COVERED
+REQ-END-TO-END	examples/minimal_e3	A tiny offline E3 campaign publishes and verifies all tables, reports, figures, DuckDB and manifests.	tests/test_pipeline_app.py	COVERED
+REQ-COVERAGE	pyproject.toml [tool.coverage.*]	Statement and branch coverage must be at least 95.00%.	run_tests.sh;GitHub Actions	GATED

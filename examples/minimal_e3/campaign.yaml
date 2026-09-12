@@ -1,0 +1,74 @@
+schema_version: 1
+
+campaign:
+  campaign_id: minimal_e3_fbox_demo
+  profile: e3
+
+inputs:
+  sequences_fasta: proteins.faa
+  label_assignments: label_assignments.tsv
+  domains: domains.tsv
+  redundancy_clusters: null
+  structures: structures.tsv
+  structure_comparisons: structure_comparisons.tsv
+  structural_alignment_resource: null
+  alphafold_accessions: null
+  orthofinder:
+    resource_dir: null
+    results_dir: null
+    group_type: HOG
+    hierarchy_node: N0
+    run_id: ""
+
+alphafold:
+  enabled: false
+  cache_dir: .protein_signature_cache/alphafold
+  timeout_seconds: 60
+  retries: 3
+  minimum_mean_plddt: 50
+
+foldseek:
+  enabled: false
+  executable: foldseek
+  cache_dir: .protein_signature_cache/foldseek
+  e_value_threshold: 0.001
+  sensitivity: 9.5
+  maximum_hits: 1000
+
+explainable_ml:
+  enabled: true
+  minimum_samples_per_class: 3
+  minimum_groups_per_class: 2
+  maximum_features: 100
+  regularisation_strengths: [0.01, 0.1, 1.0]
+  l1_ratio: 0.2
+  cross_validation_folds: 3
+  maximum_iterations: 1000
+  convergence_tolerance: 0.0001
+  permutation_repeats: 5
+  maximum_permutation_features: 20
+  top_local_explanations: 5
+  maximum_waterfall_plots: 4
+  plot_cache_dir: .protein_signature_cache/shap
+  exclude_technical_features: true
+
+analysis:
+  kmer_lengths: [3, 4]
+  minimum_target_proteins: 2
+  minimum_background_proteins: 2
+  minimum_feature_proteins: 2
+  maximum_kmer_features: 50000
+  validation_fraction: 0.25
+  fdr_threshold: 0.05
+  random_seed: 1729
+  structural_tm_score_threshold: 0.50
+  structural_minimum_coverage: 0.50
+
+comparisons:
+  - comparison_id: fbox_vs_matched_receptor_reference
+    display_name: F-box proteins versus matched substrate-receptor references
+    target_label_ids:
+      - e3:ubiquitin:crl:crl1_scf:f_box
+    background_label_ids:
+      - control:matched_substrate_receptor_reference
+    description: Demonstrates amino-acid, Pfam, architecture, fold and structure-cluster evidence.

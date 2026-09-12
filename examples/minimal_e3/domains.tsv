@@ -1,0 +1,25 @@
+protein_id	domain_authority	assessment_status	domain_id	domain_name	start	end	score	e_value	evidence_source	evidence_reference
+fbox01	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	68.0	1e-18	InterProScan	DEMO:PFAM
+fbox02	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	67.0	2e-18	InterProScan	DEMO:PFAM
+fbox03	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	66.0	3e-18	InterProScan	DEMO:PFAM
+fbox04	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	65.0	4e-18	InterProScan	DEMO:PFAM
+fbox05	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	64.0	5e-18	InterProScan	DEMO:PFAM
+fbox06	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	63.0	6e-18	InterProScan	DEMO:PFAM
+fbox07	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	62.0	7e-18	InterProScan	DEMO:PFAM
+fbox08	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	61.0	8e-18	InterProScan	DEMO:PFAM
+fbox09	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	60.0	9e-18	InterProScan	DEMO:PFAM
+fbox10	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	59.0	1e-17	InterProScan	DEMO:PFAM
+fbox11	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	58.0	2e-17	InterProScan	DEMO:PFAM
+fbox12	Pfam	ASSESSED_WITH_HIT	PF00646	F-box domain	20	55	57.0	3e-17	InterProScan	DEMO:PFAM
+ctrl01	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl02	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl03	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl04	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl05	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl06	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl07	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl08	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl09	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl10	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl11	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM
+ctrl12	Pfam	ASSESSED_NO_HIT							InterProScan	DEMO:PFAM

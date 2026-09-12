@@ -1,0 +1,26 @@
+include CHANGELOG.md
+include CITATION.cff
+include CONTRIBUTING.md
+include LICENSE
+include README.md
+include RELEASE_QA.md
+include SECURITY.md
+include environment.yml
+include run_protein_signature_analysis.sh
+include run_protein_signature_app.sh
+include run_tests.sh
+include start_from_inputs.sh
+
+recursive-include .github *.yml
+recursive-include configs *.json *.yaml
+recursive-include docs *.md *.tsv
+recursive-include examples *.faa *.tsv *.yaml
+recursive-include tests *.py
+
+# Analysis caches can be created beneath a shipped example during local QA.  Git ignore
+# rules do not apply to setuptools' file discovery, so prune the directory explicitly.
+prune examples/minimal_e3/.protein_signature_cache
+
+# Keep source archives free of interpreter artefacts and common local secret/config files.
+global-exclude *.py[cod] __pycache__ .DS_Store
+global-exclude .env .env.* *.pem *.key *.p12 *.pfx

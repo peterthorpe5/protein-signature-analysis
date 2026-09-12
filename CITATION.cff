@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, cite the exact release, campaign manifest and each external
+  sequence, domain, structure and orthology authority used by your analysis.
+title: Protein Signature Analysis
+type: software
+version: 0.1.0
+date-released: 2026-09-11
+authors:
+  - family-names: Thorpe
+    given-names: Peter
+repository-code: https://github.com/peterthorpe5/protein-signature-analysis
+url: https://github.com/peterthorpe5/protein-signature-analysis
+license: MIT
+keywords:
+  - protein signatures
+  - structural bioinformatics
+  - E3 ubiquitin ligase
+  - OrthoFinder
+  - AlphaFold
+  - Foldseek
+  - SHAP

@@ -1,0 +1,27 @@
+name: protein_signature_analysis
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - duckdb>=1.4,<2
+  - foldseek
+  - kaleido>=1,<2
+  - matplotlib>=3.10,<4
+  - pandas>=2.2,<3
+  - numpy>=2,<3
+  - pip
+  - plotly>=6,<7
+  - pyarrow>=18,<27
+  - pyyaml>=6,<7
+  - scikit-learn>=1.8,<2
+  - shap>=0.50,<1
+  - streamlit>=1.52,<2
+  - xlsxwriter>=3.2,<4
+  - pip:
+      - coverage>=7.6,<8
+      - jsonschema>=4.23,<5
+      - pycodestyle>=2.12,<3
+      - pydocstyle>=6.3,<7
+      - pytest>=8,<9
+      - ruff>=0.15,<1

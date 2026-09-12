@@ -1,0 +1,25 @@
+protein_id	label_id	curation_status	evidence_status	evidence_source	evidence_reference	component_role	curation_reason
+fbox01	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX01	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox02	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX02	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox03	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX03	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox04	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX04	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox05	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX05	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox06	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX06	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox07	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX07	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox08	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX08	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox09	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX09	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox10	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX10	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox11	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX11	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+fbox12	e3:ubiquitin:crl:crl1_scf:f_box	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:FBOX12	SUBSTRATE_RECEPTOR	Synthetic positive for executable example.
+ctrl01	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL01	CONTROL	Synthetic matched receptor-reference member.
+ctrl02	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL02	CONTROL	Synthetic matched receptor-reference member.
+ctrl03	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL03	CONTROL	Synthetic matched receptor-reference member.
+ctrl04	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL04	CONTROL	Synthetic matched receptor-reference member.
+ctrl05	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL05	CONTROL	Synthetic matched receptor-reference member.
+ctrl06	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL06	CONTROL	Synthetic matched receptor-reference member.
+ctrl07	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL07	CONTROL	Synthetic matched receptor-reference member.
+ctrl08	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL08	CONTROL	Synthetic matched receptor-reference member.
+ctrl09	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL09	CONTROL	Synthetic matched receptor-reference member.
+ctrl10	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL10	CONTROL	Synthetic matched receptor-reference member.
+ctrl11	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL11	CONTROL	Synthetic matched receptor-reference member.
+ctrl12	control:matched_substrate_receptor_reference	REVIEWED_POSITIVE	REVIEWED	synthetic_demo	DEMO:CTRL12	CONTROL	Synthetic matched receptor-reference member.
