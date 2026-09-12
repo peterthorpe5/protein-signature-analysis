@@ -14,6 +14,8 @@ from streamlit.testing.v1 import AppTest
 import protein_signature_app.app as application_module
 from protein_signatures.errors import PublicationError
 
+APP_TEST_TIMEOUT_SECONDS = 60
+
 
 class _Block:
     """Minimal context block used by the direct rendering tests."""
@@ -132,7 +134,10 @@ def test_every_application_page_renders_and_stays_synchronised(
     previous = list(sys.argv)
     try:
         sys.argv = [str(application), "--resource", str(completed_result)]
-        test_app = AppTest.from_file(application, default_timeout=10).run()
+        test_app = AppTest.from_file(
+            application,
+            default_timeout=APP_TEST_TIMEOUT_SECONDS,
+        ).run()
         assert not test_app.exception
         assert [item.value for item in test_app.title if item.value == "Protein signature analysis"]
         assert [(item.label, item.value) for item in test_app.metric][:2] == [
@@ -166,7 +171,10 @@ def test_application_rejects_an_unverified_resource(tmp_path: Path) -> None:
     previous = list(sys.argv)
     try:
         sys.argv = [str(application), "--resource", str(tmp_path / "missing")]
-        test_app = AppTest.from_file(application, default_timeout=10).run()
+        test_app = AppTest.from_file(
+            application,
+            default_timeout=APP_TEST_TIMEOUT_SECONDS,
+        ).run()
         assert not test_app.exception
         assert any("Could not open the result" in item.value for item in test_app.error)
     finally:

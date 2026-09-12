@@ -6,7 +6,6 @@ dependencies:
   - python=3.11
   - duckdb>=1.4,<2
   - foldseek
-  - kaleido>=1,<2
   - matplotlib>=3.10,<4
   - pandas>=2.2,<3
   - numpy>=2,<3
@@ -25,3 +24,4 @@ dependencies:
       - pydocstyle>=6.3,<7
       - pytest>=8,<9
       - ruff>=0.15,<1
+      - kaleido>=1,<2
