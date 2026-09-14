@@ -17,7 +17,8 @@ Usage:
     [--alphafold-accessions /path/alphafold_accessions.tsv --enable-alphafold] \
     [--orthofinder-resource /path/published_orthofinder_resource] \
     [--orthofinder-results /path/raw_orthofinder_results] \
-    [--enable-foldseek] [--threads 8] [--initialise-only]
+    [--enable-foldseek] [--foldseek-maximum-hits 1000] \
+    [--threads 8] [--initialise-only]
 
   # Validate and run an existing, reviewed campaign.yaml.
   ./start_from_inputs.sh \
@@ -53,6 +54,7 @@ RESUME="false"
 INITIALISE_ONLY="false"
 ENABLE_ALPHAFOLD="false"
 ENABLE_FOLDSEEK="false"
+FOLDSEEK_MAXIMUM_HITS="1000"
 OPTIONAL_ARGUMENTS=()
 CONFIG_DEFINING_OPTIONS=()
 OPTIONAL_ARGUMENTS_PRESENT="false"
@@ -131,6 +133,13 @@ while [[ $# -gt 0 ]]; do
             CONFIG_DEFINING_OPTIONS_PRESENT="true"
             shift
             ;;
+        --foldseek-maximum-hits)
+            require_option_value "$@"
+            FOLDSEEK_MAXIMUM_HITS="${2:-}"
+            CONFIG_DEFINING_OPTIONS+=("$1")
+            CONFIG_DEFINING_OPTIONS_PRESENT="true"
+            shift 2
+            ;;
         --initialise-only) INITIALISE_ONLY="true"; shift ;;
         --resume) RESUME="true"; shift ;;
         --help|-h) usage; exit 0 ;;
@@ -149,6 +158,10 @@ if [[ "${WORK_DIR}" == -* ]]; then
 fi
 if [[ ! "${THREADS}" =~ ^[1-9][0-9]*$ ]]; then
     echo "--threads must be a positive integer: ${THREADS}" >&2
+    exit 2
+fi
+if [[ ! "${FOLDSEEK_MAXIMUM_HITS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--foldseek-maximum-hits must be a positive integer: ${FOLDSEEK_MAXIMUM_HITS}" >&2
     exit 2
 fi
 if [[ ! "${CONDA_ENVIRONMENT}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
@@ -208,6 +221,7 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
         --profile "${PROFILE}"
         --sequences-fasta "${SEQUENCES_FASTA}"
         --label-assignments "${LABEL_ASSIGNMENTS}"
+        --foldseek-maximum-hits "${FOLDSEEK_MAXIMUM_HITS}"
         --log-level "${LOG_LEVEL}"
     )
     if [[ "${OPTIONAL_ARGUMENTS_PRESENT}" == "true" ]]; then

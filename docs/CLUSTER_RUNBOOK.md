@@ -7,6 +7,10 @@ standalone signature workflow. It does not rerun OrthoFinder. It can either impo
 checksum-complete predecessor E3 structural result or consume a generic structure inventory
 and pairwise comparison table.
 
+For a complete `E3_project_draft` end-to-end run, use the phased
+[completed-workflow hand-off](E3_WORKFLOW_HANDOFF.md). That bridge prepares Stage 05 sequence,
+Stage 06 Pfam and Stage 09 coordinate authorities in addition to importing Stage 09b.
+
 Do not start from an arbitrary intermediate directory merely because files are present. A
 source is complete only when its declared completion manifest and outputs validate.
 

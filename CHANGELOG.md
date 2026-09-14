@@ -39,3 +39,8 @@
 - Add a checksum-verifying `protein-signatures verify` command.
 - Add a review-before-run shell launcher with safe existing-config semantics and Conda
   synchronisation, a synthetic E3 example and comprehensive tests.
+- Add a checksum-gated bridge and phased launcher for completed E3 end-to-end workflow runs,
+  converting exact Stage 05 sequences, Stage 06 Pfam assessments and Stage 09 AlphaFold assets
+  while importing Stage 09b structural evidence and refusing automatic label promotion; Stage 09
+  mean pLDDT now gates model eligibility without hiding low-confidence or unassessed coordinates.
+- Allow campaign initialisation to set Foldseek's complete-search hit limit explicitly.

@@ -107,6 +107,7 @@ def test_release_versions_and_launcher_modes_are_consistent() -> None:
         "run_protein_signature_analysis.sh",
         "run_protein_signature_app.sh",
         "start_from_inputs.sh",
+        "run_completed_e3_workflow.sh",
     )
     for launcher in launchers:
         assert (root / launcher).stat().st_mode & stat.S_IXUSR
@@ -131,6 +132,9 @@ def test_launchers_reject_missing_option_values() -> None:
         ("run_protein_signature_app.sh", "--address"),
         ("start_from_inputs.sh", "--work-dir"),
         ("start_from_inputs.sh", "--orthofinder-results"),
+        ("start_from_inputs.sh", "--foldseek-maximum-hits"),
+        ("run_completed_e3_workflow.sh", "--run-root"),
+        ("run_completed_e3_workflow.sh", "--minimum-mean-plddt"),
     )
     for launcher_name, option in cases:
         result = subprocess.run(
@@ -187,6 +191,84 @@ def test_start_launcher_guards_new_and_existing_config_modes(tmp_path: Path) -> 
     assert with_new_input.returncode == 2
     assert "sole configuration authority" in with_new_input.stderr
     assert "--profile" in with_new_input.stderr
+
+
+def test_completed_e3_launcher_enforces_phases_and_review_gate(tmp_path: Path) -> None:
+    """The predecessor launcher should reject unsafe or unreviewed transitions."""
+
+    root = Path(__file__).parents[1]
+    launcher = root / "run_completed_e3_workflow.sh"
+    missing_phase = subprocess.run(
+        ("bash", str(launcher), "--work-dir", str(tmp_path / "work")),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing_phase.returncode == 2
+    assert "--phase and --work-dir are required" in missing_phase.stderr
+    invalid_phase = subprocess.run(
+        (
+            "bash",
+            str(launcher),
+            "--phase",
+            "guess",
+            "--work-dir",
+            str(tmp_path / "work"),
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert invalid_phase.returncode == 2
+    assert "prepare, initialise, run or verify" in invalid_phase.stderr
+
+    invalid_confidence = subprocess.run(
+        (
+            "bash",
+            str(launcher),
+            "--phase",
+            "prepare",
+            "--work-dir",
+            str(tmp_path / "work"),
+            "--minimum-mean-plddt",
+            "101",
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert invalid_confidence.returncode == 2
+    assert "number from 0 to 100" in invalid_confidence.stderr
+
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    work = tmp_path / "work"
+    prepared = work / "prepared_inputs"
+    prepared.mkdir(parents=True)
+    (prepared / "PREPARED.json").write_text("{}\n", encoding="utf-8")
+    labels = prepared / "label_assignments.REVIEW_REQUIRED.tsv"
+    labels.write_text("header\nrow\n", encoding="utf-8")
+    rejected = subprocess.run(
+        (
+            "bash",
+            str(launcher),
+            "--phase",
+            "initialise",
+            "--run-root",
+            str(run_root),
+            "--work-dir",
+            str(work),
+            "--campaign-id",
+            "campaign",
+            "--label-assignments",
+            str(labels),
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode == 2
+    assert "generated UNMAPPED template" in rejected.stderr
 
 
 def test_mutating_launchers_reject_broad_or_option_like_destinations(

@@ -434,9 +434,12 @@ def test_initialise_campaign_writes_a_valid_generic_configuration(
         domains=example_dir / "domains.tsv",
         structures=example_dir / "structures.tsv",
         structure_comparisons=example_dir / "structure_comparisons.tsv",
+        foldseek_maximum_hits=4321,
     )
     assert created == config_path
-    assert load_config(path=created).campaign_id == "starter_1"
+    loaded = load_config(path=created)
+    assert loaded.campaign_id == "starter_1"
+    assert loaded.foldseek.maximum_hits == 4321
     with pytest.raises(PublicationError, match="already exists"):
         initialise_campaign(
             config_path=config_path,
@@ -467,6 +470,10 @@ def test_initialise_campaign_rejects_incompatible_sources(
         )
     with pytest.raises(InputValidationError, match="requires"):
         initialise_campaign(**common, enable_alphafold=True)
+    with pytest.raises(InputValidationError, match="positive integer"):
+        initialise_campaign(**common, foldseek_maximum_hits=0)
+    with pytest.raises(InputValidationError, match="positive integer"):
+        initialise_campaign(**common, foldseek_maximum_hits=True)
     with pytest.raises(InputValidationError, match="group_type"):
         initialise_campaign(**common, orthofinder_group_type="OTHER")
     with pytest.raises(InputValidationError, match="must be blank"):

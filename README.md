@@ -44,10 +44,8 @@ flowchart TD
 ```
 
 The workflow consumes supplied OrthoFinder output and never launches OrthoFinder. The raw
-adapter is tested against 2.5.5 and 3.x layouts. Until the raw-input completion gate is
-strengthened, confirm the upstream scheduler job and OrthoFinder log completed successfully;
-the current raw adapter proves that the required authorities are readable, not that every
-upstream stage finished. A published `orthofinder-results` resource remains the preferred,
+adapter is tested against 2.5.5 and 3.x layouts and requires OrthoFinder's exact completed-run
+log marker. A published `orthofinder-results` resource remains the preferred,
 checksum-complete route.
 
 ## Implemented evidence layers
@@ -152,6 +150,69 @@ Verify a copied result independently with:
 ```bash
 protein-signatures verify --resource /data/signature_campaigns/e3_1000/result
 ```
+
+## Completed E3 end-to-end workflow hand-off
+
+The completed `E3_project_draft` run root is a supported precursor. Do **not** point this
+package at `10_integrated_resource/final_results`: those are candidate-prioritisation
+deliverables, not the sequence or structural authority. The bridge resolves and verifies
+Stages 04, 05, 06, 09, 09b and the final Stage 11 completion marker.
+
+For the completed all-1972/top-1,000 structural campaign:
+
+```bash
+RUN_ROOT="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/e3_end_to_end_runs/grant_aligned_corrected_expression_structural_all1972_v0_16_0_20260909"
+SIGNATURE_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/protein_signature_runs/e3_all1972_v0_1_0_20260914"
+
+./run_completed_e3_workflow.sh \
+  --phase prepare \
+  --run-root "${RUN_ROOT}" \
+  --work-dir "${SIGNATURE_WORK}" \
+  --minimum-mean-plddt 50
+```
+
+This produces exact FASTA, Pfam assessment, structure and curation-review authorities under
+`prepared_inputs/`. All generated label assignments are deliberately `UNMAPPED`; upstream
+E3-family fields are hints only. Copy the template to a separately named file and curate
+E3 subclass/component-role positives and the appropriate matched controls before continuing:
+
+```bash
+cp \
+  "${SIGNATURE_WORK}/prepared_inputs/label_assignments.REVIEW_REQUIRED.tsv" \
+  "${SIGNATURE_WORK}/reviewed_label_assignments.tsv"
+
+# Review and edit reviewed_label_assignments.tsv here.
+
+./run_completed_e3_workflow.sh \
+  --phase initialise \
+  --run-root "${RUN_ROOT}" \
+  --work-dir "${SIGNATURE_WORK}" \
+  --campaign-id "e3_all1972_signatures_20260914" \
+  --label-assignments "${SIGNATURE_WORK}/reviewed_label_assignments.tsv" \
+  --threads 24
+```
+
+Initialisation validates every configured authority and then stops. It imports checksum-bound
+Stage 09b US-align/TM-align and pocket results, joins the Stage 09 AlphaFold model inventory
+to its checksum-verified model-quality table, uses only confidence-eligible coordinates for a
+campaign-wide Foldseek search, consumes the completed Stage 04 OrthoFinder results, and sets
+`foldseek.maximum_hits` to the number of eligible models. Review and freeze
+`campaign.yaml`, especially the target/background comparisons and structural thresholds,
+before the compute run:
+
+```bash
+./run_completed_e3_workflow.sh \
+  --phase run \
+  --work-dir "${SIGNATURE_WORK}" \
+  --threads "${SLURM_CPUS_PER_TASK:-24}"
+
+./run_completed_e3_workflow.sh \
+  --phase verify \
+  --work-dir "${SIGNATURE_WORK}"
+```
+
+See [the completed-workflow hand-off guide](docs/E3_WORKFLOW_HANDOFF.md) for the source map,
+review gate, scheduler pattern and interpretation boundaries.
 
 ## Preparing the supplied E3 seed catalogue
 

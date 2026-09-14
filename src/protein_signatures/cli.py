@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import __version__
 from .catalogue import prepare_catalogue
+from .e3_workflow_bridge import prepare_e3_workflow_inputs
 from .errors import ProteinSignatureError
 from .logging_config import configure_logging
 from .pipeline import run_campaign, validate_campaign
@@ -48,6 +49,14 @@ def build_parser() -> argparse.ArgumentParser:
     catalogue_parser.add_argument("--proposed-category-column", default="")
     catalogue_parser.add_argument("--starter-label-id", default="e3:associated:unknown")
     catalogue_parser.add_argument("--log-level", default="INFO")
+    e3_workflow_parser = subparsers.add_parser(
+        "prepare-e3-workflow",
+        help="Prepare review-gated inputs from a completed E3 end-to-end run.",
+    )
+    e3_workflow_parser.add_argument("--run-root", required=True, type=Path)
+    e3_workflow_parser.add_argument("--output-dir", required=True, type=Path)
+    e3_workflow_parser.add_argument("--minimum-mean-plddt", type=float, default=50.0)
+    e3_workflow_parser.add_argument("--log-level", default="INFO")
     initialise_parser = subparsers.add_parser(
         "initialise",
         help="Create a validated campaign YAML from explicit input authorities.",
@@ -78,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     initialise_parser.add_argument("--orthofinder-run-id", default="")
     initialise_parser.add_argument("--enable-alphafold", action="store_true")
     initialise_parser.add_argument("--enable-foldseek", action="store_true")
+    initialise_parser.add_argument("--foldseek-maximum-hits", type=int, default=1000)
     initialise_parser.add_argument("--log-level", default="INFO")
     run_parser = subparsers.add_parser("run-all", help="Run and atomically publish a campaign.")
     run_parser.add_argument("--config", required=True, type=Path)
@@ -128,6 +138,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 starter_label_id=arguments.starter_label_id,
             )
             print(json.dumps({"status": "COMPLETE", "starter_dir": str(destination)}))
+        elif arguments.command == "prepare-e3-workflow":
+            destination = prepare_e3_workflow_inputs(
+                run_root=arguments.run_root,
+                output_dir=arguments.output_dir,
+                minimum_mean_plddt=arguments.minimum_mean_plddt,
+            )
+            print(json.dumps({"status": "COMPLETE", "prepared_dir": str(destination)}))
         elif arguments.command == "initialise":
             destination = initialise_campaign(
                 config_path=arguments.config,
@@ -149,6 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 orthofinder_run_id=arguments.orthofinder_run_id,
                 enable_alphafold=arguments.enable_alphafold,
                 enable_foldseek=arguments.enable_foldseek,
+                foldseek_maximum_hits=arguments.foldseek_maximum_hits,
             )
             print(json.dumps({"status": "CREATED", "config": str(destination)}))
         elif arguments.command == "run-all":

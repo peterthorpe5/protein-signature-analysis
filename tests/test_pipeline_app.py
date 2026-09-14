@@ -528,6 +528,36 @@ def test_cli_routes_catalogue_initialisation_and_interrupts(
         == 0
     )
     assert json.loads(capsys.readouterr().out)["starter_dir"] == str(starter)
+    workflow_starter = tmp_path / "workflow_starter"
+    workflow_arguments: dict[str, object] = {}
+
+    def fake_prepare_e3_workflow_inputs(**kwargs: object) -> Path:
+        """Capture completed-workflow bridge arguments for the CLI branch."""
+
+        workflow_arguments.update(kwargs)
+        return workflow_starter
+
+    monkeypatch.setattr(
+        cli_module,
+        "prepare_e3_workflow_inputs",
+        fake_prepare_e3_workflow_inputs,
+    )
+    assert (
+        cli_module.main(
+            [
+                "prepare-e3-workflow",
+                "--run-root",
+                str(tmp_path / "e3_run"),
+                "--output-dir",
+                str(workflow_starter),
+                "--minimum-mean-plddt",
+                "65",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["prepared_dir"] == str(workflow_starter)
+    assert workflow_arguments["minimum_mean_plddt"] == 65.0
     monkeypatch.setattr(cli_module, "initialise_campaign", lambda **_kwargs: config)
     assert (
         cli_module.main(
@@ -541,6 +571,8 @@ def test_cli_routes_catalogue_initialisation_and_interrupts(
                 str(tmp_path / "proteins.faa"),
                 "--label-assignments",
                 str(tmp_path / "labels.tsv"),
+                "--foldseek-maximum-hits",
+                "4321",
             ]
         )
         == 0

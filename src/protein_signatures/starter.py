@@ -37,6 +37,7 @@ def initialise_campaign(
     orthofinder_run_id: str = "",
     enable_alphafold: bool = False,
     enable_foldseek: bool = False,
+    foldseek_maximum_hits: int = 1000,
 ) -> Path:
     """Write and re-read a ready-to-run campaign YAML file.
 
@@ -60,6 +61,7 @@ def initialise_campaign(
         orthofinder_run_id: Optional explicit upstream run identifier.
         enable_alphafold: Download requested AlphaFold Database models during analysis.
         enable_foldseek: Run Foldseek over available coordinate models.
+        foldseek_maximum_hits: Maximum Foldseek matches retained per query.
 
     Returns:
         Absolute path to the validated campaign configuration.
@@ -81,6 +83,12 @@ def initialise_campaign(
         raise InputValidationError(
             "AlphaFold acquisition requires an explicit protein-to-accession TSV."
         )
+    if (
+        not isinstance(foldseek_maximum_hits, int)
+        or isinstance(foldseek_maximum_hits, bool)
+        or foldseek_maximum_hits < 1
+    ):
+        raise InputValidationError("foldseek_maximum_hits must be a positive integer.")
     campaign = validate_identifier(value=campaign_id, field_name="campaign_id")
     profile_source = _profile_source(value=profile)
     file_inputs = {
@@ -138,6 +146,7 @@ def initialise_campaign(
         orthofinder_run_id=orthofinder_run_id,
         enable_alphafold=enable_alphafold,
         enable_foldseek=enable_foldseek,
+        foldseek_maximum_hits=foldseek_maximum_hits,
         config_parent=destination.parent,
     )
     content = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
@@ -164,6 +173,7 @@ def _campaign_document(
     orthofinder_run_id: str,
     enable_alphafold: bool,
     enable_foldseek: bool,
+    foldseek_maximum_hits: int,
     config_parent: Path,
 ) -> dict[str, Any]:
     """Build one serialisable schema-1 campaign document.
@@ -180,6 +190,7 @@ def _campaign_document(
         orthofinder_run_id: Optional run identifier.
         enable_alphafold: Whether AlphaFold acquisition is enabled.
         enable_foldseek: Whether Foldseek is enabled.
+        foldseek_maximum_hits: Maximum Foldseek matches retained per query.
         config_parent: Parent used for local cache directories.
 
     Returns:
@@ -218,7 +229,7 @@ def _campaign_document(
             "cache_dir": str(cache_root / "foldseek"),
             "e_value_threshold": 0.001,
             "sensitivity": 9.5,
-            "maximum_hits": 1000,
+            "maximum_hits": foldseek_maximum_hits,
         },
         "explainable_ml": {
             "enabled": True,
