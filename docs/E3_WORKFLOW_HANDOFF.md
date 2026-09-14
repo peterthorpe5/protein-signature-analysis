@@ -87,12 +87,17 @@ The new `prepared_inputs/` directory contains:
 | `domains.tsv` | Pfam hits plus explicit no-hit/not-assessed sentinel rows |
 | `structures.tsv` | Sequence-matched, checksum-verified Stage 09 coordinates, pLDDT and eligibility |
 | `label_assignments.REVIEW_REQUIRED.tsv` | All-`UNMAPPED` safe starter; never use directly for analysis |
-| `e3_label_curation_review.tsv` | HOG, species, Pfam, upstream-family/role hints and empty decision columns |
+| `e3_label_curation_review.tsv` | Exact source-cluster JSON arrays, HOG, species, Pfam, upstream-family/role hints and empty decision columns |
 | `alphafold_accessions.MISSING_MODELS_REVIEW_REQUIRED.tsv` | Canonical accessions lacking a reused model, for optional bounded follow-up |
 | `source_inventory.tsv` | Exact files and SHA-256 values used during preparation |
 
 The bridge merges repeated accessions only when their sequences agree exactly. Conflicting
 sequence, Pfam, model-quality, path, byte-count or coordinate-checksum records fail closed.
+Stage 05 `cluster_id` values are opaque provenance rather than signature-package identifiers;
+therefore composite DeepClust values such as
+`Arabidopsis_thaliana@@sp|B3H578|PHD1_ARATH` are retained exactly. Because `|` is valid inside
+these values, the `cluster_ids` review column is a deterministic JSON array rather than an
+ambiguous delimiter-joined string. HOG and orthogroup identifiers remain strictly validated.
 Coordinates below the declared mean-pLDDT threshold, or without a model-quality value, remain
 in the audit table but receive an explicit ineligible state and never enter Foldseek. Preparation
 requires at least two eligible models and records both the available and eligible counts in

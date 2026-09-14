@@ -10,6 +10,7 @@ protein-signature campaign.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import os
@@ -496,9 +497,18 @@ def _prepare_sequences(*, rows: Sequence[Mapping[str, Any]]) -> SequencePreparat
         ):
             value = str(row.get(source_field) or "").strip()
             if value:
-                contexts[protein_id][destination_field].add(
-                    validate_identifier(value=value, field_name=source_field)
-                )
+                if source_field == "cluster_id":
+                    context_value = validate_text(
+                        value=value,
+                        field_name=source_field,
+                        maximum_length=2_048,
+                    )
+                else:
+                    context_value = validate_identifier(
+                        value=value,
+                        field_name=source_field,
+                    )
+                contexts[protein_id][destination_field].add(context_value)
         candidate_raw = row.get("is_input_candidate")
         candidate_value = str(candidate_raw if candidate_raw is not None else "").strip().casefold()
         if candidate_value in {"1", "true", "yes"}:
@@ -510,7 +520,7 @@ def _prepare_sequences(*, rows: Sequence[Mapping[str, Any]]) -> SequencePreparat
     audit = tuple(
         {
             "protein_id": protein_id,
-            "cluster_ids": "|".join(sorted(contexts[protein_id]["cluster_ids"])),
+            "cluster_ids": _serialise_review_values(values=contexts[protein_id]["cluster_ids"]),
             "group_ids": "|".join(sorted(contexts[protein_id]["group_ids"])),
             "orthogroup_ids": "|".join(sorted(contexts[protein_id]["orthogroup_ids"])),
             "species": "|".join(sorted(contexts[protein_id]["species"])),
@@ -527,6 +537,23 @@ def _prepare_sequences(*, rows: Sequence[Mapping[str, Any]]) -> SequencePreparat
         audit_records=audit,
         skipped_unmapped_rows=skipped,
     )
+
+
+def _serialise_review_values(*, values: Sequence[str] | set[str]) -> str:
+    """Serialise opaque review values as a deterministic JSON array.
+
+    Source cluster identifiers can legitimately contain ``|`` and ``@@``.
+    JSON retains those exact identifiers without creating ambiguity with the
+    pipe delimiter used for controlled identifiers elsewhere in the worksheet.
+
+    Args:
+        values: Source values to deduplicate and order.
+
+    Returns:
+        Compact JSON array suitable for one TSV cell.
+    """
+
+    return json.dumps(sorted(set(values)), ensure_ascii=False, separators=(",", ":"))
 
 
 def _prepare_domains(

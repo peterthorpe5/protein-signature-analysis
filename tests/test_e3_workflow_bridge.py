@@ -20,6 +20,7 @@ from protein_signatures.e3_workflow_bridge import (
     _require_complete_manifest,
     _resolve_asset_path,
     _resolve_first_file,
+    _serialise_review_values,
     _verify_manifested_files,
     prepare_e3_workflow_inputs,
     resolve_e3_workflow_paths,
@@ -86,7 +87,13 @@ def _completed_workflow(tmp_path: Path) -> Path:
     )
     sequence_rows: list[dict[str, object]] = []
     for cluster, group, protein_id, sequence, candidate in (
-        ("cluster_1", "N0.HOG0001", "P00001", "MACDEFGH", True),
+        (
+            "Arabidopsis_thaliana@@sp|B3H578|PHD1_ARATH",
+            "N0.HOG0001",
+            "P00001",
+            "MACDEFGH",
+            True,
+        ),
         ("cluster_2", "N0.HOG0002", "Q00002", "MAAAACCC", False),
         ("cluster_3", "N0.HOG0003", "P00001", "MACDEFGH", False),
     ):
@@ -373,7 +380,10 @@ def test_completed_workflow_preparation_is_conservative_and_executable(
         )
     )
     assert review[0]["upstream_e3_families"] == "F-box"
-    assert "cluster_1|cluster_3" in review[0]["cluster_ids"]
+    assert json.loads(review[0]["cluster_ids"]) == [
+        "Arabidopsis_thaliana@@sp|B3H578|PHD1_ARATH",
+        "cluster_3",
+    ]
     assert review[0]["input_candidate_states"] == "FALSE|TRUE"
     source_inventory = tuple(
         iter_tsv(
@@ -510,6 +520,14 @@ def test_parquet_and_sequence_helpers_reject_malformed_authorities(tmp_path: Pat
     }
     prepared = _prepare_sequences(rows=({**base}, {**base}, {**base, "parsed_accession": ""}))
     assert prepared.skipped_unmapped_rows == 1
+    composite = "Arabidopsis_thaliana@@sp|B3H578|PHD1_ARATH"
+    with_context = _prepare_sequences(rows=({**base, "cluster_id": composite},))
+    assert json.loads(with_context.audit_records[0]["cluster_ids"]) == [composite]
+    assert _serialise_review_values(values=("second", "first", "second")) == ('["first","second"]')
+    with pytest.raises(InputValidationError, match="TSV-breaking"):
+        _prepare_sequences(rows=({**base, "cluster_id": "bad\tcluster"},))
+    with pytest.raises(InputValidationError, match="must match"):
+        _prepare_sequences(rows=({**base, "group_id": "bad|group"},))
     with pytest.raises(InputValidationError, match="inconsistent length"):
         _prepare_sequences(rows=({**base, "sequence_length": 99},))
     with pytest.raises(InputValidationError, match="invalid sequence_length"):

@@ -51,3 +51,6 @@
   only when its complete stage manifest, reviewed-archive authority, exact five-file
   validation ledger and current file checksums all agree; direct raw results still require
   OrthoFinder's official completion marker.
+- Preserve Stage 05 composite DeepClust cluster identifiers as bounded, TSV-safe provenance
+  and serialise their review-cell collections as deterministic JSON arrays; canonical HOG,
+  orthogroup and protein identifiers retain their stricter validation contracts.
