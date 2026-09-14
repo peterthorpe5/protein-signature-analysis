@@ -214,7 +214,8 @@ def _completed_workflow(tmp_path: Path) -> Path:
     _write_stage_manifest(stage_root=asset_root, paths=(asset_path, quality_path))
 
     structural = root / "09b_structural_alignment" / "structural_alignment"
-    outputs = []
+    structural_tables = []
+    datasets = {}
     for name in (
         "structural_alignments.parquet",
         "pocket_comparisons.parquet",
@@ -223,25 +224,32 @@ def _completed_workflow(tmp_path: Path) -> Path:
         path = structural / "tables" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"fixture {name}\n", encoding="utf-8")
-        outputs.append(
-            {
-                "path": f"tables/{name}",
-                "size_bytes": path.stat().st_size,
-                "sha256": sha256_file(path=path),
-            }
-        )
+        structural_tables.append(path)
+        datasets[name.removesuffix(".parquet")] = {
+            "path": str(path.resolve()),
+            "sha256": sha256_file(path=path),
+        }
     provenance = structural / "provenance"
     provenance.mkdir(parents=True)
-    (provenance / "run_manifest.json").write_text(
+    structural_manifest = provenance / "run_manifest.json"
+    structural_manifest.write_text(
         json.dumps(
             {
                 "status": "complete",
-                "run_digest": "a" * 64,
-                "package_version": "0.6.0",
-                "outputs": outputs,
+                "configuration_digest": "a" * 64,
+                "task_count": 2,
+                "summary_group_count": 2,
+                "structural_evidence_counts": {},
+                "datasets": datasets,
+                "shards": [],
             }
         ),
         encoding="utf-8",
+    )
+    structural_stage = root / "09b_structural_alignment"
+    _write_stage_manifest(
+        stage_root=structural_stage,
+        paths=(structural_manifest, *structural_tables),
     )
     orthofinder = root / "04_orthofinder" / "Results"
     orthofinder.mkdir(parents=True)
@@ -267,6 +275,9 @@ def test_completed_workflow_preparation_is_conservative_and_executable(
     root = _completed_workflow(tmp_path)
     resolved = resolve_e3_workflow_paths(run_root=root)
     assert resolved.orthofinder_results == root / "04_orthofinder" / "Results"
+    assert resolved.structural_stage_manifest == (
+        root / "09b_structural_alignment" / "stage_manifest.json"
+    )
     destination = prepare_e3_workflow_inputs(
         run_root=root,
         output_dir=tmp_path / "prepared",
@@ -321,7 +332,11 @@ def test_completed_workflow_preparation_is_conservative_and_executable(
             required_fields=("authority", "sha256"),
         )
     )
-    assert len(source_inventory) == 7
+    assert len(source_inventory) == 8
+    assert {row["authority"] for row in source_inventory} >= {
+        "structural_run_manifest",
+        "structural_stage_manifest",
+    }
     with pytest.raises(PublicationError, match="already exists"):
         prepare_e3_workflow_inputs(run_root=root, output_dir=destination)
 

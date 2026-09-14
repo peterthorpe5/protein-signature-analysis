@@ -27,9 +27,12 @@ Set `--run-root` to the end-to-end run directory itself. The adapter uses these 
 | `04_orthofinder/Results/` | Completed raw OrthoFinder 2.5.5/3 grouping authority |
 
 Every consumed Stage 05, 06 and 09 Parquet file must be listed exactly once in its complete
-stage manifest, with matching byte size and SHA-256. The Stage 09b resource additionally
-verifies every file declared in its component run manifest. Input-file and coordinate-file
-checksums are verified again by the signature campaign.
+stage manifest, with matching byte size and SHA-256. Stage 09b supports both published
+contracts: a standalone component manifest with an `outputs` inventory, and the end-to-end
+aggregate manifest with a `datasets` inventory. For the aggregate, every declared scientific
+Parquet checksum is cross-checked against
+`09b_structural_alignment/stage_manifest.json`, including the aggregate run manifest itself.
+Input-file and coordinate-file checksums are verified again by the signature campaign.
 
 `10_integrated_resource/final_results` is deliberately absent from this map. Those files
 rank predecessor candidates; using their ranks as signature labels would leak the outcome

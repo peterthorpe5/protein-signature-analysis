@@ -61,6 +61,7 @@ class E3WorkflowPaths:
     asset_manifest_table: Path
     model_quality_table: Path
     structural_resource: Path
+    structural_stage_manifest: Path | None
     orthofinder_results: Path
 
 
@@ -153,6 +154,9 @@ def resolve_e3_workflow_paths(*, run_root: Path) -> E3WorkflowPaths:
         resource_dir=structural_resource,
         manifest=structural_manifest,
     )
+    structural_stage_manifest = None
+    if "datasets" in structural_manifest:
+        structural_stage_manifest = structural_resource.parent / "stage_manifest.json"
 
     orthofinder_results = root / "04_orthofinder" / "Results"
     if not orthofinder_results.is_dir():
@@ -170,6 +174,7 @@ def resolve_e3_workflow_paths(*, run_root: Path) -> E3WorkflowPaths:
         asset_manifest_table=assets,
         model_quality_table=model_quality,
         structural_resource=structural_resource,
+        structural_stage_manifest=structural_stage_manifest,
         orthofinder_results=orthofinder_results,
     )
 
@@ -1125,6 +1130,8 @@ def _source_inventory(*, paths: E3WorkflowPaths) -> tuple[dict[str, str], ...]:
         "model_quality_table": paths.model_quality_table,
         "structural_run_manifest": (paths.structural_resource / "provenance" / "run_manifest.json"),
     }
+    if paths.structural_stage_manifest is not None:
+        authorities["structural_stage_manifest"] = paths.structural_stage_manifest
     return tuple(
         {
             "authority": authority,

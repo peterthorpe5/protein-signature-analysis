@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from protein_signatures.checksums import sha256_file, sha256_text
+from protein_signatures.checksums import sha256_file, sha256_json, sha256_text
 from protein_signatures.errors import InputValidationError
 from protein_signatures.models import SequenceRecord
 from protein_signatures.structural_resource import (
@@ -74,6 +74,124 @@ def test_structural_resource_resolves_end_to_end_parent(tmp_path: Path) -> None:
         resolve_structural_resource_root(path=tmp_path / "missing")
 
 
+def test_import_supports_checksum_bound_end_to_end_aggregate(tmp_path: Path) -> None:
+    """A real Stage 09b datasets manifest should import via its outer inventory."""
+
+    root = _structural_resource(root=tmp_path / "09b_structural_alignment" / "structural_alignment")
+    aggregate = _convert_to_aggregate(root=root)
+    imported = import_structural_alignment_resource(
+        resource_dir=tmp_path,
+        sequences=_sequences(),
+    )
+    expected_datasets = {
+        name.removesuffix(".parquet"): sha256_file(path=root / "tables" / name)
+        for name in _REQUIRED_NAMES
+    }
+    assert imported.run_digest == sha256_json(
+        value={
+            "schema": "e3workflow_stage_09b_aggregate_v1",
+            "configuration_digest": "b" * 64,
+            "datasets": expected_datasets,
+        }
+    )
+    assert imported.package_version == "0.16.0"
+    assert imported.input_paths[:2] == (
+        aggregate,
+        root.parent / "stage_manifest.json",
+    )
+    assert len(imported.comparisons) == 2
+    verify_structural_resource_outputs(resource_dir=root)
+
+
+def test_aggregate_manifest_validation_rejects_unbound_evidence(tmp_path: Path) -> None:
+    """Stage 09b datasets must agree with the outer checksum authority."""
+
+    root = _structural_resource(
+        root=tmp_path / "first" / "09b_structural_alignment" / "structural_alignment"
+    )
+    aggregate = _convert_to_aggregate(root=root)
+    stage_manifest = root.parent / "stage_manifest.json"
+    stage_manifest.unlink()
+    with pytest.raises(InputValidationError, match="Missing or empty input file"):
+        verify_structural_resource_outputs(resource_dir=root)
+
+    root = _structural_resource(
+        root=tmp_path / "second" / "09b_structural_alignment" / "structural_alignment"
+    )
+    aggregate = _convert_to_aggregate(root=root)
+    stage_manifest = root.parent / "stage_manifest.json"
+    outer = json.loads(stage_manifest.read_text(encoding="utf-8"))
+    outer["status"] = "running"
+    stage_manifest.write_text(json.dumps(outer), encoding="utf-8")
+    with pytest.raises(InputValidationError, match="not marked complete"):
+        verify_structural_resource_outputs(resource_dir=root)
+
+    root = _structural_resource(
+        root=tmp_path / "third" / "09b_structural_alignment" / "structural_alignment"
+    )
+    aggregate = _convert_to_aggregate(root=root)
+    stage_manifest = root.parent / "stage_manifest.json"
+    outer = json.loads(stage_manifest.read_text(encoding="utf-8"))
+    outer["outputs"] = [
+        row
+        for row in outer["outputs"]
+        if row["path"] != "structural_alignment/provenance/run_manifest.json"
+    ]
+    stage_manifest.write_text(json.dumps(outer), encoding="utf-8")
+    with pytest.raises(InputValidationError, match="not checksum-inventoried"):
+        verify_structural_resource_outputs(resource_dir=root)
+
+    root = _structural_resource(
+        root=tmp_path / "fourth" / "09b_structural_alignment" / "structural_alignment"
+    )
+    aggregate = _convert_to_aggregate(root=root)
+    manifest = json.loads(aggregate.read_text(encoding="utf-8"))
+    manifest["datasets"]["structural_alignments"]["sha256"] = "0" * 64
+    aggregate.write_text(json.dumps(manifest), encoding="utf-8")
+    _write_aggregate_stage_manifest(root=root)
+    with pytest.raises(InputValidationError, match="checksum disagrees"):
+        verify_structural_resource_outputs(resource_dir=root)
+
+
+def test_aggregate_manifest_rejects_bad_identity_and_required_dataset(
+    tmp_path: Path,
+) -> None:
+    """Aggregate paths, configuration identity and required tables must be explicit."""
+
+    root = _structural_resource(
+        root=tmp_path / "first" / "09b_structural_alignment" / "structural_alignment"
+    )
+    aggregate = _convert_to_aggregate(root=root)
+    manifest = json.loads(aggregate.read_text(encoding="utf-8"))
+    manifest["datasets"]["structural_alignments"]["path"] = "/unsafe/wrong.parquet"
+    aggregate.write_text(json.dumps(manifest), encoding="utf-8")
+    _write_aggregate_stage_manifest(root=root)
+    with pytest.raises(InputValidationError, match="incompatible path"):
+        verify_structural_resource_outputs(resource_dir=root)
+
+    root = _structural_resource(
+        root=tmp_path / "second" / "09b_structural_alignment" / "structural_alignment"
+    )
+    aggregate = _convert_to_aggregate(root=root)
+    manifest = json.loads(aggregate.read_text(encoding="utf-8"))
+    del manifest["datasets"]["structural_alignments"]
+    aggregate.write_text(json.dumps(manifest), encoding="utf-8")
+    _write_aggregate_stage_manifest(root=root)
+    with pytest.raises(InputValidationError, match="not checksum-inventoried"):
+        import_structural_alignment_resource(resource_dir=root, sequences=_sequences())
+
+    root = _structural_resource(
+        root=tmp_path / "third" / "09b_structural_alignment" / "structural_alignment"
+    )
+    aggregate = _convert_to_aggregate(root=root)
+    manifest = json.loads(aggregate.read_text(encoding="utf-8"))
+    manifest["configuration_digest"] = "bad"
+    aggregate.write_text(json.dumps(manifest), encoding="utf-8")
+    _write_aggregate_stage_manifest(root=root)
+    with pytest.raises(InputValidationError, match="configuration_digest"):
+        import_structural_alignment_resource(resource_dir=root, sequences=_sequences())
+
+
 def test_structural_manifest_validation_rejects_tampering(tmp_path: Path) -> None:
     """Unsafe, missing, duplicated and changed outputs should be rejected."""
 
@@ -95,7 +213,19 @@ def test_structural_manifest_validation_rejects_tampering(tmp_path: Path) -> Non
     with pytest.raises(InputValidationError, match="checksum mismatch"):
         verify_structural_resource_outputs(resource_dir=root, manifest=changed)
     with pytest.raises(InputValidationError, match="no output inventory"):
-        verify_structural_resource_outputs(resource_dir=root, manifest={"outputs": []})
+        verify_structural_resource_outputs(
+            resource_dir=root,
+            manifest={"status": "complete", "outputs": []},
+        )
+    with pytest.raises(InputValidationError, match="mixes outputs and datasets"):
+        verify_structural_resource_outputs(
+            resource_dir=root,
+            manifest={
+                "status": "complete",
+                "outputs": manifest["outputs"],
+                "datasets": {"structural_alignments": {}},
+            },
+        )
 
 
 def test_structural_import_requires_every_consumed_table_in_manifest(tmp_path: Path) -> None:
@@ -276,6 +406,64 @@ def _structural_resource(*, root: Path) -> Path:
     provenance.mkdir()
     (provenance / "run_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return root
+
+
+def _convert_to_aggregate(*, root: Path) -> Path:
+    """Replace a standalone fixture manifest with the Stage 09b aggregate schema."""
+
+    manifest_path = root / "provenance" / "run_manifest.json"
+    datasets = {
+        name.removesuffix(".parquet"): {
+            "path": str((root / "tables" / name).resolve()),
+            "sha256": sha256_file(path=root / "tables" / name),
+        }
+        for name in _REQUIRED_NAMES
+    }
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "configuration_digest": "b" * 64,
+                "finished_at_utc": "2026-09-14T00:00:00Z",
+                "task_count": 1,
+                "summary_group_count": 1,
+                "structural_evidence_counts": {},
+                "datasets": datasets,
+                "shards": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_aggregate_stage_manifest(root=root)
+    return manifest_path
+
+
+def _write_aggregate_stage_manifest(*, root: Path) -> None:
+    """Checksum-bind aggregate fixture datasets through the outer stage manifest."""
+
+    stage_root = root.parent
+    paths = (
+        root / "provenance" / "run_manifest.json",
+        *(root / "tables" / name for name in _REQUIRED_NAMES),
+    )
+    outputs = [
+        {
+            "path": str(path.relative_to(stage_root)),
+            "size_bytes": path.stat().st_size,
+            "sha256": sha256_file(path=path),
+        }
+        for path in paths
+    ]
+    (stage_root / "stage_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "package_version": "0.16.0",
+                "outputs": outputs,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 _REQUIRED_NAMES = (

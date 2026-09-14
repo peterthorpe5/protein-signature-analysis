@@ -193,7 +193,8 @@ cp \
 ```
 
 Initialisation validates every configured authority and then stops. It imports checksum-bound
-Stage 09b US-align/TM-align and pocket results, joins the Stage 09 AlphaFold model inventory
+Stage 09b US-align/TM-align and pocket results from either the standalone component contract or
+the end-to-end aggregate `datasets` contract, joins the Stage 09 AlphaFold model inventory
 to its checksum-verified model-quality table, uses only confidence-eligible coordinates for a
 campaign-wide Foldseek search, consumes the completed Stage 04 OrthoFinder results, and sets
 `foldseek.maximum_hits` to the number of eligible models. Review and freeze

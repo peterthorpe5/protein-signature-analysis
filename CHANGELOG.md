@@ -44,3 +44,6 @@
   while importing Stage 09b structural evidence and refusing automatic label promotion; Stage 09
   mean pLDDT now gates model eligibility without hiding low-confidence or unassessed coordinates.
 - Allow campaign initialisation to set Foldseek's complete-search hit limit explicitly.
+- Accept the completed end-to-end Stage 09b aggregate `datasets` manifest while retaining
+  strict cross-checks against the outer stage checksum inventory; standalone structural
+  component manifests remain supported.

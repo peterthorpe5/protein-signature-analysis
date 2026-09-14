@@ -35,7 +35,9 @@ END_TO_END/structural_alignment/...
 ```
 
 Resolution fails when no candidate or more than one candidate contains
-`provenance/run_manifest.json`. The manifest must be a JSON object with:
+`provenance/run_manifest.json`. Two explicit manifest contracts are accepted.
+
+For a standalone `e3_structural_alignment` component, the manifest must be a JSON object with:
 
 - `status` equal to lowercase `complete`;
 - `run_digest` equal to a 64-character lowercase hexadecimal SHA-256 value;
@@ -46,8 +48,19 @@ Resolution fails when no candidate or more than one candidate contains
 Every file declared in `outputs` is checked for path safety, existence, byte size and SHA-256
 before a Parquet table is read. All three required tables must be declared in that inventory
 and must exist as non-empty files; an unmanifested table is rejected even when present. The
-adapter records `package_version` but does not use it as a version gate, so compatibility is
-established by the manifest and column contracts below.
+adapter records `package_version` but does not use it as a version gate.
+
+For an end-to-end Stage 09b aggregate, the inner manifest instead has a non-empty `datasets`
+object. Every dataset name must map to the matching `tables/<name>.parquet` suffix and a valid
+SHA-256. The adapter requires a completed sibling
+`09b_structural_alignment/stage_manifest.json`; that outer inventory must checksum-bind the
+inner manifest and every declared Parquet file, with matching sizes and hashes. The aggregate
+`configuration_digest` must be a SHA-256, and it is combined with all dataset checksums to
+derive a stable structural-run identity. Absolute dataset paths are retained only as upstream
+provenance, so a complete checksum-valid run may be relocated safely.
+
+Compatibility is established by these manifest and column contracts, not by a hard-coded
+producer-version gate.
 
 Configure the import as:
 
@@ -137,7 +150,7 @@ the membership set; it does not independently prove that every possible pair is 
 | Completed global US-align/TM-align rows, including tool/version, status, aligned length, RMSD and minimum TM score | A narrow read-only compatibility adapter, so this package has no runtime dependency on `E3_project_draft` |
 | Assessed same-position and conserved-pocket support calls | Translation into canonical `structure_comparisons` and exploratory `STRUCTURAL_POCKET` features |
 | Stable group summary values and interpretations | FASTA-based bilateral coverage calculation and exact campaign identifier filtering |
-| Upstream `run_digest`, `package_version`, manifest and declared file hashes | Namespacing, assessment-universe checks, discovery-safe cluster construction, statistical analysis and result publication |
+| Upstream run/configuration identity, producer version, manifests and declared file hashes | Namespacing, assessment-universe checks, discovery-safe cluster construction, statistical analysis and result publication |
 
 Canonical copies in a `protein-signature-analysis` result are intentional publication and
 provenance duplication. They do not transfer scientific ownership or imply that the

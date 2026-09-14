@@ -26,6 +26,9 @@ from .models import (
 
 LOGGER = logging.getLogger(__name__)
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+_DATASET_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+_STANDALONE_MANIFEST = "standalone_outputs"
+_AGGREGATE_MANIFEST = "end_to_end_datasets"
 _REQUIRED_TABLES = (
     "structural_alignments.parquet",
     "pocket_comparisons.parquet",
@@ -63,6 +66,10 @@ def import_structural_alignment_resource(
         )
     verify_structural_resource_outputs(resource_dir=root, manifest=manifest)
     _require_manifested_structural_tables(manifest=manifest)
+    run_digest, package_version, manifest_paths = _structural_manifest_identity(
+        resource_dir=root,
+        manifest=manifest,
+    )
     tables = root / "tables"
     required_paths = tuple(tables / name for name in _REQUIRED_TABLES)
     missing = [path.name for path in required_paths if not path.is_file()]
@@ -70,9 +77,6 @@ def import_structural_alignment_resource(
         raise InputValidationError(
             "Structural resource lacks required Parquet tables: " + "; ".join(missing)
         )
-    run_digest = str(manifest.get("run_digest", ""))
-    if _DIGEST.fullmatch(run_digest) is None:
-        raise InputValidationError("Structural resource run_digest is not a SHA-256 value.")
     lengths = {sequence.protein_id: sequence.sequence_length for sequence in sequences}
     summaries = _read_group_summaries(path=required_paths[2])
     expected_universe_sizes = {
@@ -99,8 +103,8 @@ def import_structural_alignment_resource(
         comparisons=comparisons,
         features=features,
         group_summaries=summaries,
-        input_paths=(manifest_path, *required_paths),
-        package_version=str(manifest.get("package_version", "unknown")),
+        input_paths=(*manifest_paths, *required_paths),
+        package_version=package_version,
         run_digest=run_digest,
         comparison_universe_members=comparison_universe_members,
     )
@@ -146,7 +150,12 @@ def resolve_structural_resource_root(*, path: Path) -> Path:
 def verify_structural_resource_outputs(
     *, resource_dir: Path, manifest: Mapping[str, Any] | None = None
 ) -> None:
-    """Verify all files declared by a structural resource manifest.
+    """Verify the scientific files declared by a structural resource manifest.
+
+    Standalone component manifests checksum their files directly in ``outputs``.
+    Aggregated Stage 09b manifests declare Parquet files in ``datasets``; those
+    declarations are cross-checked against the checksum-bearing outer stage
+    manifest before any file is accepted.
 
     Args:
         resource_dir: Resolved structural resource root.
@@ -162,28 +171,30 @@ def verify_structural_resource_outputs(
     )
     if not isinstance(value, Mapping):
         raise InputValidationError("Structural run manifest must contain an object.")
-    outputs = value.get("outputs")
-    if not isinstance(outputs, list) or not outputs:
-        raise InputValidationError("Structural run manifest has no output inventory.")
-    seen: set[Path] = set()
-    for index, row in enumerate(outputs):
-        if not isinstance(row, Mapping):
-            raise InputValidationError(f"Structural output record {index} is not an object.")
-        relative = _safe_path(value=row.get("path"), index=index)
-        if relative in seen:
-            raise InputValidationError(f"Structural output path is repeated: {relative}")
-        seen.add(relative)
-        candidate = (root / relative).resolve()
-        if root not in candidate.parents or not candidate.is_file():
-            raise InputValidationError(f"Structural output is missing or unsafe: {relative}")
-        size = _non_negative_integer(value=row.get("size_bytes"), field="size_bytes")
-        if candidate.stat().st_size != size:
-            raise InputValidationError(f"Structural output size mismatch: {relative}")
-        expected = str(row.get("sha256", ""))
-        if _DIGEST.fullmatch(expected) is None:
-            raise InputValidationError(f"Structural output record {index} has an invalid SHA-256.")
-        if sha256_file(path=candidate) != expected:
-            raise InputValidationError(f"Structural output checksum mismatch: {relative}")
+    if value.get("status") != "complete":
+        raise InputValidationError("Structural run manifest is not marked complete.")
+    variant = _manifest_variant(manifest=value)
+    if variant == _STANDALONE_MANIFEST:
+        records = _output_records(
+            manifest=value,
+            missing_message="Structural run manifest has no output inventory.",
+            record_name="Structural output record",
+        )
+        for relative, (index, row) in records.items():
+            _verify_output_record(
+                root=root,
+                relative=relative,
+                index=index,
+                row=row,
+                record_name="Structural output record",
+            )
+        LOGGER.info(
+            "Verified standalone structural resource outputs=%d root=%s",
+            len(records),
+            root,
+        )
+        return
+    _verify_aggregate_outputs(resource_dir=root, manifest=value)
 
 
 def _require_manifested_structural_tables(*, manifest: Mapping[str, Any]) -> None:
@@ -197,21 +208,318 @@ def _require_manifested_structural_tables(*, manifest: Mapping[str, Any]) -> Non
             beneath the resource ``tables`` directory.
     """
 
-    outputs = manifest.get("outputs")
-    if not isinstance(outputs, list):  # pragma: no cover - guarded by manifest validation
-        raise InputValidationError("Structural run manifest has no output inventory.")
-    declared = {
-        _safe_path(value=row.get("path"), index=index)
-        for index, row in enumerate(outputs)
-        if isinstance(row, Mapping)
-    }
-    required = {Path("tables") / name for name in _REQUIRED_TABLES}
-    missing = sorted(str(path) for path in required - declared)
+    variant = _manifest_variant(manifest=manifest)
+    if variant == _STANDALONE_MANIFEST:
+        outputs = manifest.get("outputs")
+        if not isinstance(outputs, list):  # pragma: no cover - variant guard
+            raise InputValidationError("Structural run manifest has no output inventory.")
+        declared = {
+            _safe_path(value=row.get("path"), index=index)
+            for index, row in enumerate(outputs)
+            if isinstance(row, Mapping)
+        }
+        required = {Path("tables") / name for name in _REQUIRED_TABLES}
+        missing = sorted(str(path) for path in required - declared)
+    else:
+        datasets = manifest.get("datasets")
+        if not isinstance(datasets, Mapping):  # pragma: no cover - variant guard
+            raise InputValidationError("Structural aggregate has no dataset inventory.")
+        required_names = {Path(name).stem for name in _REQUIRED_TABLES}
+        missing = sorted(f"tables/{name}.parquet" for name in required_names - set(datasets))
     if missing:
         raise InputValidationError(
             "Required structural tables are not checksum-inventoried in the manifest: "
             + "; ".join(missing)
         )
+
+
+def _manifest_variant(*, manifest: Mapping[str, Any]) -> str:
+    """Identify one supported, unambiguous structural manifest contract.
+
+    Args:
+        manifest: Decoded structural run manifest.
+
+    Returns:
+        Internal identifier for the standalone or aggregate contract.
+
+    Raises:
+        InputValidationError: If inventories are absent, malformed or ambiguous.
+    """
+
+    has_outputs = "outputs" in manifest
+    has_datasets = "datasets" in manifest
+    if has_outputs and has_datasets:
+        raise InputValidationError(
+            "Structural run manifest mixes outputs and datasets inventories."
+        )
+    if has_outputs:
+        outputs = manifest.get("outputs")
+        if not isinstance(outputs, list) or not outputs:
+            raise InputValidationError("Structural run manifest has no output inventory.")
+        return _STANDALONE_MANIFEST
+    if has_datasets:
+        datasets = manifest.get("datasets")
+        if not isinstance(datasets, Mapping) or not datasets:
+            raise InputValidationError("Structural aggregate has no dataset inventory.")
+        return _AGGREGATE_MANIFEST
+    raise InputValidationError(
+        "Structural run manifest has neither an outputs nor a datasets inventory."
+    )
+
+
+def _output_records(
+    *,
+    manifest: Mapping[str, Any],
+    missing_message: str,
+    record_name: str,
+) -> dict[Path, tuple[int, Mapping[str, Any]]]:
+    """Index a safe, duplicate-free manifest output inventory.
+
+    Args:
+        manifest: Manifest containing an ``outputs`` list.
+        missing_message: Diagnostic used for a missing or empty list.
+        record_name: Human-readable record name used in diagnostics.
+
+    Returns:
+        Output records keyed by safe relative path.
+
+    Raises:
+        InputValidationError: If the inventory shape or a path is invalid.
+    """
+
+    outputs = manifest.get("outputs")
+    if not isinstance(outputs, list) or not outputs:
+        raise InputValidationError(missing_message)
+    records: dict[Path, tuple[int, Mapping[str, Any]]] = {}
+    for index, row in enumerate(outputs):
+        if not isinstance(row, Mapping):
+            raise InputValidationError(f"{record_name} {index} is not an object.")
+        relative = _safe_path(
+            value=row.get("path"),
+            index=index,
+            record_name=record_name,
+        )
+        if relative in records:
+            raise InputValidationError(f"Structural output path is repeated: {relative}")
+        records[relative] = (index, row)
+    return records
+
+
+def _verify_output_record(
+    *,
+    root: Path,
+    relative: Path,
+    index: int,
+    row: Mapping[str, Any],
+    record_name: str,
+) -> str:
+    """Verify one safe output record and return its declared SHA-256.
+
+    Args:
+        root: Directory against which the relative path is resolved.
+        relative: Previously validated relative file path.
+        index: Zero-based manifest record index.
+        row: Output record containing size and checksum fields.
+        record_name: Human-readable record name used in diagnostics.
+
+    Returns:
+        Verified lower-case SHA-256 digest.
+
+    Raises:
+        InputValidationError: If the file, size or checksum is invalid.
+    """
+
+    candidate = (root / relative).resolve()
+    if root not in candidate.parents or not candidate.is_file():
+        raise InputValidationError(f"Structural output is missing or unsafe: {relative}")
+    size = _non_negative_integer(value=row.get("size_bytes"), field="size_bytes")
+    if candidate.stat().st_size != size:
+        raise InputValidationError(f"Structural output size mismatch: {relative}")
+    expected = str(row.get("sha256", ""))
+    if _DIGEST.fullmatch(expected) is None:
+        raise InputValidationError(f"{record_name} {index} has an invalid SHA-256.")
+    if sha256_file(path=candidate) != expected:
+        raise InputValidationError(f"Structural output checksum mismatch: {relative}")
+    return expected
+
+
+def _aggregate_dataset_records(
+    *, resource_dir: Path, manifest: Mapping[str, Any]
+) -> dict[str, tuple[Path, str]]:
+    """Resolve and validate aggregate dataset declarations.
+
+    Absolute paths in the upstream manifest are treated as provenance text, not
+    as read targets, so a checksum-valid copied run remains portable. The final
+    ``tables/<dataset>.parquet`` suffix must still match exactly.
+
+    Args:
+        resource_dir: Resolved aggregate structural resource root.
+        manifest: Decoded aggregate run manifest.
+
+    Returns:
+        Local dataset paths and inner-manifest checksums keyed by dataset name.
+
+    Raises:
+        InputValidationError: If a dataset name, path or checksum is invalid.
+    """
+
+    datasets = manifest.get("datasets")
+    if not isinstance(datasets, Mapping) or not datasets:
+        raise InputValidationError("Structural aggregate has no dataset inventory.")
+    root = Path(resource_dir).expanduser().resolve()
+    records: dict[str, tuple[Path, str]] = {}
+    for name, row in sorted(datasets.items(), key=lambda item: str(item[0])):
+        if not isinstance(name, str) or _DATASET_NAME.fullmatch(name) is None:
+            raise InputValidationError(f"Structural aggregate dataset name is invalid: {name!r}")
+        if not isinstance(row, Mapping):
+            raise InputValidationError(f"Structural aggregate dataset {name!r} is not an object.")
+        raw_path = row.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise InputValidationError(f"Structural aggregate dataset {name!r} lacks a path.")
+        recorded_path = Path(raw_path)
+        expected_name = f"{name}.parquet"
+        if len(recorded_path.parts) < 2 or recorded_path.parts[-2:] != (
+            "tables",
+            expected_name,
+        ):
+            raise InputValidationError(
+                f"Structural aggregate dataset {name!r} has an incompatible path: {raw_path!r}"
+            )
+        expected_digest = str(row.get("sha256", ""))
+        if _DIGEST.fullmatch(expected_digest) is None:
+            raise InputValidationError(
+                f"Structural aggregate dataset {name!r} has an invalid SHA-256."
+            )
+        records[name] = (root / "tables" / expected_name, expected_digest)
+    return records
+
+
+def _read_aggregate_stage_manifest(*, resource_dir: Path) -> tuple[Path, Mapping[str, Any]]:
+    """Read the completed checksum authority for an aggregated Stage 09b result.
+
+    Args:
+        resource_dir: Resolved ``structural_alignment`` directory.
+
+    Returns:
+        Outer stage-manifest path and decoded object.
+
+    Raises:
+        InputValidationError: If the manifest is absent, malformed or incomplete.
+    """
+
+    path = Path(resource_dir).expanduser().resolve().parent / "stage_manifest.json"
+    manifest = read_json(path=path)
+    if not isinstance(manifest, Mapping) or manifest.get("status") != "complete":
+        raise InputValidationError(
+            f"Aggregated structural Stage 09b manifest is not marked complete: {path}"
+        )
+    return path, manifest
+
+
+def _verify_aggregate_outputs(*, resource_dir: Path, manifest: Mapping[str, Any]) -> None:
+    """Cross-check aggregate datasets against the outer Stage 09b inventory.
+
+    Args:
+        resource_dir: Resolved aggregate structural resource root.
+        manifest: Decoded aggregate run manifest.
+
+    Raises:
+        InputValidationError: If either manifest or any scientific file differs.
+    """
+
+    root = Path(resource_dir).expanduser().resolve()
+    stage_manifest_path, stage_manifest = _read_aggregate_stage_manifest(resource_dir=root)
+    records = _output_records(
+        manifest=stage_manifest,
+        missing_message=f"Stage 09b manifest has no output inventory: {stage_manifest_path}",
+        record_name="Stage 09b output record",
+    )
+    datasets = _aggregate_dataset_records(resource_dir=root, manifest=manifest)
+    required_files: list[tuple[str, Path, str | None]] = [
+        ("aggregate run manifest", root / "provenance" / "run_manifest.json", None)
+    ]
+    required_files.extend(
+        (f"dataset {name!r}", path, digest) for name, (path, digest) in datasets.items()
+    )
+    stage_root = root.parent
+    for label, path, inner_digest in required_files:
+        try:
+            relative = path.resolve().relative_to(stage_root)
+        except ValueError as error:  # pragma: no cover - constructed local paths
+            raise InputValidationError(
+                f"Aggregated structural {label} is outside Stage 09b: {path}"
+            ) from error
+        record = records.get(relative)
+        if record is None:
+            raise InputValidationError(
+                f"Aggregated structural {label} is not checksum-inventoried in "
+                f"{stage_manifest_path}: {relative}"
+            )
+        index, row = record
+        outer_digest = _verify_output_record(
+            root=stage_root,
+            relative=relative,
+            index=index,
+            row=row,
+            record_name="Stage 09b output record",
+        )
+        if inner_digest is not None and inner_digest != outer_digest:
+            raise InputValidationError(
+                f"Structural aggregate checksum disagrees with Stage 09b for {label}."
+            )
+    LOGGER.info(
+        "Verified aggregated Stage 09b structural datasets=%d authority=%s",
+        len(datasets),
+        stage_manifest_path,
+    )
+
+
+def _structural_manifest_identity(
+    *, resource_dir: Path, manifest: Mapping[str, Any]
+) -> tuple[str, str, tuple[Path, ...]]:
+    """Return a stable run identity, package version and manifest authorities.
+
+    Args:
+        resource_dir: Resolved structural resource root.
+        manifest: Verified structural run manifest.
+
+    Returns:
+        Run digest, producing package version and ordered manifest paths.
+
+    Raises:
+        InputValidationError: If the applicable upstream identity is invalid.
+    """
+
+    root = Path(resource_dir).expanduser().resolve()
+    manifest_path = root / "provenance" / "run_manifest.json"
+    variant = _manifest_variant(manifest=manifest)
+    if variant == _STANDALONE_MANIFEST:
+        run_digest = str(manifest.get("run_digest", ""))
+        if _DIGEST.fullmatch(run_digest) is None:
+            raise InputValidationError("Structural resource run_digest is not a SHA-256 value.")
+        package_version = str(manifest.get("package_version") or "unknown").strip()
+        return run_digest, package_version or "unknown", (manifest_path,)
+
+    configuration_digest = str(manifest.get("configuration_digest", ""))
+    if _DIGEST.fullmatch(configuration_digest) is None:
+        raise InputValidationError(
+            "Structural aggregate configuration_digest is not a SHA-256 value."
+        )
+    datasets = _aggregate_dataset_records(resource_dir=root, manifest=manifest)
+    run_digest = sha256_json(
+        value={
+            "schema": "e3workflow_stage_09b_aggregate_v1",
+            "configuration_digest": configuration_digest,
+            "datasets": {name: digest for name, (_, digest) in datasets.items()},
+        }
+    )
+    stage_manifest_path, stage_manifest = _read_aggregate_stage_manifest(resource_dir=root)
+    package_version = str(stage_manifest.get("package_version") or "unknown").strip()
+    return (
+        run_digest,
+        package_version or "unknown",
+        (manifest_path, stage_manifest_path),
+    )
 
 
 def _read_global_alignments(
@@ -608,14 +916,24 @@ def _boolean(*, value: Any, field: str) -> bool:
     raise InputValidationError(f"{field} must contain an explicit Boolean: {value!r}")
 
 
-def _safe_path(*, value: Any, index: int) -> Path:
-    """Return one safe non-empty manifest-relative path."""
+def _safe_path(*, value: Any, index: int, record_name: str = "Structural output record") -> Path:
+    """Return one safe non-empty manifest-relative path.
+
+    Args:
+        value: Raw manifest path.
+        index: Zero-based record index.
+        record_name: Human-readable record name used in diagnostics.
+
+    Returns:
+        Validated relative path.
+
+    Raises:
+        InputValidationError: If the path is empty, absolute or traverses parents.
+    """
 
     if not isinstance(value, str) or not value:
-        raise InputValidationError(f"Structural output record {index} lacks a path.")
+        raise InputValidationError(f"{record_name} {index} lacks a path.")
     path = Path(value)
     if path.is_absolute() or ".." in path.parts or path == Path("."):
-        raise InputValidationError(
-            f"Structural output record {index} has an unsafe path: {value!r}"
-        )
+        raise InputValidationError(f"{record_name} {index} has an unsafe path: {value!r}")
     return path
