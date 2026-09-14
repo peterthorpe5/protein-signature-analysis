@@ -18,6 +18,7 @@ from .pipeline import run_campaign, validate_campaign
 from .profiles import load_profile
 from .publication import verify_completed_result
 from .starter import initialise_campaign
+from .workflow_markers import publish_validation_marker, publish_verification_marker
 
 LOGGER = logging.getLogger(__name__)
 
@@ -105,6 +106,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     verify_parser.add_argument("--resource", required=True, type=Path)
     verify_parser.add_argument("--log-level", default="INFO")
+    workflow_validate_parser = subparsers.add_parser(
+        "workflow-validate",
+        help="Validate a campaign and publish a Snakemake boundary marker.",
+    )
+    workflow_validate_parser.add_argument("--config", required=True, type=Path)
+    workflow_validate_parser.add_argument("--marker", required=True, type=Path)
+    workflow_validate_parser.add_argument("--log-level", default="INFO")
+    workflow_verify_parser = subparsers.add_parser(
+        "workflow-verify",
+        help="Verify result and input checksums and publish a Snakemake boundary marker.",
+    )
+    workflow_verify_parser.add_argument("--resource", required=True, type=Path)
+    workflow_verify_parser.add_argument("--marker", required=True, type=Path)
+    workflow_verify_parser.add_argument("--log-level", default="INFO")
     profile_parser = subparsers.add_parser(
         "describe-profile", help="Print a built-in or custom profile as JSON."
     )
@@ -190,6 +205,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
+        elif arguments.command == "workflow-validate":
+            destination = publish_validation_marker(
+                config_path=arguments.config,
+                marker_path=arguments.marker,
+            )
+            print(json.dumps({"status": "VALID", "marker": str(destination)}, sort_keys=True))
+        elif arguments.command == "workflow-verify":
+            destination = publish_verification_marker(
+                result_dir=arguments.resource,
+                marker_path=arguments.marker,
+            )
+            print(json.dumps({"status": "VALID", "marker": str(destination)}, sort_keys=True))
         else:
             profile = load_profile(source=arguments.profile)
             print(

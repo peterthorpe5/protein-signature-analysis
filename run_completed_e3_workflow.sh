@@ -11,6 +11,18 @@ Usage:
     --work-dir /persistent/path/signature_campaign \
     [--minimum-mean-plddt 50]
 
+  # Submit the memory-intensive prepare phase from a Slurm login node.
+  ./run_completed_e3_workflow.sh \
+    --phase prepare \
+    --run-root /absolute/path/completed_e3_end_to_end_run \
+    --work-dir /persistent/path/signature_campaign \
+    --submit-slurm \
+    --slurm-account ACCOUNT \
+    --slurm-partition PARTITION \
+    --slurm-memory 64G \
+    --slurm-time 04:00:00 \
+    --threads 4
+
   # Phase 2: after copying and curating the generated label template.
   ./run_completed_e3_workflow.sh \
     --phase initialise \
@@ -38,6 +50,16 @@ are all UNMAPPED. Phase initialise therefore requires a separate reviewed label
 authority, imports Stage 09b US-align/TM-align and pocket evidence, reuses Stage
 09 AlphaFold coordinate assets, enables campaign-wide Foldseek and consumes the
 completed raw OrthoFinder 2.5.5/3 results from Stage 04.
+
+Slurm options:
+  --submit-slurm          Submit prepare or run instead of executing locally.
+  --slurm-account NAME   Account; omitted by default so the site default applies.
+  --slurm-partition NAME Partition; omitted by default so the site default applies.
+  --slurm-memory SIZE    Memory request (default: 64G).
+  --slurm-time TIME      Wall time as HH:MM:SS or D-HH:MM:SS (default: 04:00:00).
+  --slurm-job-name NAME  Job name (default: protein_signature_PHASE).
+  --slurm-log-dir PATH   Absolute log directory (default: WORK_DIR/slurm_logs).
+  --slurm-dry-run        Print the exact validated sbatch command without submitting.
 EOF
 }
 
@@ -58,6 +80,15 @@ CONDA_ENVIRONMENT="protein_signature_analysis"
 THREADS="1"
 LOG_LEVEL="INFO"
 RESUME="false"
+SUBMIT_SLURM="false"
+SLURM_ACCOUNT=""
+SLURM_PARTITION=""
+SLURM_MEMORY="64G"
+SLURM_TIME="04:00:00"
+SLURM_JOB_NAME=""
+SLURM_LOG_DIR=""
+SLURM_DRY_RUN="false"
+SLURM_OPTION_SEEN="false"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -110,6 +141,51 @@ while [[ $# -gt 0 ]]; do
             RESUME="true"
             shift
             ;;
+        --submit-slurm)
+            SUBMIT_SLURM="true"
+            shift
+            ;;
+        --slurm-account)
+            require_option_value "$@"
+            SLURM_ACCOUNT="${2:-}"
+            SLURM_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --slurm-partition)
+            require_option_value "$@"
+            SLURM_PARTITION="${2:-}"
+            SLURM_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --slurm-memory)
+            require_option_value "$@"
+            SLURM_MEMORY="${2:-}"
+            SLURM_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --slurm-time|--slurm-walltime)
+            require_option_value "$@"
+            SLURM_TIME="${2:-}"
+            SLURM_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --slurm-job-name)
+            require_option_value "$@"
+            SLURM_JOB_NAME="${2:-}"
+            SLURM_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --slurm-log-dir)
+            require_option_value "$@"
+            SLURM_LOG_DIR="${2:-}"
+            SLURM_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --slurm-dry-run)
+            SLURM_DRY_RUN="true"
+            SLURM_OPTION_SEEN="true"
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
@@ -150,6 +226,10 @@ if [[ ! "${CONDA_ENVIRONMENT}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     echo "--conda-environment must be a valid Conda environment name." >&2
     exit 2
 fi
+if [[ "${SLURM_OPTION_SEEN}" == "true" && "${SUBMIT_SLURM}" != "true" ]]; then
+    echo "Slurm options require --submit-slurm." >&2
+    exit 2
+fi
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "${WORK_DIR}" == "/" || "${WORK_DIR}" == "${HOME:-}" || \
@@ -160,13 +240,157 @@ fi
 readonly PREPARED_DIR="${WORK_DIR}/prepared_inputs"
 readonly CONFIG_PATH="${WORK_DIR}/campaign.yaml"
 readonly RESULT_DIR="${WORK_DIR}/result"
+readonly SLURM_WORKER="${SCRIPT_DIR}/slurm/run_completed_e3_workflow.sbatch"
+
+validate_slurm_time() {
+    local value="$1"
+    if [[ "${value}" =~ ^([0-9]+)-([0-9]{2}):([0-9]{2}):([0-9]{2})$ ]]; then
+        (( 10#${BASH_REMATCH[2]} <= 23 )) || return 1
+        (( 10#${BASH_REMATCH[3]} <= 59 )) || return 1
+        (( 10#${BASH_REMATCH[4]} <= 59 )) || return 1
+        return 0
+    fi
+    if [[ "${value}" =~ ^([0-9]+):([0-9]{2}):([0-9]{2})$ ]]; then
+        (( 10#${BASH_REMATCH[2]} <= 59 )) || return 1
+        (( 10#${BASH_REMATCH[3]} <= 59 )) || return 1
+        return 0
+    fi
+    return 1
+}
+
+submit_slurm_phase() {
+    local job_name="${SLURM_JOB_NAME:-protein_signature_${PHASE}}"
+    local log_dir="${SLURM_LOG_DIR:-${WORK_DIR}/slurm_logs}"
+    local submission_result=""
+    local job_id=""
+    local -a worker_arguments=(
+        --phase "${PHASE}"
+        --work-dir "${WORK_DIR}"
+        --conda-environment "${CONDA_ENVIRONMENT}"
+        --threads "${THREADS}"
+        --log-level "${LOG_LEVEL}"
+    )
+    local -a sbatch_arguments=(
+        --parsable
+        "--job-name=${job_name}"
+        "--mem=${SLURM_MEMORY}"
+        "--time=${SLURM_TIME}"
+        "--cpus-per-task=${THREADS}"
+        "--export=ALL,PROTEIN_SIGNATURE_REQUESTED_CPUS=${THREADS}"
+        "--chdir=${SCRIPT_DIR}"
+        "--output=${log_dir}/%x_%j.out"
+        "--error=${log_dir}/%x_%j.err"
+    )
+
+    if [[ "${PHASE}" == "prepare" ]]; then
+        worker_arguments+=(
+            --run-root "${RUN_ROOT}"
+            --minimum-mean-plddt "${MINIMUM_MEAN_PLDDT}"
+        )
+    elif [[ "${RESUME}" == "true" ]]; then
+        worker_arguments+=(--resume)
+    fi
+    if [[ -n "${SLURM_ACCOUNT}" ]]; then
+        sbatch_arguments+=("--account=${SLURM_ACCOUNT}")
+    fi
+    if [[ -n "${SLURM_PARTITION}" ]]; then
+        sbatch_arguments+=("--partition=${SLURM_PARTITION}")
+    fi
+
+    if [[ "${SLURM_DRY_RUN}" == "true" ]]; then
+        printf 'Validated Slurm command; nothing was submitted:\n  env -u SLURM_CPUS_PER_TASK sbatch'
+        printf ' %q' "${sbatch_arguments[@]}" "${SLURM_WORKER}" \
+            "${SCRIPT_DIR}/run_completed_e3_workflow.sh" "${worker_arguments[@]}"
+        printf '\n'
+        return 0
+    fi
+
+    command -v sbatch >/dev/null 2>&1 || {
+        echo "sbatch is unavailable; submit from a Slurm login node." >&2
+        exit 2
+    }
+    if [[ ! -x "${SLURM_WORKER}" ]]; then
+        echo "Slurm worker is missing or not executable: ${SLURM_WORKER}" >&2
+        exit 2
+    fi
+    mkdir -p -- "${log_dir}"
+    submission_result="$(
+        env -u SLURM_CPUS_PER_TASK sbatch \
+            "${sbatch_arguments[@]}" \
+            "${SLURM_WORKER}" \
+            "${SCRIPT_DIR}/run_completed_e3_workflow.sh" \
+            "${worker_arguments[@]}"
+    )"
+    job_id="${submission_result%%;*}"
+    if [[ ! "${job_id}" =~ ^[0-9]+$ ]]; then
+        echo "sbatch returned an unexpected job identifier: ${submission_result}" >&2
+        exit 2
+    fi
+    echo "Submitted Slurm job ${job_id} for phase ${PHASE}."
+    echo "Slurm stdout: ${log_dir}/${job_name}_${job_id}.out"
+    echo "Slurm stderr: ${log_dir}/${job_name}_${job_id}.err"
+    echo "Monitor: squeue --job ${job_id}"
+}
+
+if [[ "${SUBMIT_SLURM}" == "true" ]]; then
+    if [[ "${PHASE}" != "prepare" && "${PHASE}" != "run" ]]; then
+        echo "--submit-slurm currently supports prepare and run phases only." >&2
+        exit 2
+    fi
+    if [[ "${WORK_DIR}" != /* ]]; then
+        echo "Slurm submission requires an absolute --work-dir." >&2
+        exit 2
+    fi
+    if [[ "${PHASE}" == "prepare" && ("${RUN_ROOT}" != /* || ! -d "${RUN_ROOT}") ]]; then
+        echo "Slurm prepare requires an existing absolute --run-root: ${RUN_ROOT}" >&2
+        exit 2
+    fi
+    if [[ "${PHASE}" == "run" && ! -s "${CONFIG_PATH}" ]]; then
+        echo "Campaign configuration is missing; complete initialise first: ${CONFIG_PATH}" >&2
+        exit 2
+    fi
+    if [[ ! "${SLURM_MEMORY}" =~ ^[1-9][0-9]*[KMGT]?$ ]]; then
+        echo "--slurm-memory must be a positive Slurm size such as 64G." >&2
+        exit 2
+    fi
+    if ! validate_slurm_time "${SLURM_TIME}"; then
+        echo "--slurm-time must use valid HH:MM:SS or D-HH:MM:SS syntax." >&2
+        exit 2
+    fi
+    if [[ -n "${SLURM_ACCOUNT}" && \
+            ! "${SLURM_ACCOUNT}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        echo "--slurm-account contains unsafe characters." >&2
+        exit 2
+    fi
+    if [[ -n "${SLURM_PARTITION}" && \
+            ! "${SLURM_PARTITION}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+        echo "--slurm-partition contains unsafe characters." >&2
+        exit 2
+    fi
+    if [[ -n "${SLURM_JOB_NAME}" && \
+            ! "${SLURM_JOB_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+        echo "--slurm-job-name must be a safe name of at most 64 characters." >&2
+        exit 2
+    fi
+    if [[ -n "${SLURM_LOG_DIR}" && "${SLURM_LOG_DIR}" != /* ]]; then
+        echo "--slurm-log-dir must be absolute." >&2
+        exit 2
+    fi
+    submit_slurm_phase
+    exit 0
+fi
 
 ensure_environment() {
     if ! command -v conda >/dev/null 2>&1; then
         echo "conda is required but was not found on PATH." >&2
         exit 2
     fi
-    if ! conda run --name "${CONDA_ENVIRONMENT}" python --version >/dev/null 2>&1; then
+    if conda run --name "${CONDA_ENVIRONMENT}" python --version >/dev/null 2>&1; then
+        conda env update \
+            --file "${SCRIPT_DIR}/environment.yml" \
+            --name "${CONDA_ENVIRONMENT}" \
+            --prune
+    else
         conda env create \
             --file "${SCRIPT_DIR}/environment.yml" \
             --name "${CONDA_ENVIRONMENT}"

@@ -13,6 +13,7 @@ import pytest
 import protein_signatures.e3_workflow_bridge as bridge_module
 from protein_signatures.checksums import sha256_file
 from protein_signatures.e3_workflow_bridge import (
+    _iter_parquet_records,
     _prepare_domains,
     _prepare_sequences,
     _prepare_structures,
@@ -22,6 +23,7 @@ from protein_signatures.e3_workflow_bridge import (
     _resolve_first_file,
     _serialise_review_values,
     _verify_manifested_files,
+    _write_prepared_fasta,
     prepare_e3_workflow_inputs,
     resolve_e3_workflow_paths,
 )
@@ -490,8 +492,23 @@ def test_parquet_and_sequence_helpers_reject_malformed_authorities(tmp_path: Pat
         schema=pa.schema([("id", pa.string())]),
     )
     assert _read_parquet_records(path=table, required=("id",))[0]["id"] == "x"
+    projected = tuple(
+        _iter_parquet_records(
+            path=table,
+            required=("id",),
+            optional=("absent_optional",),
+            batch_size=1,
+        )
+    )
+    assert projected == ({"id": "x"},)
     with pytest.raises(InputValidationError, match="non-empty and unique"):
         _read_parquet_records(path=table, required=("id", "id"))
+    with pytest.raises(InputValidationError, match="Optional Parquet fields"):
+        _read_parquet_records(path=table, required=("id",), optional=("id",))
+    with pytest.raises(InputValidationError, match="batch_size"):
+        _read_parquet_records(path=table, required=("id",), batch_size=0)
+    with pytest.raises(InputValidationError, match="batch_size"):
+        _read_parquet_records(path=table, required=("id",), batch_size=True)
     with pytest.raises(InputValidationError, match="missing required columns"):
         _read_parquet_records(path=table, required=("other",))
     with pytest.raises(InputValidationError, match="Missing or empty"):
@@ -555,6 +572,41 @@ def test_parquet_and_sequence_helpers_reject_malformed_authorities(tmp_path: Pat
                 },
             )
         )
+
+
+def test_prepared_fasta_writer_streams_sorted_validated_records(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prepared FASTA publication should be atomic, sorted and independently readable."""
+
+    destination = tmp_path / "nested" / "proteins.faa"
+    count = _write_prepared_fasta(
+        path=destination,
+        sequences={"Q00002": "MAAA", "P00001": "MACD"},
+    )
+    assert count == 2
+    records = read_protein_fasta(path=destination)
+    assert [(record.protein_id, record.sequence) for record in records] == [
+        ("P00001", "MACD"),
+        ("Q00002", "MAAA"),
+    ]
+    with pytest.raises(PublicationError, match="at least one sequence"):
+        _write_prepared_fasta(path=tmp_path / "empty.faa", sequences={})
+    invalid = tmp_path / "invalid.faa"
+    with pytest.raises(InputValidationError, match="requires a sequence"):
+        _write_prepared_fasta(path=invalid, sequences={"P00001": ""})
+    assert not invalid.exists()
+
+    failed = tmp_path / "failed.faa"
+    monkeypatch.setattr(
+        bridge_module.os,
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("replace failure")),
+    )
+    with pytest.raises(PublicationError, match="replace failure"):
+        _write_prepared_fasta(path=failed, sequences={"P00001": "MACD"})
+    assert not failed.exists()
 
 
 def test_domain_helper_preserves_no_hit_unknown_and_rejects_bad_payloads() -> None:
@@ -911,7 +963,7 @@ def test_publication_failures_are_cleaned_and_contextualised(
 
     root = _completed_workflow(tmp_path / "publication")
     destination = tmp_path / "failed_publication"
-    monkeypatch.setattr(bridge_module, "read_protein_fasta", lambda **_kwargs: ())
+    monkeypatch.setattr(bridge_module, "iter_protein_fasta", lambda **_kwargs: iter(()))
     with pytest.raises(PublicationError, match="record count changed"):
         prepare_e3_workflow_inputs(run_root=root, output_dir=destination)
     assert not destination.exists()

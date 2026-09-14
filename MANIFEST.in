@@ -11,12 +11,16 @@ include run_protein_signature_app.sh
 include run_completed_e3_workflow.sh
 include run_tests.sh
 include start_from_inputs.sh
+include submit_protein_signature_workflow_slurm.sh
 
 recursive-include .github *.yml
 recursive-include configs *.json *.yaml
 recursive-include docs *.md *.tsv
 recursive-include examples *.faa *.tsv *.yaml
+recursive-include profiles *.yaml
+recursive-include slurm *.sbatch
 recursive-include tests *.py
+recursive-include workflow Snakefile
 
 # Analysis caches can be created beneath a shipped example during local QA.  Git ignore
 # rules do not apply to setuptools' file discovery, so prune the directory explicitly.

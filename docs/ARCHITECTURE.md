@@ -24,6 +24,7 @@ Pfam scanning or the predecessor E3 ligandability pipeline.
 | `explainable_ml` | Group-aware elastic-net modelling, permutation importance and native SHAP graphics |
 | `reporting`, `exports` | Numbered TSV/XLSX reports and deterministic PNG/SVG/PDF figures |
 | `schemas`, `publication` | Typed tables, physical DuckDB, portable assets and atomic manifests |
+| `workflow/Snakefile`, `workflow_markers` | Snakemake validation/transaction/verification boundaries for local or Slurm execution |
 | `protein_signature_app` | Verified read-only exploration; no scientific recomputation |
 
 ## Execution order
@@ -45,6 +46,11 @@ flowchart TD
 No output directory becomes visible as a completed result until every canonical table,
 numbered TSV/XLSX report, PNG/SVG/PDF figure, database and asset has been written to staging
 and checksummed. The final operation is a same-filesystem rename.
+
+Snakemake deliberately treats the scientific engine as one transactional rule rather than
+reimplementing its tightly coupled in-memory stages. Separate validation and verification
+rules provide scheduler boundaries without exposing partial scientific state. The completed
+E3 bridge is an optional input adapter outside this generic DAG.
 
 ## Scientific authorities
 

@@ -54,3 +54,13 @@
 - Preserve Stage 05 composite DeepClust cluster identifiers as bounded, TSV-safe provenance
   and serialise their review-cell collections as deterministic JSON arrays; canonical HOG,
   orthogroup and protein identifiers retain their stricter validation contracts.
+- Stream only projected predecessor Parquet columns in bounded DuckDB batches and publish the
+  prepared FASTA incrementally, avoiding the former whole-table and whole-FASTA duplicate
+  allocations during completed-E3 preparation.
+- Add validated direct Slurm submission for completed-E3 prepare/run phases, non-recursive
+  workers, dry-run output and persistent job-specific stdout/stderr paths.
+- Add a generic Snakemake 9 workflow with explicit validation, atomic analysis and independent
+  result/input verification rules; provide local and Slurm-executor profiles plus a durable,
+  lock-protected Slurm controller patterned after the E3 production workflow.
+- Add `gawk`, the strict `nodefaults` channel, Snakemake and its Slurm executor plugin to the
+  Conda environment; retain Kaleido as a pip-installed dependency for channel compatibility.

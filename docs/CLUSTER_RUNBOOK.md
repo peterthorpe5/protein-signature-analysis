@@ -127,48 +127,31 @@ than filenames being guessed.
 
 ## Scheduler pattern
 
-Heavy temporary work belongs under scheduler-provided `TMPDIR`; persistent outputs belong
-under an explicit campaign directory. Never hard-code `/tmp` and never use `rsync --delete`.
-This pattern assumes `campaign.yaml` was first created with `start_from_inputs.sh
---initialise-only`, scientifically reviewed, validated and frozen with its referenced inputs.
+Persistent outputs, caches and workflow state belong under an explicit campaign directory.
+Never hard-code `/tmp` and never use `rsync --delete`. This pattern assumes `campaign.yaml`
+was first created with `start_from_inputs.sh --initialise-only`, scientifically reviewed and
+frozen with its referenced inputs.
 
 ```bash
-#!/usr/bin/env bash
-set -Eeuo pipefail
-
-: "${TMPDIR:?The scheduler must provide TMPDIR}"
 PERSISTENT_RUN=/persistent/path/protein_signatures/e3_1000_2026_09
-JOB_TOKEN="${SLURM_JOB_ID:-manual}"
-JOB_WORK_DIR="${TMPDIR}/protein_signatures_${JOB_TOKEN}"
-FINAL_RESULT="${PERSISTENT_RUN}/result"
-TRANSFER_RESULT="${PERSISTENT_RUN}/.result.transfer_${JOB_TOKEN}"
 
-mkdir -p "${JOB_WORK_DIR}/inputs" "${PERSISTENT_RUN}"
-test ! -e "${FINAL_RESULT}"
-test ! -e "${TRANSFER_RESULT}"
-rsync -a /persistent/path/frozen_inputs/ "${JOB_WORK_DIR}/inputs/"
-
-./run_protein_signature_analysis.sh \
-  --config "${JOB_WORK_DIR}/inputs/campaign.yaml" \
-  --output-dir "${JOB_WORK_DIR}/result" \
-  --threads "${SLURM_CPUS_PER_TASK:-1}"
-
-conda run --name protein_signature_analysis \
-  protein-signatures verify --resource "${JOB_WORK_DIR}/result"
-
-mkdir "${TRANSFER_RESULT}"
-rsync -a "${JOB_WORK_DIR}/result/" "${TRANSFER_RESULT}/"
-conda run --name protein_signature_analysis \
-  protein-signatures verify --resource "${TRANSFER_RESULT}"
-mv "${TRANSFER_RESULT}" "${FINAL_RESULT}"
-conda run --name protein_signature_analysis \
-  protein-signatures verify --resource "${FINAL_RESULT}"
+./submit_protein_signature_workflow_slurm.sh \
+  --config "${PERSISTENT_RUN}/campaign.yaml" \
+  --work-dir "${PERSISTENT_RUN}" \
+  --account barton \
+  --partition general \
+  --threads 24 \
+  --memory-mb 128000 \
+  --runtime-minutes 2880 \
+  --max-jobs 10 \
+  --dry-run
 ```
 
-The nonexistent-destination checks prevent stale undeclared files from surviving an earlier
-copy. The transfer is verified in a sibling directory and renamed on the persistent
-filesystem only after it is complete. The final `verify` command must succeed before the
-scheduler job is treated as complete.
+Remove `--dry-run` after inspecting the exact command. The small controller is submitted by
+`sbatch`, holds an exclusive lock and uses Snakemake's Slurm executor. The scientific engine
+still stages and atomically renames the complete result on the persistent filesystem. The
+final workflow rule verifies every output and original input checksum. See
+[Snakemake and Slurm](SNAKEMAKE_SLURM.md) for logs, recovery and single-allocation mode.
 
 ## Pre-flight checklist
 
@@ -178,7 +161,8 @@ scheduler job is treated as complete.
 4. Confirm upstream structural and OrthoFinder manifests are complete.
 5. Select structural TM-score and bilateral-coverage thresholds before viewing enrichment.
 6. Select target/background comparisons before viewing structural clusters.
-7. Run `protein-signatures validate` on the cluster login node.
+7. Use the controller `--dry-run`; perform full validation in a scheduled allocation for a
+   large input universe.
 8. Submit to a new output directory; never overwrite a partial or published result.
 
 ## What to inspect after completion

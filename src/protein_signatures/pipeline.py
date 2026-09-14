@@ -15,7 +15,7 @@ from .assessment import compose_feature_assessment_universes
 from .associations import analyse_feature_associations, summarise_signatures
 from .checksums import sha256_json
 from .config import config_to_record, load_config
-from .errors import ExternalToolError, InputValidationError
+from .errors import ExternalToolError, InputValidationError, PublicationError
 from .explainable_ml import run_explainable_models
 from .fasta import read_protein_fasta
 from .feature_provenance import (
@@ -100,7 +100,12 @@ def run_campaign(
     validate_comparison_labels(comparisons=config.comparisons, profile=profile)
     run_identity = _run_identity(config=config, profile=profile)
     destination = Path(output_dir).expanduser().resolve()
-    if resume and destination.exists():
+    if destination.exists():
+        if not resume:
+            raise PublicationError(
+                f"Output already exists and will not be overwritten: {destination}. "
+                "Use --resume only for a completed checksum-valid result."
+            )
         verify_completed_result(result_dir=destination)
         previous_metadata = read_json(path=destination / "run_metadata.json")
         if (

@@ -33,6 +33,10 @@ jobs:
           bash -n run_protein_signature_analysis.sh
           bash -n run_protein_signature_app.sh
           bash -n start_from_inputs.sh
+          bash -n run_completed_e3_workflow.sh
+          bash -n submit_protein_signature_workflow_slurm.sh
+          bash -n slurm/protein_signature_workflow_controller.sbatch
+          bash -n slurm/run_completed_e3_workflow.sbatch
       - name: Reject tracked secrets and transient artefacts
         run: |
           python - <<'PY'
@@ -90,10 +94,17 @@ jobs:
               "docs/TEST_TRACEABILITY.tsv",
               "environment.yml",
               "examples/minimal_e3/campaign.yaml",
+              "profiles/local/config.v8+.yaml",
+              "profiles/slurm/config.v8+.yaml",
+              "workflow/Snakefile",
               "run_protein_signature_analysis.sh",
               "run_protein_signature_app.sh",
+              "run_completed_e3_workflow.sh",
               "run_tests.sh",
               "start_from_inputs.sh",
+              "submit_protein_signature_workflow_slurm.sh",
+              "slurm/protein_signature_workflow_controller.sbatch",
+              "slurm/run_completed_e3_workflow.sbatch",
               "tests/conftest.py",
           }
           with tarfile.open(source_distribution, mode="r:gz") as archive:
@@ -166,9 +177,15 @@ jobs:
           /bin/bash -n run_protein_signature_analysis.sh
           /bin/bash -n run_protein_signature_app.sh
           /bin/bash -n start_from_inputs.sh
+          /bin/bash -n run_completed_e3_workflow.sh
+          /bin/bash -n submit_protein_signature_workflow_slurm.sh
+          /bin/bash -n slurm/protein_signature_workflow_controller.sbatch
+          /bin/bash -n slurm/run_completed_e3_workflow.sbatch
           /bin/bash start_from_inputs.sh --help >/dev/null
           /bin/bash run_protein_signature_analysis.sh --help >/dev/null
           /bin/bash run_protein_signature_app.sh --help >/dev/null
+          /bin/bash run_completed_e3_workflow.sh --help >/dev/null
+          /bin/bash submit_protein_signature_workflow_slurm.sh --help >/dev/null
       - name: Smoke-test installed commands and bundled E3 profile
         run: |
           protein-signatures --version

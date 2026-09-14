@@ -75,7 +75,25 @@ SIGNATURE_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/ana
   --run-root "${RUN_ROOT}" \
   --work-dir "${SIGNATURE_WORK}" \
   --minimum-mean-plddt 50 \
-  --log-level INFO
+  --log-level INFO \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition general \
+  --slurm-memory 64G \
+  --slurm-time 04:00:00 \
+  --threads 4 \
+  --slurm-dry-run
+```
+
+Repeat without `--slurm-dry-run` after inspecting the exact `sbatch` command. This phase is
+not suitable for the earlier 8 GiB interactive allocation. The reader now projects only
+needed columns and uses bounded DuckDB batches, while the deduplicated sequence/context index
+still requires substantial memory. Start with 64 GiB; request 128 GiB if `sacct` records an
+out-of-memory exit. Follow the returned job identifier and retained logs:
+
+```bash
+squeue --job JOB_ID
+tail -f "${SIGNATURE_WORK}/slurm_logs/protein_signature_prepare_JOB_ID.out"
 ```
 
 The new `prepared_inputs/` directory contains:
@@ -142,17 +160,43 @@ within-predecessor-group global alignment and pocket evidence. Foldseek searches
 eligible prepared model against the entire prepared model collection, which is the route
 that can discover folds shared across different HOGs or E3 classes.
 
-## Phase 3: run in a scheduler allocation
+## Phase 3: run through Snakemake and Slurm
 
-Use the site's normal Slurm resource request. The command itself is scheduler-neutral:
+The completed-E3 adapter is now finished: `campaign.yaml` is a normal generic campaign. A
+single submitted allocation can run the packaged Snakemake validation/analysis/verification
+DAG with its local executor:
 
 ```bash
 ./run_completed_e3_workflow.sh \
   --phase run \
   --work-dir "${SIGNATURE_WORK}" \
-  --threads "${SLURM_CPUS_PER_TASK:-24}" \
-  --log-level INFO
+  --threads 24 \
+  --log-level INFO \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition general \
+  --slurm-memory 128G \
+  --slurm-time 2-00:00:00
 ```
+
+Alternatively, use the generic logout-safe Snakemake controller and Slurm executor:
+
+```bash
+./submit_protein_signature_workflow_slurm.sh \
+  --config "${SIGNATURE_WORK}/campaign.yaml" \
+  --work-dir "${SIGNATURE_WORK}" \
+  --account barton \
+  --partition general \
+  --threads 24 \
+  --memory-mb 128000 \
+  --runtime-minutes 2880 \
+  --max-jobs 10 \
+  --dry-run
+```
+
+Remove `--dry-run` after review. The first command uses one Slurm allocation for the complete
+transaction. The second submits a small durable controller and lets Snakemake request each
+rule allocation. Do not launch both for the same campaign.
 
 Run into a new result directory. A pre-existing partial directory is not overwritten. The
 `--resume` option only verifies and reuses a complete immutable result with the same run
@@ -161,6 +205,7 @@ identity and unchanged input authorities; it does not continue a partial result.
 Foldseek can be the dominant work unit. Before submission, record the prepared structure
 count from `PREPARED.json`, confirm storage capacity for its cache and choose CPU, memory and
 wall time from the site's top-200/top-1,000 benchmark experience.
+The full execution and recovery contract is in [Snakemake and Slurm](SNAKEMAKE_SLURM.md).
 
 ## Phase 4: verify and inspect
 

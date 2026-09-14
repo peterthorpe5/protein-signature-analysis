@@ -81,12 +81,19 @@ conda activate protein_signature_analysis
 python -m pip install --no-deps --editable '.[app,dev]'
 
 protein-signatures validate --config examples/minimal_e3/campaign.yaml
-protein-signatures run-all \
+./run_protein_signature_analysis.sh \
   --config examples/minimal_e3/campaign.yaml \
-  --output-dir example_result
+  --output-dir "${PWD}/example_result" \
+  --workflow-state-dir "${PWD}/example_workflow_state" \
+  --profile local \
+  --threads 2
 
 protein-signature-app --resource example_result
 ```
+
+`environment.yml` uses only `conda-forge`, `bioconda` and the terminal `nodefaults` channel.
+It installs `gawk` for Foldseek compatibility, Snakemake 9 and its Slurm executor through
+Conda; Kaleido remains in the pip subsection because it is not taken from the Conda channels.
 
 The application opens at `http://localhost:8501` by default. Plotly PDF downloads use
 Kaleido and require Chrome/Chromium. If neither is already installed, run
@@ -123,22 +130,50 @@ Review `/data/signature_campaigns/e3_1000/campaign.yaml` before analysis. In par
 pre-specify the comparisons, FDR, discovery/validation fraction, k-mer bounds, structural
 TM-score and bilateral-coverage thresholds, and explainable-model settings. Use
 [configs/campaign.example.yaml](configs/campaign.example.yaml) as the annotated reference.
-Then validate and run that exact reviewed YAML:
+Then run that exact reviewed YAML through the packaged Snakemake workflow. For a local
+workstation or an already allocated single Slurm job:
 
 ```bash
-./start_from_inputs.sh \
-  --work-dir /data/signature_campaigns/e3_1000 \
-  --resume \
-  --threads 24
+./run_protein_signature_analysis.sh \
+  --config /data/signature_campaigns/e3_1000/campaign.yaml \
+  --output-dir /data/signature_campaigns/e3_1000/result \
+  --workflow-state-dir /data/signature_campaigns/e3_1000/workflow_state \
+  --profile local \
+  --threads 24 \
+  --memory-mb 64000 \
+  --runtime-minutes 1440
 ```
 
-When `campaign.yaml` already exists, it is the sole configuration authority. `--resume` is
-required, and config-defining options such as `--profile`, `--domains` or
-`--enable-foldseek` are rejected rather than silently ignored. If the result does not yet
-exist, this invocation starts it; if a result exists, it is reused only when its completion,
-checksums, run identity and original input authorities verify. A partial or changed result is
-never continued or overwritten. Omit `--initialise-only` on the first invocation only when
-the generated defaults have already been reviewed and are intentionally accepted.
+For logout-safe cluster execution from a login node, submit the durable Snakemake controller:
+
+```bash
+./submit_protein_signature_workflow_slurm.sh \
+  --config /data/signature_campaigns/e3_1000/campaign.yaml \
+  --work-dir /data/signature_campaigns/e3_1000 \
+  --account barton \
+  --partition general \
+  --threads 24 \
+  --memory-mb 64000 \
+  --runtime-minutes 1440 \
+  --max-jobs 10 \
+  --dry-run
+
+# Remove --dry-run after inspecting the exact sbatch command.
+```
+
+Snakemake has explicit validation, atomic analysis and independent verification rules. The
+analysis itself remains a single transaction so a failed job cannot expose a partly valid
+result. `workflow_state/` retains controller, rule and scheduler state; the immutable
+scientific result remains `result/`. See [Snakemake and Slurm](docs/SNAKEMAKE_SLURM.md).
+
+When `campaign.yaml` already exists, `start_from_inputs.sh` treats it as the sole
+configuration authority and requires `--resume`; config-defining options such as `--profile`,
+`--domains` or `--enable-foldseek` are rejected rather than silently ignored. The dedicated
+Snakemake launcher consumes that YAML directly. If a result exists, pass `--resume`; it is
+reused only when completion, checksums, run identity and original input authorities verify.
+A partial or changed result is never continued or overwritten. Omit `--initialise-only` on
+the first start-from-inputs invocation only when the generated defaults have already been
+reviewed and are intentionally accepted.
 
 For a completed OrthoFinder result directory, replace `--orthofinder-resource` in the
 initialisation command with `--orthofinder-results`. The two options are intentionally
@@ -171,8 +206,21 @@ SIGNATURE_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/ana
   --phase prepare \
   --run-root "${RUN_ROOT}" \
   --work-dir "${SIGNATURE_WORK}" \
-  --minimum-mean-plddt 50
+  --minimum-mean-plddt 50 \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition general \
+  --slurm-memory 64G \
+  --slurm-time 04:00:00 \
+  --threads 4 \
+  --slurm-dry-run
 ```
+
+Inspect the printed `sbatch` command, then repeat without `--slurm-dry-run`. Preparation now
+projects only the required Parquet columns and consumes rows in bounded batches, but it must
+still retain the deduplicated sequence/context index; 8 GiB is not a supported allocation for
+the all-1972 dataset. Start with 64 GiB and increase to 128 GiB if site accounting reports an
+out-of-memory termination. Scheduler logs are written to `${SIGNATURE_WORK}/slurm_logs/`.
 
 This produces exact FASTA, Pfam assessment, structure and curation-review authorities under
 `prepared_inputs/`. All generated label assignments are deliberately `UNMAPPED`; upstream
@@ -209,7 +257,12 @@ before the compute run:
 ./run_completed_e3_workflow.sh \
   --phase run \
   --work-dir "${SIGNATURE_WORK}" \
-  --threads "${SLURM_CPUS_PER_TASK:-24}"
+  --threads 24 \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition general \
+  --slurm-memory 128G \
+  --slurm-time 2-00:00:00
 
 ./run_completed_e3_workflow.sh \
   --phase verify \

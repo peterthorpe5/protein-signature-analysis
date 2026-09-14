@@ -18,7 +18,7 @@ import re
 import shutil
 import tempfile
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,8 +28,8 @@ import duckdb
 from .catalogue import _is_uniprot_accession, _output_inventory, _wrap_sequence
 from .checksums import sha256_file
 from .errors import InputValidationError, PublicationError
-from .fasta import read_protein_fasta
-from .io_utils import read_json, write_json_atomic, write_text_atomic, write_tsv_atomic
+from .fasta import iter_protein_fasta
+from .io_utils import read_json, write_json_atomic, write_tsv_atomic
 from .orthofinder import discover_orthofinder_layout
 from .structural_resource import (
     resolve_structural_resource_root,
@@ -228,13 +228,20 @@ def prepare_e3_workflow_inputs(
     if not math.isfinite(confidence_threshold) or not 0.0 <= confidence_threshold <= 100.0:
         raise InputValidationError("minimum_mean_plddt must be a finite number from 0 to 100.")
     paths = resolve_e3_workflow_paths(run_root=run_root)
-    sequence_rows = _read_parquet_records(
+    sequence_rows = _iter_parquet_records(
         path=paths.sequence_table,
         required=(
             "parsed_accession",
             "protein_sequence",
             "sequence_length",
             "sequence_sha256",
+        ),
+        optional=(
+            "cluster_id",
+            "group_id",
+            "orthogroup_id",
+            "species",
+            "is_input_candidate",
         ),
     )
     sequences = _prepare_sequences(rows=sequence_rows)
@@ -246,7 +253,7 @@ def prepare_e3_workflow_inputs(
         f"domain_summary_sha256={sha256_file(path=paths.domain_summary_table)}"
     )
     domains = _prepare_domains(
-        hit_rows=_read_parquet_records(
+        hit_rows=_iter_parquet_records(
             path=paths.domain_hits_table,
             required=(
                 "member_accession",
@@ -257,9 +264,10 @@ def prepare_e3_workflow_inputs(
                 "location_end",
                 "score",
             ),
+            optional=("e3_family", "evidence_role"),
             allow_empty=True,
         ),
-        summary_rows=_read_parquet_records(
+        summary_rows=_iter_parquet_records(
             path=paths.domain_summary_table,
             required=(
                 "member_accession",
@@ -273,16 +281,17 @@ def prepare_e3_workflow_inputs(
         evidence_reference=domain_reference,
     )
     structures = _prepare_structures(
-        rows=_read_parquet_records(
+        rows=_iter_parquet_records(
             path=paths.asset_manifest_table,
             required=("accession", "path", "sha256"),
+            optional=("action", "bytes"),
         ),
-        quality_rows=_read_parquet_records(
+        quality_rows=_iter_parquet_records(
             path=paths.model_quality_table,
             required=("accession", "mean_plddt"),
             allow_empty=True,
         ),
-        sequence_ids=frozenset(sequences.sequences),
+        sequence_ids=sequences.sequences.keys(),
         run_root=paths.run_root,
         asset_manifest_path=paths.asset_manifest_table,
         minimum_mean_plddt=confidence_threshold,
@@ -398,18 +407,25 @@ def _verify_manifested_files(*, stage_root: Path, paths: Sequence[Path]) -> None
             raise InputValidationError(f"Manifested output checksum mismatch: {source}")
 
 
-def _read_parquet_records(
-    *, path: Path, required: Sequence[str], allow_empty: bool = False
-) -> tuple[dict[str, Any], ...]:
-    """Read a Parquet authority after validating its named column contract.
+def _iter_parquet_records(
+    *,
+    path: Path,
+    required: Sequence[str],
+    optional: Sequence[str] = (),
+    allow_empty: bool = False,
+    batch_size: int = 2_048,
+) -> Iterator[dict[str, Any]]:
+    """Yield projected Parquet rows in bounded batches.
 
     Args:
         path: Existing Parquet file.
         required: Required unique columns.
+        optional: Optional unique columns to project when present.
         allow_empty: Whether a zero-row table is valid.
+        batch_size: Maximum rows materialised from DuckDB at once.
 
-    Returns:
-        Ordered raw row dictionaries.
+    Yields:
+        Ordered projected row dictionaries.
 
     Raises:
         InputValidationError: If the file, schema or rows are invalid.
@@ -417,28 +433,108 @@ def _read_parquet_records(
 
     source = Path(path).expanduser().resolve()
     fields = tuple(required)
-    if len(fields) != len(set(fields)) or not fields:
+    optional_fields = tuple(optional)
+    if (
+        not fields
+        or len(fields) != len(set(fields))
+        or any(not isinstance(field, str) or not field for field in fields)
+    ):
         raise InputValidationError("Required Parquet fields must be non-empty and unique.")
+    if (
+        len(optional_fields) != len(set(optional_fields))
+        or any(not isinstance(field, str) or not field for field in optional_fields)
+        or set(fields).intersection(optional_fields)
+    ):
+        raise InputValidationError(
+            "Optional Parquet fields must be unique, non-empty and distinct from required fields."
+        )
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise InputValidationError("Parquet batch_size must be a positive integer.")
     if not source.is_file() or source.stat().st_size == 0:
         raise InputValidationError(f"Missing or empty Parquet authority: {source}")
+    row_count = 0
     try:
         with duckdb.connect(":memory:") as connection:
-            cursor = connection.execute("SELECT * FROM read_parquet(?)", [str(source)])
-            columns = tuple(str(item[0]) for item in cursor.description)
-            missing = sorted(set(fields).difference(columns))
+            connection.execute("SET threads = 1")
+            schema_cursor = connection.execute(
+                "SELECT * FROM read_parquet(?) LIMIT 0",
+                [str(source)],
+            )
+            available_columns = tuple(str(item[0]) for item in schema_cursor.description)
+            missing = sorted(set(fields).difference(available_columns))
             if missing:
                 raise InputValidationError(
                     f"{source.name} is missing required columns: {', '.join(missing)}"
                 )
-            rows = tuple(dict(zip(columns, values, strict=True)) for values in cursor.fetchall())
+            selected_columns = fields + tuple(
+                field for field in optional_fields if field in available_columns
+            )
+            projection = ", ".join(
+                '"' + field.replace('"', '""') + '"' for field in selected_columns
+            )
+            cursor = connection.execute(
+                f"SELECT {projection} FROM read_parquet(?)",
+                [str(source)],
+            )
+            LOGGER.info(
+                "Streaming Parquet authority %s with %d projected columns in batches of %d",
+                source,
+                len(selected_columns),
+                batch_size,
+            )
+            while True:
+                values_batch = cursor.fetchmany(batch_size)
+                if not values_batch:
+                    break
+                for values in values_batch:
+                    row_count += 1
+                    yield dict(zip(selected_columns, values, strict=True))
     except duckdb.Error as error:
         raise InputValidationError(f"Could not read Parquet authority {source}: {error}") from error
-    if not rows and not allow_empty:
+    if row_count == 0 and not allow_empty:
         raise InputValidationError(f"Parquet authority contains no records: {source}")
-    return rows
+    LOGGER.info("Completed Parquet stream %s with %d rows", source, row_count)
 
 
-def _prepare_sequences(*, rows: Sequence[Mapping[str, Any]]) -> SequencePreparation:
+def _read_parquet_records(
+    *,
+    path: Path,
+    required: Sequence[str],
+    optional: Sequence[str] = (),
+    allow_empty: bool = False,
+    batch_size: int = 2_048,
+) -> tuple[dict[str, Any], ...]:
+    """Materialise a compact Parquet authority after strict validation.
+
+    This compatibility helper is intended for small authorities and tests. Large
+    workflow tables must consume :func:`_iter_parquet_records` directly.
+
+    Args:
+        path: Existing Parquet file.
+        required: Required unique columns.
+        optional: Optional unique columns to project when present.
+        allow_empty: Whether a zero-row table is valid.
+        batch_size: Maximum rows materialised from DuckDB at once.
+
+    Returns:
+        Ordered projected row dictionaries.
+
+    Raises:
+        InputValidationError: If the file, schema or rows are invalid.
+    """
+
+    return tuple(
+        _iter_parquet_records(
+            path=path,
+            required=required,
+            optional=optional,
+            allow_empty=allow_empty,
+            batch_size=batch_size,
+        )
+    )
+
+
+def _prepare_sequences(*, rows: Iterable[Mapping[str, Any]]) -> SequencePreparation:
     """Validate and deduplicate accession-bearing upstream sequences.
 
     Args:
@@ -558,8 +654,8 @@ def _serialise_review_values(*, values: Sequence[str] | set[str]) -> str:
 
 def _prepare_domains(
     *,
-    hit_rows: Sequence[Mapping[str, Any]],
-    summary_rows: Sequence[Mapping[str, Any]],
+    hit_rows: Iterable[Mapping[str, Any]],
+    summary_rows: Iterable[Mapping[str, Any]],
     sequences: Mapping[str, str],
     evidence_reference: str,
 ) -> DomainPreparation:
@@ -750,9 +846,9 @@ def _prepare_domains(
 
 def _prepare_structures(
     *,
-    rows: Sequence[Mapping[str, Any]],
-    quality_rows: Sequence[Mapping[str, Any]],
-    sequence_ids: frozenset[str],
+    rows: Iterable[Mapping[str, Any]],
+    quality_rows: Iterable[Mapping[str, Any]],
+    sequence_ids: Collection[str],
     run_root: Path,
     asset_manifest_path: Path,
     minimum_mean_plddt: float,
@@ -960,6 +1056,52 @@ def _resolve_asset_path(*, value: str, run_root: Path, asset_manifest_path: Path
     return matches[0]
 
 
+def _write_prepared_fasta(*, path: Path, sequences: Mapping[str, str]) -> int:
+    """Publish prepared sequences without constructing a second whole-FASTA copy.
+
+    Args:
+        path: Final FASTA path.
+        sequences: Validated protein sequences keyed by exact identifier.
+
+    Returns:
+        Number of written FASTA records.
+
+    Raises:
+        InputValidationError: If a prepared sequence cannot be wrapped.
+        PublicationError: If no sequences exist or publication fails.
+    """
+
+    if not sequences:
+        raise PublicationError("Prepared FASTA requires at least one sequence.")
+    destination = Path(path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    count = 0
+    try:
+        with os.fdopen(descriptor, mode="w", encoding="utf-8", newline="\n") as handle:
+            for protein_id in sorted(sequences):
+                handle.write(f">{protein_id}\n")
+                handle.write(_wrap_sequence(sequence=sequences[protein_id]))
+                count += 1
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, destination)
+    except InputValidationError:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
+    except (OSError, UnicodeError) as error:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise PublicationError(
+            f"Could not publish prepared FASTA {destination}: {error}"
+        ) from error
+    return count
+
+
 def _publish_bundle(
     *,
     destination: Path,
@@ -989,14 +1131,13 @@ def _publish_bundle(
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.staging.", dir=destination.parent))
     try:
-        fasta_text = "".join(
-            f">{protein_id}\n{_wrap_sequence(sequence=sequences.sequences[protein_id])}"
-            for protein_id in sorted(sequences.sequences)
-        )
         fasta_path = staging / "proteins.faa"
-        write_text_atomic(path=fasta_path, text=fasta_text)
-        parsed = read_protein_fasta(path=fasta_path)
-        if len(parsed) != len(sequences.sequences):
+        written_count = _write_prepared_fasta(
+            path=fasta_path,
+            sequences=sequences.sequences,
+        )
+        parsed_count = sum(1 for _ in iter_protein_fasta(path=fasta_path))
+        if written_count != len(sequences.sequences) or parsed_count != written_count:
             raise PublicationError("Prepared FASTA record count changed during validation.")
 
         write_tsv_atomic(
@@ -1039,7 +1180,7 @@ def _publish_bundle(
             records=structures.structure_records,
         )
         sequence_authority_digest = sha256_file(path=paths.sequence_table)
-        label_records = tuple(
+        label_records = (
             {
                 "protein_id": protein_id,
                 "label_id": "e3:associated:unknown",
@@ -1066,10 +1207,32 @@ def _publish_bundle(
             ),
             records=label_records,
         )
-        sequence_context = {record["protein_id"]: record for record in sequences.audit_records}
-        curation_records = tuple(
+        curation_fieldnames = (
+            "protein_id",
+            "cluster_ids",
+            "group_ids",
+            "orthogroup_ids",
+            "species",
+            "input_candidate_states",
+            "sequence_length",
+            "sequence_sha256",
+            "pfam_assessment_status",
+            "pfam_accessions",
+            "upstream_e3_families",
+            "upstream_evidence_roles",
+            "annotation_status_details",
+            "interpro_versions",
+            "structure_available",
+            "structure_analysis_eligible",
+            "profile_label_id_to_assign",
+            "curation_status_to_assign",
+            "component_role_to_assign",
+            "evidence_reference_to_assign",
+            "curation_note",
+        )
+        curation_records = (
             {
-                **sequence_context[protein_id],
+                **sequence_record,
                 **domains.audit_by_protein[protein_id],
                 "structure_available": (
                     "TRUE" if protein_id in structures.protein_ids else "FALSE"
@@ -1083,11 +1246,12 @@ def _publish_bundle(
                 "evidence_reference_to_assign": "",
                 "curation_note": "",
             }
-            for protein_id in sorted(sequences.sequences)
+            for sequence_record in sequences.audit_records
+            for protein_id in (sequence_record["protein_id"],)
         )
         write_tsv_atomic(
             path=staging / "e3_label_curation_review.tsv",
-            fieldnames=tuple(curation_records[0]),
+            fieldnames=curation_fieldnames,
             records=curation_records,
         )
         write_tsv_atomic(

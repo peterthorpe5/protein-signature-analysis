@@ -1,0 +1,122 @@
+"""Generic, input-driven protein-signature workflow.
+
+The scientific analysis remains one atomic transaction inside ``run-all``. The
+surrounding rules provide explicit validation and independent post-publication
+verification boundaries for local or Slurm execution.
+"""
+
+from pathlib import Path
+
+
+if not workflow.configfiles:
+    raise ValueError("The workflow requires one campaign YAML via --configfile.")
+
+CAMPAIGN_CONFIG = Path(workflow.configfiles[0]).expanduser().resolve()
+STATE_DIR = Path(str(config.get("workflow_state_dir", ""))).expanduser().resolve()
+RESULT_DIR = Path(str(config.get("workflow_result_dir", ""))).expanduser().resolve()
+ANALYSIS_THREADS = int(config.get("workflow_threads", 1))
+ANALYSIS_MEMORY_MB = int(config.get("workflow_memory_mb", 64_000))
+ANALYSIS_RUNTIME_MINUTES = int(config.get("workflow_runtime_minutes", 240))
+RESUME = str(config.get("workflow_resume", "false")).casefold() == "true"
+LOG_LEVEL = str(config.get("workflow_log_level", "INFO"))
+
+if not str(config.get("workflow_state_dir", "")).strip():
+    raise ValueError("workflow_state_dir must be supplied through --config.")
+if not str(config.get("workflow_result_dir", "")).strip():
+    raise ValueError("workflow_result_dir must be supplied through --config.")
+if min(ANALYSIS_THREADS, ANALYSIS_MEMORY_MB, ANALYSIS_RUNTIME_MINUTES) < 1:
+    raise ValueError("Workflow threads, memory and runtime must be positive integers.")
+
+VALIDATION_MARKER = STATE_DIR / "01_validation" / "VALIDATED.json"
+ANALYSIS_MARKER = STATE_DIR / "02_analysis" / "RESULT_VERIFIED.json"
+VERIFICATION_MARKER = STATE_DIR / "03_verification" / "VERIFIED.json"
+LOG_DIR = STATE_DIR / "logs"
+
+shell.executable("/bin/bash")
+
+
+rule all:
+    input:
+        str(VERIFICATION_MARKER)
+
+
+rule validate_campaign:
+    input:
+        config=str(CAMPAIGN_CONFIG)
+    output:
+        marker=str(VALIDATION_MARKER)
+    threads:
+        1
+    resources:
+        mem_mb=ANALYSIS_MEMORY_MB,
+        runtime=60
+    log:
+        str(LOG_DIR / "01_validate_campaign.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures workflow-validate \
+            --config {input.config:q} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+rule run_campaign:
+    input:
+        config=str(CAMPAIGN_CONFIG),
+        validation=str(VALIDATION_MARKER)
+    output:
+        marker=str(ANALYSIS_MARKER)
+    params:
+        output_dir=str(RESULT_DIR),
+        resume="--resume" if RESUME else ""
+    threads:
+        ANALYSIS_THREADS
+    resources:
+        mem_mb=ANALYSIS_MEMORY_MB,
+        runtime=ANALYSIS_RUNTIME_MINUTES
+    log:
+        str(LOG_DIR / "02_run_campaign.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures run-all \
+            --config {input.config:q} \
+            --output-dir {params.output_dir:q} \
+            --threads {threads} \
+            --log-level {LOG_LEVEL:q} \
+            {params.resume} 2>&1 | tee {log:q}
+        protein-signatures workflow-verify \
+            --resource {params.output_dir:q} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee -a {log:q}
+        """
+
+
+rule verify_campaign:
+    input:
+        config=str(CAMPAIGN_CONFIG),
+        analysis=str(ANALYSIS_MARKER)
+    output:
+        marker=str(VERIFICATION_MARKER)
+    threads:
+        1
+    resources:
+        mem_mb=ANALYSIS_MEMORY_MB,
+        runtime=120
+    log:
+        str(LOG_DIR / "03_verify_campaign.log")
+    params:
+        result_dir=str(RESULT_DIR)
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures workflow-verify \
+            --resource {params.result_dir:q} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """

@@ -245,12 +245,15 @@ if [[ "${INITIALISE_ONLY}" == "true" ]]; then
 fi
 
 RUN_COMMAND=(
-    conda run --no-capture-output --name "${CONDA_ENVIRONMENT}"
-    protein-signatures run-all
+    "${SCRIPT_DIR}/run_protein_signature_analysis.sh"
     --config "${CONFIG_PATH}"
     --output-dir "${RESULT_DIR}"
+    --workflow-state-dir "${WORK_DIR}/workflow_state"
+    --profile local
+    --conda-environment "${CONDA_ENVIRONMENT}"
     --threads "${THREADS}"
     --log-level "${LOG_LEVEL}"
+    --skip-environment-sync
 )
 if [[ "${RESUME}" == "true" ]]; then
     RUN_COMMAND+=(--resume)

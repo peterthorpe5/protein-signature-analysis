@@ -578,6 +578,44 @@ def test_cli_routes_catalogue_initialisation_and_interrupts(
         == 0
     )
     assert json.loads(capsys.readouterr().out)["config"] == str(config)
+    validation_marker = tmp_path / "VALIDATED.json"
+    verification_marker = tmp_path / "VERIFIED.json"
+    monkeypatch.setattr(
+        cli_module,
+        "publish_validation_marker",
+        lambda **_kwargs: validation_marker,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "publish_verification_marker",
+        lambda **_kwargs: verification_marker,
+    )
+    assert (
+        cli_module.main(
+            [
+                "workflow-validate",
+                "--config",
+                str(config),
+                "--marker",
+                str(validation_marker),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["marker"] == str(validation_marker)
+    assert (
+        cli_module.main(
+            [
+                "workflow-verify",
+                "--resource",
+                str(tmp_path / "result"),
+                "--marker",
+                str(verification_marker),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["marker"] == str(verification_marker)
     monkeypatch.setattr(
         cli_module,
         "configure_logging",
