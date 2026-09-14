@@ -24,7 +24,10 @@ Set `--run-root` to the end-to-end run directory itself. The adapter uses these 
 | `09_ligandability/tables/reused_asset_manifest.parquet` | Checksum-bound AlphaFold coordinate inventory for new Foldseek analysis |
 | `09_ligandability/tables/reused_model_quality.parquet` | Mean pLDDT used to gate coordinates before Foldseek |
 | `09b_structural_alignment/structural_alignment/` | Completed within-group US-align/TM-align and pocket evidence |
-| `04_orthofinder/Results/` | Completed raw OrthoFinder 2.5.5/3 grouping authority |
+| `04_orthofinder/Results/` | Published OrthoFinder membership and identifier tables |
+| `04_orthofinder/stage_manifest.json` | Completed Stage 04 gate and checksum inventory |
+| `04_orthofinder/orthofinder_authority.tsv` | Reviewed archive, version and decision authority |
+| `04_orthofinder/orthofinder_reuse_validation.tsv` | Exact five-file extraction-validation ledger |
 
 Every consumed Stage 05, 06 and 09 Parquet file must be listed exactly once in its complete
 stage manifest, with matching byte size and SHA-256. Stage 09b supports both published
@@ -33,6 +36,13 @@ aggregate manifest with a `datasets` inventory. For the aggregate, every declare
 Parquet checksum is cross-checked against
 `09b_structural_alignment/stage_manifest.json`, including the aggregate run manifest itself.
 Input-file and coordinate-file checksums are verified again by the signature campaign.
+
+The reused Stage 04 intentionally has no OrthoFinder `Log.txt`. The three adjacent workflow
+authorities replace that raw-run completion evidence: they must agree on the exact required
+files, sizes and SHA-256 digests. The signature adapter reads the existing files in place;
+do not copy them into the new work directory and do not add or link a log file. Direct raw
+OrthoFinder 2.5.5/3 inputs outside this wrapper continue to require OrthoFinder's official
+completed-run marker.
 
 `10_integrated_resource/final_results` is deliberately absent from this map. Those files
 rank predecessor candidates; using their ranks as signature labels would leak the outcome

@@ -47,3 +47,7 @@
 - Accept the completed end-to-end Stage 09b aggregate `datasets` manifest while retaining
   strict cross-checks against the outer stage checksum inventory; standalone structural
   component manifests remain supported.
+- Accept the predecessor's intentionally log-less reused Stage 04 OrthoFinder publication
+  only when its complete stage manifest, reviewed-archive authority, exact five-file
+  validation ledger and current file checksums all agree; direct raw results still require
+  OrthoFinder's official completion marker.

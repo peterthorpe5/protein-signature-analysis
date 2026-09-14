@@ -456,6 +456,7 @@ def test_input_authorities_resource_and_raw_modes(example_dir: Path) -> None:
     assert resource_file in paths
     raw = SimpleNamespace(
         log_path=example_dir / "campaign.yaml",
+        completion_authority_paths=(),
         orthogroups_path=example_dir / "domains.tsv",
         hog_paths=(example_dir / "label_assignments.tsv",),
         sequence_ids_path=example_dir / "structures.tsv",
@@ -464,6 +465,21 @@ def test_input_authorities_resource_and_raw_modes(example_dir: Path) -> None:
     raw_paths = _input_authorities(config=config, source=raw, resource_mode=False)
     assert raw.log_path in raw_paths
     assert raw.species_ids_path in raw_paths
+    workflow_stage = SimpleNamespace(
+        log_path=None,
+        completion_authority_paths=(example_dir / "campaign.yaml",),
+        orthogroups_path=raw.orthogroups_path,
+        hog_paths=raw.hog_paths,
+        sequence_ids_path=raw.sequence_ids_path,
+        species_ids_path=raw.species_ids_path,
+    )
+    stage_paths = _input_authorities(
+        config=config,
+        source=workflow_stage,
+        resource_mode=False,
+    )
+    assert workflow_stage.completion_authority_paths[0] in stage_paths
+    assert len(stage_paths) == len(set(stage_paths))
 
 
 def test_resource_identity_pfam_states_and_profile_defaults(example_dir: Path) -> None:

@@ -46,7 +46,7 @@ precursor sequence authority and fails if the campaign FASTA cannot be mapped.
 This route is preferred because the precursor has already reconciled the source layout and
 published a checksum-complete authority.
 
-## Fallback route: raw OrthoFinder output
+## Fallback route: completed OrthoFinder output
 
 Configure:
 
@@ -80,10 +80,37 @@ Raw input publishes memberships but not the richer precursor group-context relat
 absence of that context is explicit; it is not back-filled from filenames or guessed
 taxonomy.
 
-This fallback validates the official completion marker and proves that the selected group
-authority maps to the campaign FASTA. Independently retain the scheduler state and full
-`Log.txt` as operational provenance. Prefer the published-resource route when available
-because it additionally verifies a completed manifest, declared checksums and DuckDB schema.
+For a direct raw result, this fallback validates the official completion marker and proves
+that the selected group authority maps to the campaign FASTA. Independently retain the
+scheduler state and full `Log.txt` as operational provenance.
+
+### Checksum-bound workflow Stage 04
+
+The same configuration also recognises `04_orthofinder/Results` from the completed E3
+end-to-end workflow. Its reviewed-archive route deliberately does not publish `Log.txt`.
+Instead, the adapter requires these sibling files:
+
+```text
+04_orthofinder/stage_manifest.json
+04_orthofinder/orthofinder_authority.tsv
+04_orthofinder/orthofinder_reuse_validation.tsv
+```
+
+The stage manifest must be complete and contain a valid configuration digest. Its output
+inventory must authenticate both TSV authorities, every discovered membership/identifier
+table, and the five files required by the predecessor's OrthoFinder 2.5.5 reuse contract.
+The validation TSV must declare exactly those five files as `VALID`, with sizes and SHA-256
+digests identical to the stage manifest and current bytes. The authority TSV must contain
+one `reused_reviewed_archive` record for the adjacent `Results` directory and a supported
+OrthoFinder version. The original archive path is retained as provenance but need not remain
+mounted after the completed stage has been relocated.
+
+Do not copy files, create links or fabricate a `Log.txt`: point `results_dir` at the existing
+`Results` directory. A partial workflow wrapper never weakens the direct raw-result rule; if
+the three sibling authorities are absent, a completed official `Log.txt` is still mandatory.
+
+Prefer the published-resource route when available because it additionally provides the
+reconciled DuckDB schema and group-context relations.
 
 ## Composite identity
 

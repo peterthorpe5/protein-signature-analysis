@@ -5,16 +5,39 @@ from __future__ import annotations
 import csv
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
+from .checksums import sha256_file
 from .errors import InputValidationError
-from .io_utils import open_text
+from .io_utils import iter_tsv, open_text, read_json
 from .models import GroupMembership, OrthoFinderLayout
 from .validation import validate_identifier
 
 LOGGER = logging.getLogger(__name__)
 _VERSION_PATTERN = re.compile(r"OrthoFinder\s+(?:version\s+)?([0-9]+(?:\.[0-9A-Za-z]+)+)", re.I)
 _COMPLETION_MARKER = "OrthoFinder run completed"
+_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_RAW_SOURCE_MODE = "RAW_COMPLETED_RESULTS"
+_WORKFLOW_STAGE_SOURCE_MODE = "CHECKSUMMED_WORKFLOW_STAGE"
+_WORKFLOW_AUTHORITY_FIELDS = (
+    "mode",
+    "archive_path",
+    "archive_size_bytes",
+    "archive_sha256",
+    "published_results",
+    "orthofinder_version",
+    "decision_basis",
+)
+_WORKFLOW_VALIDATION_FIELDS = ("relative_path", "size_bytes", "sha256", "status")
+_WORKFLOW_REQUIRED_RESULTS = (
+    "WorkingDirectory/SpeciesIDs.txt",
+    "WorkingDirectory/SequenceIDs.txt",
+    "Orthogroups/Orthogroups.tsv",
+    "Phylogenetic_Hierarchical_Orthogroups/N0.tsv",
+    "Species_Tree/SpeciesTree_rooted_node_labels.txt",
+)
 
 
 def discover_orthofinder_layout(*, results_dir: Path) -> OrthoFinderLayout:
@@ -33,13 +56,6 @@ def discover_orthofinder_layout(*, results_dir: Path) -> OrthoFinderLayout:
     root = Path(results_dir).expanduser().resolve()
     if not root.is_dir():
         raise InputValidationError(f"OrthoFinder results directory does not exist: {root}")
-    log_candidates = sorted(root.rglob("Log.txt"), key=lambda item: (len(item.parts), str(item)))
-    if not log_candidates:
-        raise InputValidationError(f"Completed OrthoFinder output lacks Log.txt: {root}")
-    log_path = log_candidates[0]
-    version = _read_version(log_path=log_path)
-    major = _validate_supported_version(version=version)
-    _require_completion_marker(log_path=log_path)
     orthogroup_candidates = sorted(root.rglob("Orthogroups.tsv"))
     hog_paths = tuple(
         sorted(
@@ -59,6 +75,34 @@ def discover_orthofinder_layout(*, results_dir: Path) -> OrthoFinderLayout:
         )
     species_ids = _first_or_none(paths=sorted(root.rglob("SpeciesIDs.txt")))
     sequence_ids = _first_or_none(paths=sorted(root.rglob("SequenceIDs.txt")))
+    log_candidates = sorted(root.rglob("Log.txt"), key=lambda item: (len(item.parts), str(item)))
+    workflow_authorities = _workflow_authority_paths(results_dir=root)
+    if log_candidates:
+        log_path: Path | None = log_candidates[0]
+        version = _read_version(log_path=log_path)
+        _require_completion_marker(log_path=log_path)
+        source_mode = _RAW_SOURCE_MODE
+        completion_authorities: tuple[Path, ...] = ()
+    elif any(path.exists() for path in workflow_authorities):
+        log_path = None
+        version = _validate_workflow_stage_completion(
+            results_dir=root,
+            discovered_paths=tuple(
+                path
+                for path in (
+                    orthogroups_path,
+                    *hog_paths,
+                    species_ids,
+                    sequence_ids,
+                )
+                if path is not None
+            ),
+        )
+        source_mode = _WORKFLOW_STAGE_SOURCE_MODE
+        completion_authorities = workflow_authorities
+    else:
+        raise InputValidationError(f"Completed OrthoFinder output lacks Log.txt: {root}")
+    major = _validate_supported_version(version=version)
     primary = "HIERARCHICAL_ORTHOGROUP" if hog_paths else "ORTHOGROUP"
     layout = OrthoFinderLayout(
         results_dir=root,
@@ -66,18 +110,368 @@ def discover_orthofinder_layout(*, results_dir: Path) -> OrthoFinderLayout:
         major_version=major,
         adapter_name="orthofinder_v3" if major == 3 else "orthofinder_v2_5_5",
         primary_group_authority=primary,
+        source_mode=source_mode,
         log_path=log_path,
+        completion_authority_paths=completion_authorities,
         orthogroups_path=orthogroups_path,
         hog_paths=hog_paths,
         species_ids_path=species_ids,
         sequence_ids_path=sequence_ids,
     )
     LOGGER.info(
-        "Detected completed OrthoFinder %s output with %d HOG tables",
+        "Detected completed OrthoFinder %s output in %s mode with %d HOG tables",
         version,
+        source_mode,
         len(hog_paths),
     )
     return layout
+
+
+def _workflow_authority_paths(*, results_dir: Path) -> tuple[Path, ...]:
+    """Return the ordered completion authorities beside workflow Stage 04 results.
+
+    Args:
+        results_dir: Published ``04_orthofinder/Results`` directory.
+
+    Returns:
+        Stage manifest, archive authority and validation table paths.
+    """
+
+    stage_root = results_dir.parent
+    return (
+        stage_root / "stage_manifest.json",
+        stage_root / "orthofinder_authority.tsv",
+        stage_root / "orthofinder_reuse_validation.tsv",
+    )
+
+
+def _validate_workflow_stage_completion(
+    *, results_dir: Path, discovered_paths: Sequence[Path]
+) -> str:
+    """Validate the checksum-bound completion contract for a reused Stage 04.
+
+    This is the only accepted alternative to OrthoFinder's own completed
+    ``Log.txt``.  All three workflow authorities must exist, the stage must be
+    complete, and every required or consumed result must match both the outer
+    manifest and the reuse-validation table where applicable.
+
+    Args:
+        results_dir: Published ``Results`` directory.
+        discovered_paths: Group and identifier files selected by the adapter.
+
+    Returns:
+        Validated OrthoFinder version declared by the workflow authority.
+
+    Raises:
+        InputValidationError: If any completion authority is incomplete or inconsistent.
+    """
+
+    stage_root = results_dir.parent.resolve()
+    manifest_path, authority_path, validation_path = _workflow_authority_paths(
+        results_dir=results_dir
+    )
+    for path in (manifest_path, authority_path, validation_path):
+        if not path.is_file() or path.stat().st_size == 0:
+            raise InputValidationError(
+                f"Log-less OrthoFinder workflow stage lacks a required completion authority: {path}"
+            )
+    manifest = read_json(path=manifest_path)
+    if not isinstance(manifest, Mapping):
+        raise InputValidationError(f"OrthoFinder stage manifest must be an object: {manifest_path}")
+    if manifest.get("status") != "complete":
+        raise InputValidationError(
+            f"OrthoFinder stage manifest is not marked complete: {manifest_path}"
+        )
+    configuration_digest = manifest.get("configuration_digest")
+    if not isinstance(configuration_digest, str) or not _DIGEST_PATTERN.fullmatch(
+        configuration_digest
+    ):
+        raise InputValidationError(
+            f"OrthoFinder stage manifest has an invalid configuration_digest: {manifest_path}"
+        )
+    output_records = _stage_output_records(stage_root=stage_root, manifest=manifest)
+    required_paths = dict.fromkeys(
+        (
+            authority_path,
+            validation_path,
+            *discovered_paths,
+            *(results_dir / relative for relative in _WORKFLOW_REQUIRED_RESULTS),
+        )
+    )
+    for required_path in required_paths:
+        _verify_stage_output(
+            stage_root=stage_root,
+            path=required_path,
+            output_records=output_records,
+        )
+    version = _read_workflow_authority(path=authority_path)
+    _validate_workflow_reuse_rows(
+        path=validation_path,
+        results_dir=results_dir,
+        stage_output_records=output_records,
+    )
+    return version
+
+
+def _stage_output_records(
+    *, stage_root: Path, manifest: Mapping[str, Any]
+) -> dict[str, tuple[int, str]]:
+    """Index a workflow stage output inventory after strict shape validation.
+
+    Args:
+        stage_root: Directory containing the stage manifest and outputs.
+        manifest: Decoded workflow stage manifest.
+
+    Returns:
+        Mapping from safe relative path to declared size and checksum.
+
+    Raises:
+        InputValidationError: If the inventory is empty, malformed or ambiguous.
+    """
+
+    outputs = manifest.get("outputs")
+    if not isinstance(outputs, list) or not outputs:
+        raise InputValidationError("OrthoFinder stage manifest has no output inventory.")
+    records: dict[str, tuple[int, str]] = {}
+    for index, item in enumerate(outputs):
+        if not isinstance(item, Mapping):
+            raise InputValidationError(
+                f"OrthoFinder stage output record {index} must be an object."
+            )
+        relative = _safe_workflow_relative_path(
+            value=item.get("path"),
+            root=stage_root,
+            context=f"stage output record {index}",
+        )
+        if relative in records:
+            raise InputValidationError(
+                f"OrthoFinder stage output inventory repeats path: {relative}"
+            )
+        size = _manifest_nonnegative_integer(
+            value=item.get("size_bytes"),
+            context=f"size_bytes in stage output record {index}",
+        )
+        digest = item.get("sha256")
+        if not isinstance(digest, str) or not _DIGEST_PATTERN.fullmatch(digest):
+            raise InputValidationError(
+                f"Invalid sha256 in OrthoFinder stage output record {index}."
+            )
+        records[relative] = (size, digest)
+    return records
+
+
+def _verify_stage_output(
+    *,
+    stage_root: Path,
+    path: Path,
+    output_records: Mapping[str, tuple[int, str]],
+) -> None:
+    """Require one file to match its workflow stage output declaration.
+
+    Args:
+        stage_root: Directory against which output paths are relative.
+        path: Required output file.
+        output_records: Validated stage output declarations.
+
+    Raises:
+        InputValidationError: If the file is absent, undeclared or altered.
+    """
+
+    candidate = path.resolve()
+    try:
+        relative = candidate.relative_to(stage_root.resolve()).as_posix()
+    except ValueError as error:
+        raise InputValidationError(
+            f"OrthoFinder stage authority escapes its stage root: {path}"
+        ) from error
+    declared = output_records.get(relative)
+    if declared is None:
+        raise InputValidationError(
+            f"OrthoFinder stage manifest does not declare required output: {relative}"
+        )
+    if not candidate.is_file() or candidate.stat().st_size == 0:
+        raise InputValidationError(f"OrthoFinder stage output is missing or empty: {candidate}")
+    expected_size, expected_digest = declared
+    if candidate.stat().st_size != expected_size:
+        raise InputValidationError(
+            f"OrthoFinder stage output size differs from its manifest: {relative}"
+        )
+    if sha256_file(path=candidate) != expected_digest:
+        raise InputValidationError(
+            f"OrthoFinder stage output checksum differs from its manifest: {relative}"
+        )
+
+
+def _read_workflow_authority(*, path: Path) -> str:
+    """Validate the reviewed-archive authority and return its version.
+
+    Args:
+        path: ``orthofinder_authority.tsv`` path already bound to the stage manifest.
+
+    Returns:
+        Declared supported OrthoFinder version.
+
+    Raises:
+        InputValidationError: If the authority is malformed or unsupported.
+    """
+
+    rows = tuple(iter_tsv(path=path, required_fields=_WORKFLOW_AUTHORITY_FIELDS))
+    if len(rows) != 1:
+        raise InputValidationError(
+            f"OrthoFinder workflow authority must contain exactly one row: {path}"
+        )
+    row = rows[0]
+    if row["mode"] != "reused_reviewed_archive":
+        raise InputValidationError(
+            f"Unsupported OrthoFinder workflow authority mode: {row['mode']!r}"
+        )
+    if row["published_results"] != "Results":
+        raise InputValidationError(
+            "OrthoFinder workflow authority must publish the adjacent Results directory."
+        )
+    if not row["archive_path"].strip() or not row["decision_basis"].strip():
+        raise InputValidationError(
+            "OrthoFinder workflow authority lacks archive_path or decision_basis."
+        )
+    archive_size = _tsv_nonnegative_integer(
+        value=row["archive_size_bytes"], context="archive_size_bytes"
+    )
+    if archive_size == 0:
+        raise InputValidationError(
+            "OrthoFinder workflow authority archive_size_bytes must be positive."
+        )
+    if not _DIGEST_PATTERN.fullmatch(row["archive_sha256"]):
+        raise InputValidationError("OrthoFinder workflow authority has an invalid archive_sha256.")
+    version = row["orthofinder_version"]
+    _validate_supported_version(version=version)
+    return version
+
+
+def _validate_workflow_reuse_rows(
+    *,
+    path: Path,
+    results_dir: Path,
+    stage_output_records: Mapping[str, tuple[int, str]],
+) -> None:
+    """Validate the exact five-file reviewed-archive extraction record.
+
+    Args:
+        path: ``orthofinder_reuse_validation.tsv`` path.
+        results_dir: Published workflow ``Results`` directory.
+        stage_output_records: Validated outer stage declarations.
+
+    Raises:
+        InputValidationError: If rows are missing, duplicated or inconsistent.
+    """
+
+    rows = tuple(iter_tsv(path=path, required_fields=_WORKFLOW_VALIDATION_FIELDS))
+    observed: set[str] = set()
+    for index, row in enumerate(rows, start=2):
+        relative = _safe_workflow_relative_path(
+            value=row["relative_path"],
+            root=results_dir,
+            context=f"reuse validation row {index}",
+        )
+        if relative in observed:
+            raise InputValidationError(f"OrthoFinder reuse validation repeats path: {relative}")
+        observed.add(relative)
+        if row["status"] != "VALID":
+            raise InputValidationError(f"OrthoFinder reuse validation is not VALID for {relative}.")
+        declared_size = _tsv_nonnegative_integer(
+            value=row["size_bytes"], context=f"size_bytes for {relative}"
+        )
+        declared_digest = row["sha256"]
+        if not _DIGEST_PATTERN.fullmatch(declared_digest):
+            raise InputValidationError(
+                f"OrthoFinder reuse validation has an invalid sha256 for {relative}."
+            )
+        stage_record = stage_output_records.get(f"Results/{relative}")
+        if stage_record != (declared_size, declared_digest):
+            raise InputValidationError(
+                f"OrthoFinder reuse validation disagrees with the stage manifest for {relative}."
+            )
+    expected = set(_WORKFLOW_REQUIRED_RESULTS)
+    if observed != expected:
+        missing = sorted(expected - observed)
+        unexpected = sorted(observed - expected)
+        raise InputValidationError(
+            "OrthoFinder reuse validation does not contain the exact required file set; "
+            f"missing={missing}, unexpected={unexpected}."
+        )
+
+
+def _safe_workflow_relative_path(*, value: Any, root: Path, context: str) -> str:
+    """Validate and normalise a manifest or TSV path beneath one root.
+
+    Args:
+        value: Candidate POSIX-style relative path.
+        root: Directory the value must remain beneath after resolution.
+        context: Human-readable source location for errors.
+
+    Returns:
+        Normalised POSIX relative path.
+
+    Raises:
+        InputValidationError: If the path is missing, non-canonical or unsafe.
+    """
+
+    if not isinstance(value, str) or not value or value != value.strip() or "\\" in value:
+        raise InputValidationError(f"Invalid relative path in OrthoFinder {context}: {value!r}")
+    relative = Path(value)
+    if relative.is_absolute() or value in {".", ".."} or ".." in relative.parts:
+        raise InputValidationError(f"Unsafe relative path in OrthoFinder {context}: {value!r}")
+    normalised = relative.as_posix()
+    if normalised != value:
+        raise InputValidationError(
+            f"Non-canonical relative path in OrthoFinder {context}: {value!r}"
+        )
+    base = root.resolve()
+    candidate = (base / relative).resolve()
+    if not candidate.is_relative_to(base):
+        raise InputValidationError(f"Unsafe relative path in OrthoFinder {context}: {value!r}")
+    return normalised
+
+
+def _manifest_nonnegative_integer(*, value: Any, context: str) -> int:
+    """Validate a JSON non-negative integer without accepting booleans.
+
+    Args:
+        value: Candidate JSON value.
+        context: Human-readable field location.
+
+    Returns:
+        Validated integer.
+
+    Raises:
+        InputValidationError: If the value is not a non-negative integer.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise InputValidationError(
+            f"Invalid non-negative integer in OrthoFinder {context}: {value!r}"
+        )
+    return value
+
+
+def _tsv_nonnegative_integer(*, value: str, context: str) -> int:
+    """Parse one canonical non-negative integer from a workflow TSV.
+
+    Args:
+        value: Candidate decimal text.
+        context: Human-readable field location.
+
+    Returns:
+        Parsed integer.
+
+    Raises:
+        InputValidationError: If the text is not canonical non-negative decimal.
+    """
+
+    if not re.fullmatch(r"0|[1-9][0-9]*", value):
+        raise InputValidationError(
+            f"Invalid non-negative integer in OrthoFinder {context}: {value!r}"
+        )
+    return int(value)
 
 
 def read_group_memberships(

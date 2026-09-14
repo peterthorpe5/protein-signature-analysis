@@ -43,10 +43,11 @@ flowchart TD
     I --> J["Parquet + DuckDB + optional app"]
 ```
 
-The workflow consumes supplied OrthoFinder output and never launches OrthoFinder. The raw
-adapter is tested against 2.5.5 and 3.x layouts and requires OrthoFinder's exact completed-run
-log marker. A published `orthofinder-results` resource remains the preferred,
-checksum-complete route.
+The workflow consumes supplied OrthoFinder output and never launches OrthoFinder. Direct raw
+2.5.5 and 3.x layouts require OrthoFinder's exact completed-run log marker. The adapter also
+recognises the E3 predecessor's log-less, reused Stage 04 layout only when its complete outer
+manifest, reviewed-archive authority and five-file validation ledger all agree by size and
+SHA-256. A published `orthofinder-results` resource remains the preferred, richer route.
 
 ## Implemented evidence layers
 
@@ -139,11 +140,13 @@ checksums, run identity and original input authorities verify. A partial or chan
 never continued or overwritten. Omit `--initialise-only` on the first invocation only when
 the generated defaults have already been reviewed and are intentionally accepted.
 
-For raw OrthoFinder input, replace `--orthofinder-resource` in the initialisation command
-with `--orthofinder-results`. The two options are intentionally mutually exclusive. Raw
-layout support is restricted to OrthoFinder 2.5.5 and 3.x and requires OrthoFinder's exact
-`OrthoFinder run completed` log marker; this package never executes OrthoFinder. See
-[the precursor boundary](docs/ORTHOFINDER_PRECURSOR.md).
+For a completed OrthoFinder result directory, replace `--orthofinder-resource` in the
+initialisation command with `--orthofinder-results`. The two options are intentionally
+mutually exclusive. Direct raw layout support is restricted to OrthoFinder 2.5.5 and 3.x and
+requires OrthoFinder's exact `OrthoFinder run completed` log marker. A checksum-bound reused
+workflow stage may instead provide the three verified sibling authorities documented in
+[the precursor boundary](docs/ORTHOFINDER_PRECURSOR.md). This package never executes
+OrthoFinder.
 
 Verify a copied result independently with:
 
@@ -196,7 +199,8 @@ Initialisation validates every configured authority and then stops. It imports c
 Stage 09b US-align/TM-align and pocket results from either the standalone component contract or
 the end-to-end aggregate `datasets` contract, joins the Stage 09 AlphaFold model inventory
 to its checksum-verified model-quality table, uses only confidence-eligible coordinates for a
-campaign-wide Foldseek search, consumes the completed Stage 04 OrthoFinder results, and sets
+campaign-wide Foldseek search, verifies and consumes the checksum-bound Stage 04 OrthoFinder
+results without copying or linking them, and sets
 `foldseek.maximum_hits` to the number of eligible models. Review and freeze
 `campaign.yaml`, especially the target/background comparisons and structural thresholds,
 before the compute run:

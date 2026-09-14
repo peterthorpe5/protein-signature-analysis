@@ -318,7 +318,7 @@ def validate_campaign(*, config_path: Path) -> dict[str, Any]:
         "orthofinder_source_mode": (
             "ORTHOFINDER_RESULTS_RESOURCE"
             if config.inputs.orthofinder_resource is not None
-            else "RAW_COMPLETED_RESULTS"
+            else orthofinder_source.source_mode
             if orthofinder_source is not None
             else ""
         ),
@@ -1163,7 +1163,9 @@ def _input_authorities(*, config: CampaignConfig, source: Any, resource_mode: bo
     if source is not None and resource_mode:
         paths.extend(resource_input_paths(resource=source))
     elif source is not None:
-        paths.append(source.log_path)
+        if source.log_path is not None:
+            paths.append(source.log_path)
+        paths.extend(source.completion_authority_paths)
         if source.orthogroups_path is not None:
             paths.append(source.orthogroups_path)
         paths.extend(source.hog_paths)
@@ -1171,7 +1173,7 @@ def _input_authorities(*, config: CampaignConfig, source: Any, resource_mode: bo
             paths.append(source.sequence_ids_path)
         if source.species_ids_path is not None:
             paths.append(source.species_ids_path)
-    return paths
+    return list(dict.fromkeys(paths))
 
 
 def _validate_requested_resource_run(*, config: CampaignConfig, resource: Any) -> None:

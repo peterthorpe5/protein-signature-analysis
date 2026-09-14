@@ -63,6 +63,10 @@ class E3WorkflowPaths:
     structural_resource: Path
     structural_stage_manifest: Path | None
     orthofinder_results: Path
+    orthofinder_version: str
+    orthofinder_source_mode: str
+    orthofinder_log_path: Path | None
+    orthofinder_completion_authority_paths: tuple[Path, ...]
 
 
 @dataclass(frozen=True)
@@ -161,10 +165,10 @@ def resolve_e3_workflow_paths(*, run_root: Path) -> E3WorkflowPaths:
     orthofinder_results = root / "04_orthofinder" / "Results"
     if not orthofinder_results.is_dir():
         raise InputValidationError(
-            "Completed E3 workflow lacks the expected raw OrthoFinder Results directory: "
+            "Completed E3 workflow lacks the expected OrthoFinder Results directory: "
             f"{orthofinder_results}"
         )
-    discover_orthofinder_layout(results_dir=orthofinder_results)
+    orthofinder_layout = discover_orthofinder_layout(results_dir=orthofinder_results)
     return E3WorkflowPaths(
         run_root=root,
         final_manifest=final_manifest,
@@ -176,6 +180,10 @@ def resolve_e3_workflow_paths(*, run_root: Path) -> E3WorkflowPaths:
         structural_resource=structural_resource,
         structural_stage_manifest=structural_stage_manifest,
         orthofinder_results=orthofinder_results,
+        orthofinder_version=orthofinder_layout.version,
+        orthofinder_source_mode=orthofinder_layout.source_mode,
+        orthofinder_log_path=orthofinder_layout.log_path,
+        orthofinder_completion_authority_paths=(orthofinder_layout.completion_authority_paths),
     )
 
 
@@ -1080,6 +1088,8 @@ def _publish_bundle(
                 "source_run_root": str(paths.run_root),
                 "structural_alignment_resource": str(paths.structural_resource),
                 "orthofinder_results": str(paths.orthofinder_results),
+                "orthofinder_version": paths.orthofinder_version,
+                "orthofinder_source_mode": paths.orthofinder_source_mode,
                 "protein_count": len(sequences.sequences),
                 "pfam_record_count": len(domains.domain_records),
                 "structure_count": len(structures.structure_records),
@@ -1132,6 +1142,18 @@ def _source_inventory(*, paths: E3WorkflowPaths) -> tuple[dict[str, str], ...]:
     }
     if paths.structural_stage_manifest is not None:
         authorities["structural_stage_manifest"] = paths.structural_stage_manifest
+    if paths.orthofinder_log_path is not None:
+        authorities["orthofinder_log"] = paths.orthofinder_log_path
+    completion_names = {
+        "stage_manifest.json": "orthofinder_stage_manifest",
+        "orthofinder_authority.tsv": "orthofinder_authority",
+        "orthofinder_reuse_validation.tsv": "orthofinder_reuse_validation",
+    }
+    for path in paths.orthofinder_completion_authority_paths:
+        authority = completion_names.get(path.name)
+        if authority is None or authority in authorities:
+            raise InputValidationError(f"Unexpected OrthoFinder completion authority path: {path}")
+        authorities[authority] = path
     return tuple(
         {
             "authority": authority,

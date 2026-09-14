@@ -549,7 +549,9 @@ class OrthoFinderLayout:
     major_version: int
     adapter_name: str
     primary_group_authority: str
-    log_path: Path
+    source_mode: str
+    log_path: Path | None
+    completion_authority_paths: tuple[Path, ...]
     orthogroups_path: Path | None
     hog_paths: tuple[Path, ...]
     species_ids_path: Path | None
@@ -568,12 +570,13 @@ class OrthoFinderLayout:
             "major_version": self.major_version,
             "adapter_name": self.adapter_name,
             "primary_group_authority": self.primary_group_authority,
-            "log_path": str(self.log_path),
+            "log_path": str(self.log_path or ""),
+            "completion_authority_paths": [str(path) for path in self.completion_authority_paths],
             "orthogroups_path": str(self.orthogroups_path or ""),
             "hog_paths": [str(path) for path in self.hog_paths],
             "species_ids_path": str(self.species_ids_path or ""),
             "sequence_ids_path": str(self.sequence_ids_path or ""),
-            "source_mode": "RAW_COMPLETED_RESULTS",
+            "source_mode": self.source_mode,
         }
 
 

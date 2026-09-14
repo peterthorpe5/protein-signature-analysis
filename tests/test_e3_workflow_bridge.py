@@ -49,7 +49,14 @@ def _write_stage_manifest(*, stage_root: Path, paths: tuple[Path, ...]) -> None:
         for path in paths
     ]
     (stage_root / "stage_manifest.json").write_text(
-        json.dumps({"status": "complete", "outputs": records}),
+        json.dumps(
+            {
+                "status": "complete",
+                "configuration_digest": "c" * 64,
+                "package_version": "0.16.0",
+                "outputs": records,
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -253,8 +260,16 @@ def _completed_workflow(tmp_path: Path) -> Path:
     )
     orthofinder = root / "04_orthofinder" / "Results"
     orthofinder.mkdir(parents=True)
-    (orthofinder / "Log.txt").write_text(
-        "OrthoFinder version 3.0.1\nOrthoFinder run completed\n",
+    working = orthofinder / "WorkingDirectory"
+    working.mkdir()
+    species_ids = working / "SpeciesIDs.txt"
+    species_ids.write_text("0: Arabidopsis_thaliana.faa\n", encoding="utf-8")
+    sequence_ids = working / "SequenceIDs.txt"
+    sequence_ids.write_text("0_0: P00001\n0_1: Q00002\n", encoding="utf-8")
+    orthogroups = orthofinder / "Orthogroups" / "Orthogroups.tsv"
+    orthogroups.parent.mkdir()
+    orthogroups.write_text(
+        "Orthogroup\tArabidopsis_thaliana\nOG0001\tP00001, Q00002\n",
         encoding="utf-8",
     )
     hog = orthofinder / "Phylogenetic_Hierarchical_Orthogroups" / "N0.tsv"
@@ -263,6 +278,34 @@ def _completed_workflow(tmp_path: Path) -> Path:
         "HOG\tOG\tGene Tree Parent Clade\tArabidopsis_thaliana\n"
         "N0.HOG0001\tOG0001\tn0\tP00001, Q00002\n",
         encoding="utf-8",
+    )
+    species_tree = orthofinder / "Species_Tree" / "SpeciesTree_rooted_node_labels.txt"
+    species_tree.parent.mkdir()
+    species_tree.write_text("(Arabidopsis_thaliana)N0;\n", encoding="utf-8")
+    orthofinder_stage = root / "04_orthofinder"
+    authority = orthofinder_stage / "orthofinder_authority.tsv"
+    authority.write_text(
+        "mode\tarchive_path\tarchive_size_bytes\tarchive_sha256\t"
+        "published_results\torthofinder_version\tdecision_basis\n"
+        "reused_reviewed_archive\t/archive/Results_Feb26.tar.gz\t123\t"
+        + "d" * 64
+        + "\tResults\t2.5.5\tproject-reviewed Results_Feb26 phylogeny\n",
+        encoding="utf-8",
+    )
+    validation = orthofinder_stage / "orthofinder_reuse_validation.tsv"
+    required = (species_ids, sequence_ids, orthogroups, hog, species_tree)
+    validation.write_text(
+        "relative_path\tsize_bytes\tsha256\tstatus\n"
+        + "".join(
+            f"{path.relative_to(orthofinder)}\t{path.stat().st_size}\t"
+            f"{sha256_file(path=path)}\tVALID\n"
+            for path in required
+        ),
+        encoding="utf-8",
+    )
+    _write_stage_manifest(
+        stage_root=orthofinder_stage,
+        paths=(*required, authority, validation),
     )
     return root
 
@@ -275,6 +318,10 @@ def test_completed_workflow_preparation_is_conservative_and_executable(
     root = _completed_workflow(tmp_path)
     resolved = resolve_e3_workflow_paths(run_root=root)
     assert resolved.orthofinder_results == root / "04_orthofinder" / "Results"
+    assert resolved.orthofinder_version == "2.5.5"
+    assert resolved.orthofinder_source_mode == "CHECKSUMMED_WORKFLOW_STAGE"
+    assert resolved.orthofinder_log_path is None
+    assert len(resolved.orthofinder_completion_authority_paths) == 3
     assert resolved.structural_stage_manifest == (
         root / "09b_structural_alignment" / "stage_manifest.json"
     )
@@ -287,6 +334,8 @@ def test_completed_workflow_preparation_is_conservative_and_executable(
     assert marker["structure_count"] == 2
     assert marker["foldseek_eligible_structure_count"] == 2
     assert marker["minimum_mean_plddt"] == 50.0
+    assert marker["orthofinder_version"] == "2.5.5"
+    assert marker["orthofinder_source_mode"] == "CHECKSUMMED_WORKFLOW_STAGE"
     assert marker["training_eligible_assignment_count"] == 0
     assert marker["next_action"] == "CURATE_LABEL_ASSIGNMENTS_AND_CONTROLS"
 
@@ -332,8 +381,11 @@ def test_completed_workflow_preparation_is_conservative_and_executable(
             required_fields=("authority", "sha256"),
         )
     )
-    assert len(source_inventory) == 8
+    assert len(source_inventory) == 11
     assert {row["authority"] for row in source_inventory} >= {
+        "orthofinder_authority",
+        "orthofinder_reuse_validation",
+        "orthofinder_stage_manifest",
         "structural_run_manifest",
         "structural_stage_manifest",
     }

@@ -13,11 +13,15 @@ from protein_signatures.errors import InputValidationError
 from protein_signatures.orthofinder import (
     _find_field,
     _first_or_none,
+    _manifest_nonnegative_integer,
     _read_sequence_id_map,
     _read_version,
     _require_completion_marker,
+    _safe_workflow_relative_path,
     _split_members,
+    _tsv_nonnegative_integer,
     _validate_supported_version,
+    _workflow_authority_paths,
     discover_orthofinder_layout,
     read_group_memberships,
 )
@@ -85,6 +89,250 @@ def test_raw_v3_detection_and_identifier_helpers(tmp_path: Path) -> None:
     _require_completion_marker(log_path=root / "Log.txt")
     assert _validate_supported_version(version="2.5.5") == 2
     assert _validate_supported_version(version="3.0.0-beta1") == 3
+
+
+def test_checksum_bound_workflow_stage_replaces_missing_raw_log(tmp_path: Path) -> None:
+    """The exact reused Stage 04 contract should be valid without a fabricated log."""
+
+    root = _workflow_stage_results(stage_root=tmp_path / "04_orthofinder")
+    layout = discover_orthofinder_layout(results_dir=root)
+    assert layout.version == "2.5.5"
+    assert layout.major_version == 2
+    assert layout.log_path is None
+    assert layout.source_mode == "CHECKSUMMED_WORKFLOW_STAGE"
+    assert layout.completion_authority_paths == _workflow_authority_paths(results_dir=root)
+    assert layout.to_record()["log_path"] == ""
+    assert len(layout.to_record()["completion_authority_paths"]) == 3
+    memberships = read_group_memberships(
+        layout=layout,
+        run_id="workflow_run",
+        group_type="HOG",
+        hierarchy_node="N0",
+        protein_ids=frozenset({"protA", "protB"}),
+    )
+    assert {row.protein_id for row in memberships} == {"protA", "protB"}
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("missing_authority", "required completion authority"),
+        ("incomplete_manifest", "not marked complete"),
+        ("bad_configuration_digest", "configuration_digest"),
+        ("duplicate_output", "repeats path"),
+        ("tampered_result", "size differs|checksum differs"),
+        ("unsupported_mode", "Unsupported OrthoFinder workflow authority mode"),
+        ("missing_reuse_row", "exact required file set"),
+        ("unsafe_reuse_path", "Unsafe relative path"),
+        ("conflicting_reuse_digest", "disagrees with the stage manifest"),
+    ],
+)
+def test_checksum_bound_workflow_stage_rejects_invalid_authority(
+    tmp_path: Path, mutation: str, expected: str
+) -> None:
+    """Log-less workflow results must fail closed when any authority is invalid."""
+
+    stage_root = tmp_path / mutation / "04_orthofinder"
+    results = _workflow_stage_results(stage_root=stage_root)
+    manifest_path = stage_root / "stage_manifest.json"
+    authority_path = stage_root / "orthofinder_authority.tsv"
+    validation_path = stage_root / "orthofinder_reuse_validation.tsv"
+    if mutation == "missing_authority":
+        authority_path.unlink()
+    elif mutation == "incomplete_manifest":
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["status"] = "failed"
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    elif mutation == "bad_configuration_digest":
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["configuration_digest"] = "bad"
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    elif mutation == "duplicate_output":
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["outputs"].append(dict(payload["outputs"][0]))
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    elif mutation == "tampered_result":
+        with (results / "WorkingDirectory" / "SpeciesIDs.txt").open(
+            "a", encoding="utf-8"
+        ) as handle:
+            handle.write("2: Species_C.faa\n")
+    elif mutation == "unsupported_mode":
+        text = authority_path.read_text(encoding="utf-8").replace(
+            "reused_reviewed_archive", "unreviewed_copy"
+        )
+        authority_path.write_text(text, encoding="utf-8")
+        _rewrite_workflow_stage_manifest(stage_root=stage_root)
+    elif mutation == "missing_reuse_row":
+        lines = validation_path.read_text(encoding="utf-8").splitlines()
+        validation_path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+        _rewrite_workflow_stage_manifest(stage_root=stage_root)
+    elif mutation == "unsafe_reuse_path":
+        text = validation_path.read_text(encoding="utf-8").replace(
+            "WorkingDirectory/SpeciesIDs.txt", "../SpeciesIDs.txt", 1
+        )
+        validation_path.write_text(text, encoding="utf-8")
+        _rewrite_workflow_stage_manifest(stage_root=stage_root)
+    else:
+        lines = validation_path.read_text(encoding="utf-8").splitlines()
+        fields = lines[1].split("\t")
+        fields[2] = "0" * 64
+        lines[1] = "\t".join(fields)
+        validation_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _rewrite_workflow_stage_manifest(stage_root=stage_root)
+    with pytest.raises(InputValidationError, match=expected):
+        discover_orthofinder_layout(results_dir=results)
+
+
+def test_workflow_stage_value_helpers_are_strict(tmp_path: Path) -> None:
+    """Stage scalar and path validators should reject coercion and traversal."""
+
+    assert _manifest_nonnegative_integer(value=0, context="test") == 0
+    assert _tsv_nonnegative_integer(value="12", context="test") == 12
+    assert _safe_workflow_relative_path(value="a/b.tsv", root=tmp_path, context="test") == "a/b.tsv"
+    for value in (True, -1, "1", None):
+        with pytest.raises(InputValidationError):
+            _manifest_nonnegative_integer(value=value, context="test")
+    for value in ("", "-1", "+1", "01", " 1"):
+        with pytest.raises(InputValidationError):
+            _tsv_nonnegative_integer(value=value, context="test")
+    for value in (
+        None,
+        "",
+        ".",
+        "../escape",
+        "/absolute",
+        "a\\b",
+        "a//b",
+    ):
+        with pytest.raises(InputValidationError):
+            _safe_workflow_relative_path(value=value, root=tmp_path, context="test")
+    outside = tmp_path.parent / f"{tmp_path.name}_outside"
+    outside.mkdir()
+    (tmp_path / "linked").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(InputValidationError, match="Unsafe relative path"):
+        _safe_workflow_relative_path(value="linked/file", root=tmp_path, context="test")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("manifest_not_object", "must be an object"),
+        ("empty_outputs", "no output inventory"),
+        ("non_object_output", "must be an object"),
+        ("unsafe_output", "Unsafe relative path"),
+        ("invalid_output_size", "Invalid non-negative integer"),
+        ("invalid_output_digest", "Invalid sha256"),
+        ("undeclared_authority", "does not declare required output"),
+        ("empty_required_file", "missing or empty"),
+        ("same_size_tamper", "checksum differs"),
+    ],
+)
+def test_workflow_stage_manifest_defences(tmp_path: Path, mutation: str, expected: str) -> None:
+    """The outer stage inventory should reject every malformed authority class."""
+
+    stage_root = tmp_path / mutation / "04_orthofinder"
+    results = _workflow_stage_results(stage_root=stage_root)
+    manifest_path = stage_root / "stage_manifest.json"
+    if mutation == "manifest_not_object":
+        manifest_path.write_text("[]", encoding="utf-8")
+    else:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if mutation == "empty_outputs":
+            payload["outputs"] = []
+        elif mutation == "non_object_output":
+            payload["outputs"].append("bad")
+        elif mutation == "unsafe_output":
+            payload["outputs"].append({"path": "../escape", "size_bytes": 1, "sha256": "e" * 64})
+        elif mutation == "invalid_output_size":
+            payload["outputs"][0]["size_bytes"] = True
+        elif mutation == "invalid_output_digest":
+            payload["outputs"][0]["sha256"] = "bad"
+        elif mutation == "undeclared_authority":
+            payload["outputs"] = [
+                item for item in payload["outputs"] if item["path"] != "orthofinder_authority.tsv"
+            ]
+        elif mutation == "empty_required_file":
+            (results / "WorkingDirectory" / "SpeciesIDs.txt").write_text("", encoding="utf-8")
+            _rewrite_workflow_stage_manifest(stage_root=stage_root)
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        else:
+            path = results / "WorkingDirectory" / "SpeciesIDs.txt"
+            text = path.read_text(encoding="utf-8")
+            path.write_text(text.replace("Species_A", "Species_Z"), encoding="utf-8")
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(InputValidationError, match=expected):
+        discover_orthofinder_layout(results_dir=results)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        ("published_results", "Other", "adjacent Results"),
+        ("archive_path", "", "lacks archive_path"),
+        ("archive_size_bytes", "01", "Invalid non-negative integer"),
+        ("archive_size_bytes", "0", "must be positive"),
+        ("archive_sha256", "bad", "invalid archive_sha256"),
+        ("orthofinder_version", "2.6.0", "Unsupported OrthoFinder version"),
+    ],
+)
+def test_workflow_archive_authority_fields(
+    tmp_path: Path, field: str, value: str, expected: str
+) -> None:
+    """Each reviewed-archive authority field should retain its strict meaning."""
+
+    stage_root = tmp_path / field / "04_orthofinder"
+    results = _workflow_stage_results(stage_root=stage_root)
+    authority = stage_root / "orthofinder_authority.tsv"
+    lines = authority.read_text(encoding="utf-8").splitlines()
+    headings = lines[0].split("\t")
+    row = lines[1].split("\t")
+    row[headings.index(field)] = value
+    authority.write_text(lines[0] + "\n" + "\t".join(row) + "\n", encoding="utf-8")
+    _rewrite_workflow_stage_manifest(stage_root=stage_root)
+    with pytest.raises(InputValidationError, match=expected):
+        discover_orthofinder_layout(results_dir=results)
+
+
+def test_workflow_archive_authority_requires_one_row(tmp_path: Path) -> None:
+    """A duplicated reviewed-archive authority must not be resolved arbitrarily."""
+
+    stage_root = tmp_path / "duplicate_authority" / "04_orthofinder"
+    results = _workflow_stage_results(stage_root=stage_root)
+    authority = stage_root / "orthofinder_authority.tsv"
+    lines = authority.read_text(encoding="utf-8").splitlines()
+    authority.write_text("\n".join((*lines, lines[1])) + "\n", encoding="utf-8")
+    _rewrite_workflow_stage_manifest(stage_root=stage_root)
+    with pytest.raises(InputValidationError, match="exactly one row"):
+        discover_orthofinder_layout(results_dir=results)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("duplicate", "repeats path"),
+        ("bad_status", "is not VALID"),
+        ("bad_size", "Invalid non-negative integer"),
+        ("bad_digest", "invalid sha256"),
+    ],
+)
+def test_workflow_reuse_validation_fields(tmp_path: Path, mutation: str, expected: str) -> None:
+    """The inner five-file validation ledger should reject malformed rows."""
+
+    stage_root = tmp_path / mutation / "04_orthofinder"
+    results = _workflow_stage_results(stage_root=stage_root)
+    validation = stage_root / "orthofinder_reuse_validation.tsv"
+    lines = validation.read_text(encoding="utf-8").splitlines()
+    if mutation == "duplicate":
+        lines.append(lines[1])
+    else:
+        fields = lines[1].split("\t")
+        index = {"bad_status": 3, "bad_size": 1, "bad_digest": 2}[mutation]
+        fields[index] = {"bad_status": "FAILED", "bad_size": "01", "bad_digest": "bad"}[mutation]
+        lines[1] = "\t".join(fields)
+    validation.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _rewrite_workflow_stage_manifest(stage_root=stage_root)
+    with pytest.raises(InputValidationError, match=expected):
+        discover_orthofinder_layout(results_dir=results)
 
 
 @pytest.mark.parametrize(
@@ -360,6 +608,67 @@ def _raw_results(*, root: Path, version: str) -> Path:
         encoding="utf-8",
     )
     return root
+
+
+def _workflow_stage_results(*, stage_root: Path) -> Path:
+    """Create the exact checksum-bound reused Stage 04 contract."""
+
+    results = _raw_results(root=stage_root / "Results", version="2.5.5")
+    (results / "Log.txt").unlink()
+    species_tree = results / "Species_Tree" / "SpeciesTree_rooted_node_labels.txt"
+    species_tree.parent.mkdir()
+    species_tree.write_text("(Species_A,Species_B)N0;\n", encoding="utf-8")
+    (stage_root / "orthofinder_authority.tsv").write_text(
+        "mode\tarchive_path\tarchive_size_bytes\tarchive_sha256\t"
+        "published_results\torthofinder_version\tdecision_basis\n"
+        "reused_reviewed_archive\t/archive/Results_Feb26.tar.gz\t123\t"
+        + "a" * 64
+        + "\tResults\t2.5.5\tproject-reviewed phylogeny\n",
+        encoding="utf-8",
+    )
+    validation_lines = ["relative_path\tsize_bytes\tsha256\tstatus"]
+    for relative in (
+        "WorkingDirectory/SpeciesIDs.txt",
+        "WorkingDirectory/SequenceIDs.txt",
+        "Orthogroups/Orthogroups.tsv",
+        "Phylogenetic_Hierarchical_Orthogroups/N0.tsv",
+        "Species_Tree/SpeciesTree_rooted_node_labels.txt",
+    ):
+        path = results / relative
+        validation_lines.append(
+            f"{relative}\t{path.stat().st_size}\t{sha256_file(path=path)}\tVALID"
+        )
+    (stage_root / "orthofinder_reuse_validation.tsv").write_text(
+        "\n".join(validation_lines) + "\n", encoding="utf-8"
+    )
+    _rewrite_workflow_stage_manifest(stage_root=stage_root)
+    return results
+
+
+def _rewrite_workflow_stage_manifest(*, stage_root: Path) -> None:
+    """Refresh the outer workflow checksum inventory after a test mutation."""
+
+    manifest_path = stage_root / "stage_manifest.json"
+    outputs = [
+        {
+            "path": path.relative_to(stage_root).as_posix(),
+            "size_bytes": path.stat().st_size,
+            "sha256": sha256_file(path=path),
+        }
+        for path in sorted(stage_root.rglob("*"))
+        if path.is_file() and path != manifest_path
+    ]
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "configuration_digest": "b" * 64,
+                "package_version": "0.16.0",
+                "outputs": outputs,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _published_resource(*, root: Path, include_focus: bool) -> Path:

@@ -231,10 +231,10 @@ adapter requires a complete `run_manifest.json`, verifies every declared output,
 the physical DuckDB and requires a single consistent run identity. FASTA identifiers are
 matched through the precursor sequence authority.
 
-### Fallback: raw OrthoFinder output
+### Fallback: completed OrthoFinder result directory
 
-Set `inputs.orthofinder.results_dir`. The directory must contain a `Log.txt` identifying
-exactly OrthoFinder 2.5.5 or an OrthoFinder 3.x release, together with either
+Set `inputs.orthofinder.results_dir`. A direct raw directory must contain a `Log.txt`
+identifying exactly OrthoFinder 2.5.5 or an OrthoFinder 3.x release, together with either
 `Orthogroups.tsv` or hierarchical `N*.tsv` tables. The adapter supports `HOG` at an explicit
 hierarchy node or `LEGACY_ORTHOGROUP`. `SequenceIDs.txt` is honoured where present.
 
@@ -243,6 +243,17 @@ Raw results are accepted only when `Log.txt` contains the exact
 result production. Version, completion, selected authorities and campaign memberships are
 all checked during `protein-signatures validate`. No OrthoFinder command is constructed or
 run by this package. Retain the scheduler record as additional operational provenance.
+
+The same `results_dir` setting accepts the E3 end-to-end workflow's reused Stage 04 result
+without `Log.txt`, but only when the adjacent stage directory contains all of:
+
+- a complete `stage_manifest.json` with a valid configuration digest and output inventory;
+- one `orthofinder_authority.tsv` row declaring the reviewed archive and supported version;
+- `orthofinder_reuse_validation.tsv` declaring the exact five required 2.5.5 files; and
+- byte sizes and SHA-256 values that agree across both ledgers and the files on disk.
+
+Partial authority sets, unmanifested files, unsafe paths and altered content fail closed. Do
+not copy or symlink a historical `Log.txt` into this published workflow stage.
 
 ## Completed predecessor structural resource
 
