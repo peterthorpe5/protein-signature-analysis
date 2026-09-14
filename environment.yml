@@ -2,6 +2,7 @@ name: protein_signature_analysis
 channels:
   - conda-forge
   - bioconda
+  - defaults
 dependencies:
   - python=3.11
   - duckdb>=1.4,<2
