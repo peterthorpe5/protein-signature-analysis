@@ -11,12 +11,14 @@ import pytest
 from protein_signatures.checksums import sha256_file
 from protein_signatures.errors import InputValidationError
 from protein_signatures.orthofinder import (
+    _controlled_identifier_aliases,
     _find_field,
     _first_or_none,
     _manifest_nonnegative_integer,
     _read_sequence_id_map,
     _read_version,
     _require_completion_marker,
+    _resolve_campaign_identifier,
     _safe_workflow_relative_path,
     _split_members,
     _tsv_nonnegative_integer,
@@ -89,6 +91,51 @@ def test_raw_v3_detection_and_identifier_helpers(tmp_path: Path) -> None:
     _require_completion_marker(log_path=root / "Log.txt")
     assert _validate_supported_version(version="2.5.5") == 2
     assert _validate_supported_version(version="3.0.0-beta1") == 3
+
+
+def test_raw_memberships_resolve_controlled_uniprot_accession_aliases(
+    tmp_path: Path,
+) -> None:
+    """Raw HOG members should map safely to prepared bare accessions."""
+
+    root = _raw_results(root=tmp_path / "results", version="2.5.5")
+    (root / "WorkingDirectory" / "SequenceIDs.txt").write_text(
+        "0_0: sp|Q9SA03|FB27_ARATH retained description\n"
+        "1_0: wheat@@tr|A0A123|ENTRY_WHEAT another description\n",
+        encoding="utf-8",
+    )
+    layout = discover_orthofinder_layout(results_dir=root)
+    memberships = read_group_memberships(
+        layout=layout,
+        run_id="accession_reconciliation",
+        group_type="HOG",
+        hierarchy_node="N0",
+        protein_ids=frozenset({"Q9SA03", "A0A123"}),
+    )
+
+    assert {(row.protein_id, row.group_id) for row in memberships} == {
+        ("Q9SA03", "N0.HOG0001"),
+        ("A0A123", "N0.HOG0001"),
+    }
+    assert _controlled_identifier_aliases(
+        value="Arabidopsis@@sp|Q9SA03|FB27_ARATH description"
+    ) == (
+        "Arabidopsis@@sp|Q9SA03|FB27_ARATH",
+        "sp|Q9SA03|FB27_ARATH",
+        "Q9SA03",
+        "FB27_ARATH",
+    )
+
+
+def test_raw_identifier_aliases_fail_closed_when_campaign_is_ambiguous() -> None:
+    """Accession and entry aliases must not silently choose between FASTA rows."""
+
+    with pytest.raises(InputValidationError, match="ambiguously matches"):
+        _resolve_campaign_identifier(
+            identifier="0_0",
+            identifier_map={"0_0": "sp|Q9SA03|FB27_ARATH"},
+            protein_ids=frozenset({"Q9SA03", "FB27_ARATH"}),
+        )
 
 
 def test_checksum_bound_workflow_stage_replaces_missing_raw_log(tmp_path: Path) -> None:

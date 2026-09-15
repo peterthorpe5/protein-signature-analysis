@@ -21,6 +21,7 @@ from .e3_workflow_orchestration import (
     verify_e3_label_review,
 )
 from .errors import ProteinSignatureError
+from .evidence_labels import create_evidence_label_bundle, verify_evidence_label_bundle
 from .logging_config import configure_logging
 from .pipeline import run_campaign, validate_campaign
 from .profiles import load_profile
@@ -91,6 +92,41 @@ def build_parser() -> argparse.ArgumentParser:
     automated_labels_parser.add_argument("--random-seed", type=int, default=1729)
     automated_labels_parser.add_argument("--validation-fraction", type=float, default=0.2)
     automated_labels_parser.add_argument("--log-level", default="INFO")
+    evidence_labels_parser = subparsers.add_parser(
+        "create-evidence-labels",
+        help=("Create provisional evidence-supported labels and outcome-blind matched controls."),
+    )
+    evidence_labels_parser.add_argument("--sequences-fasta", required=True, type=Path)
+    evidence_labels_parser.add_argument("--output-dir", required=True, type=Path)
+    evidence_labels_parser.add_argument("--profile", default="e3")
+    evidence_labels_parser.add_argument("--evidence-rules", default="e3")
+    evidence_labels_parser.add_argument("--protein-metadata", type=Path)
+    evidence_labels_parser.add_argument("--review-context", type=Path)
+    evidence_labels_parser.add_argument("--domains", type=Path)
+    evidence_labels_parser.add_argument("--structures", type=Path)
+    evidence_labels_parser.add_argument("--template-labels", type=Path)
+    evidence_labels_parser.add_argument("--seed-assignments", type=Path)
+    evidence_labels_parser.add_argument("--seed-catalogue", type=Path)
+    evidence_labels_parser.add_argument("--external-annotations", type=Path)
+    evidence_labels_parser.add_argument("--orthofinder-resource", type=Path)
+    evidence_labels_parser.add_argument("--orthofinder-results", type=Path)
+    evidence_labels_parser.add_argument(
+        "--orthofinder-group-type",
+        choices=("HOG", "LEGACY_ORTHOGROUP"),
+        default="HOG",
+    )
+    evidence_labels_parser.add_argument("--orthofinder-hierarchy-node", default="N0")
+    evidence_labels_parser.add_argument("--orthofinder-run-id", default="evidence_labelling")
+    evidence_labels_parser.add_argument("--redundancy-clusters", type=Path)
+    evidence_labels_parser.add_argument("--random-seed", type=int, default=1729)
+    evidence_labels_parser.add_argument("--validation-fraction", type=float, default=0.2)
+    evidence_labels_parser.add_argument("--log-level", default="INFO")
+    verify_evidence_parser = subparsers.add_parser(
+        "verify-evidence-labels",
+        help="Verify a complete evidence-label bundle and every declared checksum.",
+    )
+    verify_evidence_parser.add_argument("--bundle-dir", required=True, type=Path)
+    verify_evidence_parser.add_argument("--log-level", default="INFO")
     e3_prepare_parser = subparsers.add_parser(
         "workflow-prepare-e3",
         help="Create or verify completed-E3 inputs and publish a workflow marker.",
@@ -119,8 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
     e3_approve_review_parser.add_argument("--curator", required=True)
     e3_approve_review_parser.add_argument("--note", default="")
     e3_approve_review_parser.add_argument("--profile", default="e3")
-    e3_approve_review_parser.add_argument("--automated-test-mode", action="store_true")
+    approval_modes = e3_approve_review_parser.add_mutually_exclusive_group()
+    approval_modes.add_argument("--automated-test-mode", action="store_true")
+    approval_modes.add_argument("--automated-evidence-mode", action="store_true")
     e3_approve_review_parser.add_argument("--automated-test-marker", type=Path)
+    e3_approve_review_parser.add_argument("--evidence-label-marker", type=Path)
     e3_approve_review_parser.add_argument("--log-level", default="INFO")
     e3_verify_review_parser = subparsers.add_parser(
         "workflow-verify-e3-review",
@@ -154,6 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
     initialise_parser.add_argument("--sequences-fasta", required=True, type=Path)
     initialise_parser.add_argument("--label-assignments", required=True, type=Path)
     for option in (
+        "label-evidence-marker",
+        "label-evidence-audit",
+        "control-matching-audit",
+        "label-definition-features",
+        "class-labelling-summary",
+        "unresolved-assignments",
         "features",
         "domains",
         "redundancy-clusters",
@@ -271,6 +316,50 @@ def main(argv: Sequence[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
+        elif arguments.command == "create-evidence-labels":
+            destination = create_evidence_label_bundle(
+                sequences_fasta=arguments.sequences_fasta,
+                output_dir=arguments.output_dir,
+                profile=arguments.profile,
+                evidence_rules=arguments.evidence_rules,
+                protein_metadata=arguments.protein_metadata,
+                review_context=arguments.review_context,
+                domains=arguments.domains,
+                structures=arguments.structures,
+                template_labels=arguments.template_labels,
+                seed_assignments=arguments.seed_assignments,
+                seed_catalogue=arguments.seed_catalogue,
+                external_annotations=arguments.external_annotations,
+                orthofinder_resource=arguments.orthofinder_resource,
+                orthofinder_results=arguments.orthofinder_results,
+                orthofinder_group_type=arguments.orthofinder_group_type,
+                orthofinder_hierarchy_node=arguments.orthofinder_hierarchy_node,
+                orthofinder_run_id=arguments.orthofinder_run_id,
+                redundancy_clusters=arguments.redundancy_clusters,
+                random_seed=arguments.random_seed,
+                validation_fraction=arguments.validation_fraction,
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": "PROVISIONAL_EVIDENCE_LABELS_COMPLETE",
+                        "marker": str(destination),
+                    },
+                    sort_keys=True,
+                )
+            )
+        elif arguments.command == "verify-evidence-labels":
+            document = verify_evidence_label_bundle(bundle_dir=arguments.bundle_dir)
+            print(
+                json.dumps(
+                    {
+                        "status": "VALID",
+                        "bundle_dir": str(arguments.bundle_dir.expanduser().resolve()),
+                        "target_count": document["evidence_supported_target_count"],
+                    },
+                    sort_keys=True,
+                )
+            )
         elif arguments.command == "workflow-prepare-e3":
             destination = ensure_e3_preparation_marker(
                 run_root=arguments.run_root,
@@ -297,6 +386,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 profile=arguments.profile,
                 automated_test_mode=arguments.automated_test_mode,
                 automated_test_marker=arguments.automated_test_marker,
+                automated_evidence_mode=arguments.automated_evidence_mode,
+                evidence_label_marker=arguments.evidence_label_marker,
             )
             print(
                 json.dumps(
@@ -336,6 +427,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 profile=arguments.profile,
                 sequences_fasta=arguments.sequences_fasta,
                 label_assignments=arguments.label_assignments,
+                label_evidence_marker=arguments.label_evidence_marker,
+                label_evidence_audit=arguments.label_evidence_audit,
+                control_matching_audit=arguments.control_matching_audit,
+                label_definition_features=arguments.label_definition_features,
+                class_labelling_summary=arguments.class_labelling_summary,
+                unresolved_assignments=arguments.unresolved_assignments,
                 features=arguments.features,
                 domains=arguments.domains,
                 redundancy_clusters=arguments.redundancy_clusters,

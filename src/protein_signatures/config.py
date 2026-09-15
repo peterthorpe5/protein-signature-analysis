@@ -194,6 +194,12 @@ def _parse_inputs(*, value: Any, base: Path) -> InputPaths:
             {
                 "sequences_fasta",
                 "label_assignments",
+                "label_evidence_marker",
+                "label_evidence_audit",
+                "control_matching_audit",
+                "label_definition_features",
+                "class_labelling_summary",
+                "unresolved_assignments",
                 "features",
                 "domains",
                 "redundancy_clusters",
@@ -258,6 +264,24 @@ def _parse_inputs(*, value: Any, base: Path) -> InputPaths:
             value=row.get("label_assignments"),
             base=base,
             field_name="inputs.label_assignments",
+        ),
+        label_evidence_marker=_resolve_optional_path(
+            value=row.get("label_evidence_marker"), base=base
+        ),
+        label_evidence_audit=_resolve_optional_path(
+            value=row.get("label_evidence_audit"), base=base
+        ),
+        control_matching_audit=_resolve_optional_path(
+            value=row.get("control_matching_audit"), base=base
+        ),
+        label_definition_features=_resolve_optional_path(
+            value=row.get("label_definition_features"), base=base
+        ),
+        class_labelling_summary=_resolve_optional_path(
+            value=row.get("class_labelling_summary"), base=base
+        ),
+        unresolved_assignments=_resolve_optional_path(
+            value=row.get("unresolved_assignments"), base=base
         ),
         features=_resolve_optional_path(value=row.get("features"), base=base),
         domains=_resolve_optional_path(value=row.get("domains"), base=base),

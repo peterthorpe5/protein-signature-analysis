@@ -184,3 +184,17 @@ without approval it runs only through `review_ready`, reports the pause and exit
 - Never edit files under a completed `result/`; any extra or changed file invalidates it.
 - Preserve the workflow state, result manifest, scheduler logs and frozen configuration with
   the analysis record.
+
+## Generic evidence-led DAG
+
+`workflow/EvidenceSnakefile` adds a pre-analysis evidence stage for any protein type. Launch
+it through `run_evidence_signature_workflow.sh`; do not call the Snakefile with an incomplete
+ad-hoc configuration. Without `--accept-provisional-evidence-labels`, `rule all` targets only
+the checksum-complete evidence marker. With explicit acceptance, the same DAG creates and
+validates `campaign.yaml`, runs the immutable analysis transaction and independently verifies
+the result.
+
+The launcher supports a single outer Slurm job with the site defaults `barton`/`barton`.
+Its worker strips the recursive submission flag and checks that the allocation contains at
+least the requested CPU count. Generic raw OrthoFinder inputs may select HOG mode with a named
+hierarchy node or legacy orthogroups with no node; the workflow never runs OrthoFinder.

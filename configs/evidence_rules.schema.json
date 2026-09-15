@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peterthorpe5/protein-signature-analysis/configs/evidence_rules.schema.json",
+  "title": "Protein Signature Analysis evidence rules",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ruleset_id",
+    "ruleset_version",
+    "profile_id",
+    "settings",
+    "label_rules"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "ruleset_id": {"$ref": "#/$defs/identifier"},
+    "ruleset_version": {"type": "string", "minLength": 1},
+    "profile_id": {"$ref": "#/$defs/identifier"},
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "annotation_score",
+        "specific_annotation_score",
+        "pfam_score",
+        "supporting_pfam_score",
+        "orthology_score",
+        "trusted_label_score",
+        "minimum_acceptance_score",
+        "minimum_evidence_groups",
+        "minimum_score_margin",
+        "require_target_structure_eligible",
+        "orthology_propagation_enabled",
+        "minimum_orthology_anchor_proteins",
+        "control_units_per_target_unit",
+        "minimum_control_units_per_background",
+        "require_species_match",
+        "require_structure_match",
+        "maximum_log2_length_difference",
+        "maximum_domain_count_difference",
+        "exclude_input_candidates_from_controls"
+      ],
+      "properties": {
+        "annotation_score": {"$ref": "#/$defs/nonnegativeNumber"},
+        "specific_annotation_score": {"$ref": "#/$defs/nonnegativeNumber"},
+        "pfam_score": {"$ref": "#/$defs/nonnegativeNumber"},
+        "supporting_pfam_score": {"$ref": "#/$defs/nonnegativeNumber"},
+        "orthology_score": {"$ref": "#/$defs/nonnegativeNumber"},
+        "trusted_label_score": {"$ref": "#/$defs/nonnegativeNumber"},
+        "minimum_acceptance_score": {"$ref": "#/$defs/nonnegativeNumber"},
+        "minimum_evidence_groups": {"type": "integer", "minimum": 1},
+        "minimum_score_margin": {"$ref": "#/$defs/nonnegativeNumber"},
+        "require_target_structure_eligible": {"type": "boolean"},
+        "orthology_propagation_enabled": {"type": "boolean"},
+        "minimum_orthology_anchor_proteins": {"type": "integer", "minimum": 1},
+        "control_units_per_target_unit": {"type": "integer", "minimum": 1},
+        "minimum_control_units_per_background": {"type": "integer", "minimum": 1},
+        "require_species_match": {"type": "boolean"},
+        "require_structure_match": {"type": "boolean"},
+        "maximum_log2_length_difference": {"$ref": "#/$defs/nonnegativeNumber"},
+        "maximum_domain_count_difference": {"type": "integer", "minimum": 0},
+        "exclude_input_candidates_from_controls": {"type": "boolean"}
+      }
+    },
+    "label_rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/labelRule"}
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:+/-]{0,254}$"
+    },
+    "nonnegativeNumber": {"type": "number", "minimum": 0},
+    "patterns": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "labelRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "label_id",
+        "priority",
+        "annotation_patterns",
+        "specific_annotation_patterns",
+        "exclusion_patterns",
+        "required_domain_patterns",
+        "supporting_domain_patterns",
+        "allow_specific_annotation_only",
+        "propagate_by_orthology"
+      ],
+      "properties": {
+        "rule_id": {"$ref": "#/$defs/identifier"},
+        "label_id": {"$ref": "#/$defs/identifier"},
+        "priority": {"type": "integer", "minimum": 0},
+        "annotation_patterns": {"$ref": "#/$defs/patterns"},
+        "specific_annotation_patterns": {"$ref": "#/$defs/patterns"},
+        "exclusion_patterns": {"$ref": "#/$defs/patterns"},
+        "required_domain_patterns": {"$ref": "#/$defs/patterns"},
+        "supporting_domain_patterns": {"$ref": "#/$defs/patterns"},
+        "allow_specific_annotation_only": {"type": "boolean"},
+        "propagate_by_orthology": {"type": "boolean"}
+      }
+    }
+  }
+}

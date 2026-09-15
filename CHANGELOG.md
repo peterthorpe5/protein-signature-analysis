@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Reconcile raw OrthoFinder group members with campaign FASTA accessions using
+  exact identifiers, controlled UniProt accession/entry aliases and the
+  documented single `sample@@identifier` qualifier. Ambiguous mappings fail
+  closed rather than selecting one identifier silently.
+- Add regression coverage for the completed-E3 prepared-accession versus raw
+  OrthoFinder identifier contract used by automated smoke and evidence-led runs.
+
 ## 0.1.0 - 2026-09-11
 
 - Establish the standalone, protein-agnostic analysis engine and read-only
@@ -77,3 +86,16 @@
   profile-defined matched controls.
 - Add `gawk`, the strict `nodefaults` channel, Snakemake and its Slurm executor plugin to the
   Conda environment; retain Kaleido as a pip-installed dependency for channel compatibility.
+- Add generic, versioned evidence-led production labelling with trusted exact annotations,
+  Pfam corroboration, conservative one-generation OrthoFinder propagation, explicit
+  abstention and complete decision audits.
+- Add outcome-blind control matching at joined homology/redundancy-block level by species,
+  structure eligibility, length and domain complexity; exclude all target-like and upstream
+  candidate proteins from the clean-control pool.
+- Prevent label leakage by recording every label-defining Pfam feature and removing it from
+  the confirmatory domain and SHAP input authority while retaining explicit assessment
+  coverage.
+- Add generic and completed-E3 Snakemake routes that stop after the evidence bundle by
+  default, or run the complete provisional campaign only after an explicit acceptance flag.
+- Publish label, matching, exclusion, class-coverage and unresolved-record audits as TSV,
+  formatted XLSX, canonical Parquet/DuckDB tables, static figures and app downloads.

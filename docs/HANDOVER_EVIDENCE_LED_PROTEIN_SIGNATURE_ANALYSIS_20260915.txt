@@ -1,0 +1,1608 @@
+PROTEIN SIGNATURE ANALYSIS
+EVIDENCE-LED AUTOMATION, STRUCTURAL SIGNATURES AND EXPLAINABLE MODELS
+COMPLETE DEVELOPMENT AND EXECUTION HANDOVER
+=====================================================================
+
+Handover date: 2026-09-15
+Repository: https://github.com/peterthorpe5/protein-signature-analysis
+Mac working copy: /Users/PThorpe001/github_repos/protein-signature-analysis
+Development branch: feature/protein-signature-analysis-v0.1.0
+Package version: 0.1.0
+Python import package: protein_signatures
+Command-line program: protein-signatures
+Application command: protein-signature-app
+Primary shell launchers:
+  run_evidence_signature_workflow.sh
+  run_completed_e3_workflow.sh
+  run_protein_signature_analysis.sh
+  submit_protein_signature_workflow_slurm.sh
+
+
+1. PURPOSE OF THIS HANDOVER
+---------------------------
+
+This document is the complete technical and operational handover for the
+standalone protein-signature-analysis repository. It records the scientific
+question, the implemented code, the input and output contracts, the automated
+label proposal system, the E3 defaults, the structural workflow, the
+statistics, the explainable machine-learning layer, the cluster commands, the
+quality checks completed in the development workspace and the remaining
+scientific review responsibilities.
+
+The package is deliberately named for protein signatures rather than E3
+ligases. E3 ligases are the first production use case and therefore the
+built-in default profile and ruleset, but the engine accepts a custom protein
+hierarchy and custom evidence rules. A kinase, receptor, enzyme, transporter or
+other protein-type project can use the same package without adding E3-specific
+logic to the generic analysis engine.
+
+This handover supersedes the earlier proposal to create an E3-only package
+inside E3_project_draft. The resulting implementation is a separate reusable
+repository. It can consume the completed E3 workflow as one adapter path, or
+start from generic FASTA, labels, domains, structures and optional completed
+OrthoFinder results.
+
+
+2. DIRECT DEVELOPMENT OUTCOME
+-----------------------------
+
+The requested automated production-label proposal layer has been implemented.
+It is additional to, and does not replace, the original reviewed-label path or
+the synthetic smoke-test path.
+
+The repository now has three clearly separated label routes:
+
+  A. Human-reviewed route
+     A named curator edits a complete assignment table and issues a
+     checksum-bound approval. This is the only route whose marker sets
+     scientific_interpretation_allowed to TRUE.
+
+  B. Evidence-led provisional route
+     The software combines versioned target rules with direct seed labels,
+     annotation text, Pfam/domain evidence, optional OrthoFinder membership,
+     structure eligibility and optional redundancy clusters. It proposes
+     targets, abstains on weak or conflicting cases, builds outcome-blind
+     matched controls, excludes label-defining features from confirmatory
+     analysis, and publishes a complete audit bundle. It can run unattended
+     only after the operator supplies --accept-provisional-evidence-labels.
+     The outputs remain provisional hypothesis-generation results and are not
+     represented as human reviewed.
+
+  C. Synthetic smoke-test route
+     The software creates deliberately artificial balanced target/control
+     cohorts to test code execution. Its markers and filenames contain
+     AUTOMATED_TEST_ONLY. Its results must never be interpreted biologically.
+
+The distinction matters. An unattended full run is technically possible, but
+automation cannot turn database annotations into experimental proof. The
+implemented metadata prevents that accidental overstatement.
+
+
+3. SCIENTIFIC QUESTION AND CLAIM BOUNDARY
+-----------------------------------------
+
+For each configured protein type or subtype, the package asks:
+
+  * Which amino-acid k-mers are enriched in the target relative to an
+    independently chosen background?
+  * Which Pfam or other domain features are enriched after label-defining
+    domains are removed from confirmatory testing?
+  * Which imported or Foldseek-derived structural groups occur more often in
+    the target?
+  * Which discoveries retain the same direction in a frozen held-out
+    validation partition?
+  * Can a regularised classifier distinguish the target from the matched
+    background without splitting homologous/redundant units across folds?
+  * Which features contribute to that fitted model globally and for individual
+    proteins, as described by SHAP values?
+
+The package reports association and prediction. It does not prove biochemical
+activity, catalytic mechanism, substrate binding, ligandability, causality or
+fitness in a PROTAC system. A structural cluster associated with F-box
+receptors, for example, is a testable family-level observation. It is not proof
+that every member binds SKP1, recruits a substrate or has an accessible ligand
+pocket.
+
+The package must not pool all E3-related proteins into a single biological
+class. RING, U-box, HECT, RBR, RING-Cys-relay, CRL scaffolds, CRL adaptors,
+substrate receptors, SUMO E3s, NEDD8 components and UFM1 complex components
+have different mechanisms and component roles. The built-in E3 profile keeps
+these distinctions explicit.
+
+
+4. REPOSITORY AND OWNERSHIP BOUNDARIES
+--------------------------------------
+
+protein-signature-analysis owns:
+
+  * generic sequence, domain and structural signature analysis;
+  * a controlled profile vocabulary and exact target/background comparisons;
+  * automated evidence-led provisional label proposals;
+  * outcome-blind matched-control construction;
+  * circularity controls for label-defining features;
+  * OrthoFinder 2.5.5/3 result consumption;
+  * AlphaFold Database model acquisition when requested;
+  * Foldseek execution and structural clustering;
+  * exact association statistics and FDR correction;
+  * mandatory explainable modelling and SHAP output;
+  * typed Parquet tables and a physical DuckDB database;
+  * numbered TSV/XLSX/PDF-first reports;
+  * a read-only Streamlit application;
+  * Snakemake execution locally or under Slurm; and
+  * checksum-complete atomic publication.
+
+protein-signature-analysis does not own:
+
+  * running OrthoFinder;
+  * the original E3 discovery and prioritisation analysis;
+  * the original E3 ligandability pipeline;
+  * manual biochemical curation;
+  * experimental validation; or
+  * a universal ontology service for arbitrary protein biology.
+
+The completed-E3 adapter reads the predecessor run but does not modify it. The
+generic workflow can instead consume independent inputs, so this package is not
+coupled to E3_project_draft.
+
+
+5. IMPORTANT SOURCE AUTHORITIES FOR THE CURRENT E3 CAMPAIGN
+-----------------------------------------------------------
+
+Completed predecessor run:
+
+  /gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/
+  analysis/e3_end_to_end_runs/
+  grant_aligned_corrected_expression_structural_all1972_v0_16_0_20260909
+
+The path is shown across lines only for readability. Use it as one uninterrupted
+absolute path in commands.
+
+Successful prepared-input campaign already produced:
+
+  /gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/
+  analysis/protein_signature_runs/e3_all1972_v0_1_0_20260914/
+  prepared_inputs
+
+Observed prepared bundle:
+
+  121,635 FASTA records
+  192,474 domain data rows plus header
+  11,404 structure rows plus header
+  121,635 E3 review-context rows plus header
+  121,635 starter assignment rows plus header
+
+The preparation job reported:
+
+  11,404 coordinate structures
+  10,827 Foldseek-eligible structures at mean pLDDT >= 50
+  22,906 skipped non-coordinate assets
+  0 unmatched models
+
+The successful preparation Slurm job was 386714, with:
+
+  state COMPLETED
+  elapsed time 00:18:04
+  18 allocated CPUs
+  MaxRSS approximately 4.0 GB
+  requested memory 128 GB
+  exit code 0:0
+
+The maximum-memory request was conservative. The earlier interactive attempt
+with 8 GB was killed during processing of multi-million-row Parquet sources.
+The bridge now streams projected Parquet columns in bounded batches, but a
+Slurm job remains the recommended execution boundary for the full dataset.
+
+
+6. IMPLEMENTED PACKAGE LAYOUT
+-----------------------------
+
+Top-level scientific and workflow files:
+
+  README.md
+  CHANGELOG.md
+  RELEASE_QA.md
+  environment.yml
+  pyproject.toml
+  setup.cfg
+  MANIFEST.in
+  run_completed_e3_workflow.sh
+  run_evidence_signature_workflow.sh
+  run_protein_signature_analysis.sh
+  run_protein_signature_app.sh
+  start_from_inputs.sh
+  submit_protein_signature_workflow_slurm.sh
+  workflow/Snakefile
+  workflow/E3Snakefile
+  workflow/EvidenceSnakefile
+  profiles/local/config.v8+.yaml
+  profiles/slurm/config.v8+.yaml
+
+Core modules under src/protein_signatures include:
+
+  alphafold.py
+    Controlled AlphaFold Database acquisition, retries, sequence checks,
+    model version and confidence provenance.
+
+  assessment.py
+    Explicit assessed-with-hit, assessed-without-hit, unknown and failed
+    feature universes. Unknown evidence is never silently treated as absence.
+
+  associations.py and statistics.py
+    Independence-block prevalence, Fisher exact tests, Wilson intervals,
+    local and study-wide Benjamini-Hochberg correction, and discovery/held-out
+    evidence classes.
+
+  automated_test_labels.py
+    Synthetic smoke cohorts with conspicuous non-scientific status.
+
+  e3_workflow_bridge.py
+    Streaming adapter from the completed E3 workflow to generic package inputs.
+
+  e3_workflow_orchestration.py
+    Immutable preparation, review, approval, verification and campaign markers
+    for human, smoke-test and provisional-evidence routes.
+
+  evidence_labels.py
+    Generic evidence rules, target proposal, abstention, conservative HOG
+    propagation, control matching, circularity protection and audit bundle.
+
+  explainable_ml.py
+    Mandatory group-aware elastic-net logistic classification, held-out
+    metrics, permutation importance, numeric SHAP values and SHAP graphics.
+
+  foldseek.py and structural_signatures.py
+    Safe Foldseek execution/cache contracts and structural signature clusters.
+
+  orthofinder.py and orthofinder_resource.py
+    OrthoFinder 2.5.5/3 adapters for raw completed results or a published
+    orthofinder-results resource. OrthoFinder is never launched here.
+
+  partitions.py and redundancy.py
+    Connected homology/redundancy blocks and deterministic discovery/validation
+    assignment.
+
+  pipeline.py, publication.py, reporting.py and schemas.py
+    End-to-end execution, atomic result publication, fixed Arrow schemas,
+    Parquet/DuckDB resources and numbered human-readable outputs.
+
+  profiles.py and data/profiles/e3.yaml
+    Generic profile parsing plus the complete built-in E3 hierarchy.
+
+  data/evidence_rules/e3.yaml
+    Versioned built-in provisional evidence rules for inferable E3 targets.
+
+Application modules under src/protein_signature_app include:
+
+  backend.py
+    Verified, read-only DuckDB queries and safe manifested downloads.
+
+  app.py
+    Streamlit pages for overview, signatures, SHAP, protein/Pfam evidence,
+    labels and roles, structures/folds, orthology/partitions, canonical data and
+    provenance.
+
+  launcher.py
+    Named CLI arguments and safe app process execution.
+
+
+7. ENVIRONMENT AND INSTALLATION
+-------------------------------
+
+The environment uses only conda-forge and bioconda and explicitly disables
+channel defaults:
+
+  channels:
+    - conda-forge
+    - bioconda
+    - nodefaults
+
+Important direct dependencies include Python 3.11, gawk, Foldseek, DuckDB,
+Matplotlib, pandas, NumPy, Plotly, PyArrow, PyYAML, scikit-learn, SHAP,
+Streamlit, XlsxWriter, Snakemake and the Snakemake Slurm executor plugin.
+
+gawk was added because the selected Foldseek package requires it in this
+environment. nodefaults was added to prevent a mixed-channel solution.
+
+Editable installation on the Mac:
+
+  cd /Users/PThorpe001/github_repos/protein-signature-analysis
+  conda env update --file environment.yml --prune
+  conda activate protein_signature_analysis
+  python -m pip install --no-deps --force-reinstall --editable '.[app,dev,workflow]'
+
+Seeing the line below is correct while the project remains in its initial
+release series:
+
+  Successfully installed protein-signature-analysis-0.1.0
+
+The version does not change merely because the same editable package is
+reinstalled. A version bump should be a deliberate release operation applied
+consistently to package metadata, tests, citation metadata, changelog and tags.
+
+
+8. GENERIC INPUT CONTRACT
+-------------------------
+
+8.1 Required FASTA
+
+The FASTA is the protein identifier and sequence authority. Each identifier
+must be unique and stable. Conflicting duplicate sequences fail validation.
+The package does not silently rewrite identifiers.
+
+8.2 Classification profile
+
+The profile YAML defines:
+
+  * the root, parent, target and control labels;
+  * display names and aliases;
+  * mechanistic classes and component roles;
+  * assignment exclusivity groups;
+  * labels eligible for positive assignment;
+  * default target/background comparisons; and
+  * whether structure evidence is required.
+
+configs/profile.example.yaml is a small kinase example. The built-in name e3
+loads the complete E3 profile.
+
+8.3 Evidence rules
+
+The evidence-rules YAML is separate from the profile and is validated against
+configs/evidence_rules.schema.json. configs/evidence_rules.example.yaml is
+paired with the kinase example profile.
+
+Each label rule declares:
+
+  rule_id
+  label_id
+  priority
+  annotation_patterns
+  specific_annotation_patterns
+  exclusion_patterns
+  required_domain_patterns
+  supporting_domain_patterns
+  allow_specific_annotation_only
+  propagate_by_orthology
+
+Global settings declare evidence scores, acceptance thresholds, the minimum
+number of independent evidence groups, the winning-score margin, structure
+requirements, HOG propagation policy and control-matching policy.
+
+Rules are scientific authorities. Change ruleset_version whenever a pattern,
+score, threshold, structure requirement or matching policy changes. Never tune
+rules silently after looking at the desired result.
+
+8.4 Generic protein metadata
+
+protein_metadata.tsv must contain:
+
+  protein_id
+  species
+  input_candidate
+
+It must cover every FASTA protein. input_candidate accepts only TRUE or FALSE.
+Several species values may use a pipe delimiter. Species is a control-matching
+covariate. input_candidate can prevent upstream candidates from entering the
+negative pool.
+
+8.5 External annotations
+
+external_annotations.tsv must contain:
+
+  protein_id
+  label_id
+  annotation_text
+  evidence_status
+  evidence_source
+  evidence_reference
+  annotation_scope
+
+label_id and annotation_text are individually optional, but the row must carry
+meaningful evidence. An exact label is trusted direct evidence only when its
+status is CURATED, EXPERIMENTAL, MANUALLY_REVIEWED or REVIEWED and its scope is
+DIRECT or EXACT_PROTEIN. Repeated records from one named source remain one
+evidence group.
+
+8.6 Seed assignments
+
+seed_assignments.tsv uses the standard complete label-assignment schema. Only
+REVIEWED_POSITIVE rows are direct anchors. A proposed seed is not upgraded by
+being placed in this file.
+
+8.7 E3 seed catalogue
+
+The existing e3_seed_catalogue.tsv can be supplied to the E3 route. Exact
+per-seed information and cluster-associated information remain separate.
+Cluster-associated annotation is weak context and cannot on its own turn every
+cluster member into an E3 subtype. The catalogue's annotation_scope and
+catalogue_source are retained.
+
+8.8 Domain assessments
+
+domains.tsv distinguishes:
+
+  ASSESSED_WITH_HIT
+  ASSESSED_NO_HIT
+  NOT_ASSESSED
+  FAILED
+
+A missing row is not assumed to mean no domain. Required domains corroborate a
+label but do not alone establish protein function.
+
+8.9 Structures
+
+structures.tsv records structure identifiers, coordinate paths, model source,
+model version, sequence agreement, confidence and analysis eligibility. The
+labeller uses structure only as an eligibility and matching covariate. It does
+not use the discovered Foldseek cluster or structural motif to define the
+target label that the same workflow later tests.
+
+8.10 OrthoFinder
+
+Supply one of:
+
+  * a published orthofinder-results resource; or
+  * a completed raw OrthoFinder 2.5.5 or 3 results directory.
+
+HOG mode normally uses hierarchy node N0. LEGACY_ORTHOGROUP mode must not have
+a hierarchy node. This package reads OrthoFinder outputs and never runs
+OrthoFinder.
+
+8.11 Optional redundancy clusters
+
+Near-redundancy membership can be supplied explicitly. These memberships are
+combined transitively with exact-sequence and OrthoFinder links. All members of
+one resulting block remain together for cohort and validation operations.
+
+
+9. AUTOMATED EVIDENCE-LABEL ALGORITHM
+-------------------------------------
+
+9.1 Input freezing
+
+The software resolves every input path, validates it, records its byte size and
+SHA-256 digest, and refuses to publish into an existing output directory. A
+staging directory is renamed into place only after every table and marker has
+been written.
+
+9.2 Protein evidence contexts
+
+For every FASTA protein, the labeller constructs one context containing:
+
+  * sequence length and exact-sequence identity;
+  * species and upstream-candidate state;
+  * explicit domain assessment and domain identifiers;
+  * structure availability, eligibility and mean confidence;
+  * direct label evidence;
+  * annotation text grouped by authority;
+  * OrthoFinder membership; and
+  * an independence-block identifier.
+
+Authorities that disagree on species or candidate state fail closed rather
+than being silently reconciled.
+
+9.3 Evidence scoring
+
+Each configured target rule is scored independently. Built-in E3 defaults are:
+
+  ordinary annotation match                  2.0
+  highly specific annotation match           4.0
+  required Pfam/domain support                2.0
+  supporting domain                           0.5
+  compatible unanimous HOG propagation        2.0
+  trusted exact positive label                5.0
+  normal acceptance threshold                 3.5
+  minimum independent evidence groups         2
+  minimum winning-score margin                1.0
+
+The values live in e3.yaml, not hidden Python constants. A domain alone cannot
+reach the threshold. Ordinary annotation plus its required domain normally can.
+The built-in E3 rules do not currently permit a specific annotation to stand
+alone.
+
+9.4 Evidence-group independence
+
+Scores are accumulated by named evidence group, not record count. Ten rows
+from the same annotation database cannot appear to be ten independent
+confirmations. The strongest contribution within the group is retained.
+
+9.5 Required domains and exclusions
+
+An accepted rule must satisfy its required-domain expressions. Exclusion
+patterns veto misleading text, such as terms that resemble a target class but
+describe a different architecture. Every matched item and veto remains in the
+audit table.
+
+9.6 Hierarchical resolution
+
+When a descendant and its ancestor both pass, the more specific descendant is
+selected. Non-ancestral alternatives are accepted only if there is no trusted
+direct conflict and the winner clears the configured score margin. Otherwise
+the protein becomes AMBIGUOUS.
+
+9.7 Abstention
+
+The route uses four decision states:
+
+  ACCEPTED
+    Required evidence, score, groups, hierarchy and structure policy passed.
+
+  PROPOSED
+    Some target-like evidence exists but is incomplete or below policy.
+
+  AMBIGUOUS
+    Incompatible alternatives cannot be resolved safely.
+
+  UNMAPPED
+    No configured target evidence was found.
+
+Only ACCEPTED targets and their selected controls receive
+EVIDENCE_SUPPORTED_POSITIVE. Proposed, ambiguous and unmapped records do not
+become training positives or controls.
+
+9.8 Conservative HOG propagation
+
+HOG propagation is optional and one generation deep. The recipient must:
+
+  * share the selected HOG with at least the configured number of accepted
+    anchors;
+  * have anchors that resolve unanimously to one compatible rule label or
+    ancestor;
+  * use a rule that explicitly enables propagation;
+  * contain the required domain architecture; and
+  * pass the structure policy.
+
+Propagated calls do not become recursive anchors during the same run. This
+prevents a weak chain of inferred records from expanding indefinitely.
+
+
+10. BACKGROUND-SELECTION DESIGN
+-------------------------------
+
+10.1 Why there is no universal housekeeping background
+
+One housekeeping family is not a neutral protein background. It carries its
+own conserved fold, length distribution, domain architecture, cellular role,
+taxonomic distribution and annotation completeness. Comparing every E3 class
+with one housekeeping family would make the housekeeping family's biology look
+like an E3 depletion and would make unrelated E3 properties appear enriched.
+
+The package therefore builds a clean candidate pool and constructs a matched
+background separately for each profile-resolved target comparison.
+
+10.2 Clean-control exclusions
+
+A protein is excluded from control candidacy when:
+
+  * any target rule accepted, proposed or ambiguously matched it;
+  * it shares an independence block with a target;
+  * it is an upstream input candidate and that exclusion is enabled; or
+  * it fails one or more matching calipers.
+
+This deliberately sacrifices sample size to reduce contamination.
+
+10.3 Unit of matching
+
+Matching occurs at the independence-block level. One deterministic
+representative is selected per block. Preference order is:
+
+  * eligible structure;
+  * higher available confidence;
+  * shorter sequence; and
+  * lexical protein identifier as the final tie-break.
+
+The same control block cannot be reused within one background selection.
+
+10.4 Default E3 matching variables
+
+The built-in E3 rules require:
+
+  * at least one shared species label;
+  * the same structure-eligibility state;
+  * absolute log2 length difference <= 0.75; and
+  * absolute domain-count difference <= 2.
+
+Among candidates inside all calipers, the deterministic distance combines
+length difference, domain-count difference, domain-architecture Jaccard
+dissimilarity and scaled mean-confidence difference.
+
+By default, the matcher requests three unused control blocks per target block
+and requires at least three matched independent control blocks for a populated
+background. If this cannot be achieved, the workflow fails rather than running
+an underpowered unmatched comparison silently.
+
+10.5 What matching does and does not solve
+
+Matching reduces obvious differences in taxon, size, domain complexity and
+structure availability. It does not guarantee exchangeability, eliminate all
+phylogenetic dependence or create a causal estimate. Inspect the matching audit
+and run sensitivity analyses with defensible alternative policies.
+
+
+11. CIRCULARITY PROTECTION
+--------------------------
+
+If PF00646 helps label a protein as F-box, testing PF00646 as a newly discovered
+confirmation of that same automated label would be circular. The package
+therefore writes every label-defining domain to
+label_definition_features.tsv and removes those accessions from the downstream
+confirmatory domain and ML feature authority.
+
+The exclusion scope is GLOBAL_CONFIRMATORY_DOMAIN_AND_ML within the campaign.
+This strict scope prevents a domain used for one automated class from being
+advertised as a novel signature of another class in the same run. The original
+unfiltered domain input remains checksummed for audit.
+
+The filtered output is domains.for_signature_analysis.tsv. Assessment coverage
+is retained after feature removal so that removed hits do not turn into silent
+missingness.
+
+This safeguard removes direct feature reuse. It cannot remove every indirect
+relationship between annotations, phylogeny, domains and structure. Results
+remain provisional until independent review and validation.
+
+
+12. E3 DEFAULT COVERAGE
+-----------------------
+
+The built-in E3 profile defines 73 default comparisons. The automated ruleset
+contains 67 inferable labels. Six catch-all labels ending in other_reviewed are
+deliberately not inferred by patterns; they can be populated only by trusted
+direct assignments.
+
+The profile includes:
+
+  * RING parent and RING-H2, HC, HCa, HCb, C2, D, G, S/T, v, TRIM-like and
+    MARCH subclasses;
+  * U-box, plant PUB/ARM, CHIP-like and UFD2/E4-like subclasses;
+  * HECT, plant UPL, NEDD4, HERC, UBE3, HECTD and HUWE-like subclasses;
+  * RBR, Ariadne, Parkin, HOIP and HHARI subclasses;
+  * RING-Cys-relay and MYCBP2-like proteins;
+  * RNF213 RZ-finger proteins;
+  * CRL RBX catalytic components and Elongin B-C adaptors;
+  * CRL1/SCF CUL1, SKP1 and F-box receptor classes;
+  * F-box Kelch, LRR, WD40, FBA, Tubby and reviewed-other receptor subclasses;
+  * CRL2 CUL2 and VHL-box classes;
+  * CRL3 CUL3, BTB, BTB-BACK-Kelch and MATH-BTB classes;
+  * CRL4 CUL4, DDB1 and DCAF classes;
+  * CRL5 CUL5 and SOCS-box classes;
+  * CRL7 CUL7 and FBXW8 classes;
+  * CUL9/PARC;
+  * APC/C APC2, APC11 and coactivator receptors;
+  * SUMO SIZ/PIAS, NSE2/MMS21, RanBP2 and ZNF451 classes;
+  * NEDD8 RBX and DCN1 classes; and
+  * UFM1 UFL1, UFBP1 and CDK5RAP3 components.
+
+Component roles remain separate from mechanistic class. An F-box protein is a
+substrate receptor in an SCF complex, not an independently catalytic E3 enzyme.
+CUL1 is a scaffold, SKP1 is an adaptor and RBX is a RING catalytic component.
+The output preserves these distinctions.
+
+
+13. STRUCTURAL ANALYSIS
+-----------------------
+
+13.1 Structure sources
+
+The pipeline accepts an existing structures.tsv, a completed predecessor
+structural-alignment resource, or a mapping of protein identifiers to AlphaFold
+Database accessions. Existing models are reused when their coordinate and
+sequence authorities validate. Requested AlphaFold acquisitions record every
+success and failure rather than dropping missing models.
+
+13.2 Confidence policy
+
+The current completed-E3 adapter uses minimum mean pLDDT 50 for Foldseek
+eligibility. This is a coarse full-model screen. Mean pLDDT does not guarantee
+that every domain, interface or relative domain orientation is correct.
+Residue-level confidence and PAE should be considered when interpreting a
+specific motif or inter-domain arrangement.
+
+13.3 Foldseek
+
+Foldseek compares eligible coordinate models and provides pairwise structural
+similarity evidence. The package invokes it through a safe argument list,
+records the executable/version/cache identity and checks numeric bounds.
+Pairwise edges must satisfy both the configured TM-score and coverage
+thresholds before structural clusters are formed.
+
+Default campaign thresholds are:
+
+  structural TM score >= 0.50
+  structural coverage >= 0.50
+  Foldseek E-value <= 0.001
+  Foldseek sensitivity 9.5
+
+These are analysis settings, not universal definitions of fold identity.
+
+13.4 Discovery and validation
+
+Structural components are defined from discovery data. Held-out structures are
+then projected onto those frozen components. This separation avoids deriving a
+structural motif from all proteins and claiming the same proteins as an
+independent validation.
+
+13.5 Imported structural resource
+
+The completed-E3 bridge verifies the Stage 09b manifest and its checksummed
+datasets. Imported summaries remain distinct from structures generated inside
+the new package. The provenance table records which authority supplied each
+structural result.
+
+13.6 Interpreting a structural signature
+
+A target-enriched structural cluster means that the cluster is more prevalent
+among assessed independent target blocks than assessed matched-background
+blocks under the configured thresholds. It does not automatically identify a
+minimal causal fold, active site, binding pocket or ligandable surface. Review
+representative alignments, coverage, confidence, domain boundaries and
+taxonomic breadth before assigning biological meaning.
+
+
+14. SEQUENCE AND DOMAIN FEATURES
+--------------------------------
+
+The production-safe default discovers tripeptide presence features. A k-mer is
+counted at protein level as present or absent, rather than allowing repeated
+copies in one protein to dominate. Four-residue features can be enabled but
+greatly increase the hypothesis space and compute requirement.
+
+Domain features retain coordinates and explicit assessment states. Domain
+sequences are extracted with the original coordinate mapping. Imported generic
+features are accepted only through the fixed schema and retain their evidence
+source and assessment authority.
+
+Feature derivation provenance distinguishes discovery-defined features from
+features derived using all data. An all-data-derived feature can be shown as
+exploratory but cannot be promoted as held-out confirmation.
+
+
+15. INDEPENDENCE BLOCKS AND DATA SPLITTING
+------------------------------------------
+
+Proteins are connected when they share a relevant OrthoFinder group, an exact
+sequence, or a supplied near-redundancy cluster. Connected components become
+indivisible independence blocks.
+
+A stable hash of the block identifier and random seed assigns the entire block
+to DISCOVERY or VALIDATION. The default validation fraction is 0.20. No member
+of a block can appear in both partitions.
+
+Association tests operate on blocks, not raw duplicated proteins. A block is
+feature-positive when any relevant member has the feature. It is feature-
+negative only when every relevant member was assessed and none was positive.
+A partially assessed no-hit block is unknown and does not enter that feature's
+denominator.
+
+Blocks containing both target and background labels are excluded from the
+corresponding comparison and counted explicitly. They are not forced into one
+class.
+
+
+16. ASSOCIATION STATISTICS
+--------------------------
+
+16.1 Contingency table
+
+For one feature, partition and comparison, the package forms:
+
+                       Feature present    Feature absent
+  Target blocks                a                 b
+  Background blocks            c                 d
+
+Only assessed independent blocks enter a, b, c and d. Raw protein counts and
+unknown block counts are also retained for transparency.
+
+16.2 Prevalence and effect direction
+
+Target prevalence is a / (a + b).
+Background prevalence is c / (c + d).
+Prevalence difference is target prevalence minus background prevalence.
+
+A positive difference is TARGET_ENRICHED. A negative difference is
+BACKGROUND_ENRICHED. Zero is NO_DIFFERENCE.
+
+The sample odds ratio is (a*d)/(b*c) when defined. Infinite or undefined values
+are represented explicitly rather than clipped into a misleading finite value.
+
+16.3 Fisher exact test
+
+The package implements a two-sided fixed-margin Fisher exact test using
+hypergeometric table probabilities. The p-value sums all feasible tables whose
+probability is no greater than the observed table probability, with a small
+floating-point comparison tolerance.
+
+The p-value measures compatibility with the null model. It is not the
+probability that the biological hypothesis is false. A small p-value does not
+measure effect size and a large p-value does not prove equivalence.
+
+16.4 Wilson intervals
+
+Target and background prevalence each receive a 95% Wilson score interval.
+Wilson intervals behave better than the simple Wald interval near zero or one
+and with modest denominators. The intervals quantify uncertainty in each
+observed block prevalence; they are not confidence intervals for the
+prevalence difference.
+
+16.5 Local false-discovery correction
+
+Within each comparison and partition, Benjamini-Hochberg correction is applied
+separately by feature_type. This prevents a very large k-mer family from using
+the entire multiplicity budget of a smaller prespecified domain or structural
+family. The resulting field is q_value.
+
+16.6 Study-wide false-discovery correction
+
+A second Benjamini-Hochberg correction spans all configured comparisons within
+each partition and feature_type. The resulting field is study_q_value.
+
+At threshold 0.05, a q-value is interpreted as an FDR-controlled decision under
+the assumptions of the procedure and the declared family of tests. It does not
+mean that a particular row has a 5% probability of being false.
+
+16.7 Discovery and validation
+
+All eligible discovery features are tested. Only discovery features with local
+q_value <= the configured threshold and non-zero prevalence difference become
+frozen validation candidates. The validation partition is never consulted when
+choosing those candidates.
+
+Validation tests use the same feature identity and check direction as well as
+local and study-wide q-values.
+
+16.8 Evidence classes
+
+DECISION_CANDIDATE__*
+  Discovery passes study-wide FDR for a biological feature.
+
+EXPLORATORY_LOCAL_ONLY__*
+  Discovery passes local but not study-wide FDR.
+
+EXPLORATORY_ALL_DATA_DERIVATION__*
+  The feature definition used all campaign data and cannot be confirmatory.
+
+QC_TECHNICAL_NON_BIOLOGICAL__*
+  The feature describes technical availability or quality, not a biological
+  signature.
+
+Validation suffixes are:
+
+  VALIDATED_STUDY_WIDE
+  VALIDATED_WITHIN_COMPARISON
+  DISCOVERY_ONLY
+  DIRECTION_DISCORDANT
+  NO_VALIDATION_DATA
+
+NO_DISCOVERY_SIGNATURE means eligible tests completed but none passed local
+FDR. NO_ELIGIBLE_FEATURES or INSUFFICIENT_SAMPLE_SIZE means the test was not
+completed. These outcomes must not be conflated.
+
+
+17. EXPLAINABLE MACHINE LEARNING AND SHAP
+-----------------------------------------
+
+17.1 Role of the model
+
+The ML layer is complementary to association testing. It asks whether a
+combination of features predicts the configured target/background label. It
+does not replace the feature-wise Fisher tests and does not prove mechanism.
+
+17.2 Feature selection
+
+Technical feature types are excluded by default. Label-defining automated
+domains are excluded earlier by the evidence bundle. Remaining non-constant
+features are ranked without consulting class labels, using discovery document
+frequency. A round-robin selection across feature types prevents abundant
+k-mers from crowding out every domain or structural feature. The default cap is
+500 features.
+
+17.3 Fit and cross-validation
+
+The model is elastic-net logistic regression. Default l1_ratio is 0.20 and
+candidate regularisation strengths are 0.01, 0.1 and 1.0. Selection uses
+StratifiedGroupKFold on discovery data. Every independence block stays within
+one fold.
+
+Protein rows receive inverse-block-size weights so a large duplicated block
+does not dominate. Weights are then balanced between target and background
+classes. Mixed-class blocks are excluded.
+
+The final model is fitted only on discovery data. If the required samples,
+independent groups, variable features or valid folds do not exist, the package
+publishes a controlled non-fitted status instead of inventing a model.
+
+17.4 Held-out metrics
+
+When validation has adequate pure blocks in both classes, the package reports:
+
+  ROC AUC
+  average precision
+  balanced accuracy at probability 0.5
+  Matthews correlation coefficient
+  Brier score
+  held-out permutation importance
+
+If validation is missing or underpowered, predictions and SHAP may still be
+descriptive, but held-out performance claims are withheld and the model status
+says why.
+
+17.5 SHAP execution
+
+SHAP runs for every fitted model. It is not optional in a valid campaign.
+The implementation uses an interventional linear explainer with a discovery-
+data background and reports additive contributions in log-odds space.
+
+Outputs include:
+
+  * a numeric ml_explanations table;
+  * a global beeswarm plot;
+  * a global bar plot;
+  * deterministic per-protein waterfall plots;
+  * PNG, SVG and PDF forms; and
+  * an ml_plot_inventory table with exact scope and checksums.
+
+17.6 SHAP interpretation
+
+A positive SHAP contribution moves the fitted model toward the target class
+relative to its expected log odds. A negative contribution moves it toward the
+background. Magnitude describes contribution for this fitted model and this
+sample. It does not measure biochemical importance.
+
+Correlated features can divide or redistribute attribution. Read a correlated
+feature set together, compare with prevalence and held-out permutation
+importance, and return to the raw protein/domain/structure evidence. Never
+describe a SHAP value as a causal effect.
+
+
+18. EVIDENCE-BUNDLE OUTPUTS
+---------------------------
+
+Every evidence table is written as TSV and formatted XLSX:
+
+  label_assignments
+    Complete downstream assignment authority for every FASTA protein.
+
+  label_evidence_audit
+    Every rule candidate, evidence item, score, group, decision and reason.
+
+  control_matching_audit
+    Target block, candidate block, covariates, distance and match status.
+
+  label_definition_features
+    Features removed from confirmatory association and ML analysis.
+
+  class_labelling_summary
+    Per-class target and matched-control coverage.
+
+  unresolved_assignments
+    Proposed and ambiguous records requiring review.
+
+  domains.for_signature_analysis
+    Circularity-safe domain authority when domain input was supplied.
+
+EVIDENCE_LABELS.json records:
+
+  * package, profile and ruleset versions;
+  * every policy setting;
+  * target, control, class and unresolved counts;
+  * each input path, byte size and SHA-256;
+  * each output path, byte size and SHA-256;
+  * the exact label and safe-domain authorities; and
+  * the explicit provisional interpretation scope.
+
+Verification recalculates all sizes and hashes. Editing a published audit or an
+original input invalidates computational verification.
+
+
+19. COMPLETE RESULT LAYOUT
+--------------------------
+
+  result/
+    COMPLETED.json
+    manifest.json
+    run_metadata.json
+    protein_signatures.duckdb
+    tables/
+      every canonical table as TSV and typed Parquet
+    assets/structures/
+      portable coordinate assets where supplied
+    analysis/
+      00_run_information/
+      01_proteins_and_curation/
+      02_homology_and_partitions/
+      03_sequence_and_domains/
+      04_structures_and_folds/
+      05_association_statistics/
+      06_explainable_models/
+      99_final_results/
+
+Every human-facing table in the numbered hierarchy has:
+
+  * UTF-8 TSV;
+  * formatted and filterable XLSX;
+  * frozen header rows;
+  * bounded column widths;
+  * numeric/status formatting; and
+  * deterministic worksheet splitting for Excel row limits.
+
+Static scientific figures are written as PNG, SVG and PDF. The user-requested
+PDF form is therefore always available for a successfully rendered plot. The
+app exposes table downloads as TSV and XLSX and plot downloads as PDF.
+
+The machine authorities are tables/*.parquet and protein_signatures.duckdb.
+The app opens the DuckDB database read-only after verifying the result marker
+and manifest.
+
+
+20. SNAKEMAKE AND SLURM DESIGN
+------------------------------
+
+20.1 Generic normal-label DAG
+
+workflow/Snakefile validates a campaign, runs the atomic analysis and verifies
+the published result.
+
+20.2 Generic evidence-led DAG
+
+workflow/EvidenceSnakefile:
+
+  1. creates and verifies the evidence label bundle;
+  2. stops there by default;
+  3. requires explicit provisional acceptance for campaign initialisation;
+  4. invokes the normal analysis DAG; and
+  5. independently verifies the final result.
+
+This route works for any profile/rules pair, not only E3.
+
+20.3 Completed-E3 DAG
+
+workflow/E3Snakefile owns:
+
+  1. preparation/verification of predecessor inputs;
+  2. evidence proposal or review staging;
+  3. mode-specific checksum-bound approval;
+  4. campaign initialisation;
+  5. atomic analysis; and
+  6. final verification.
+
+It supports human review, synthetic smoke testing and provisional evidence-led
+execution.
+
+20.4 Outer Slurm job
+
+The shell launcher submits one bounded Slurm job with requested CPUs, memory
+and time. Snakemake then runs the DAG inside that allocation using the local
+profile. The launcher unsets inherited SLURM_CPUS_PER_TASK before sbatch and
+exports PROTEIN_SIGNATURE_REQUESTED_CPUS to prevent an interactive allocation
+from changing the requested CPU contract.
+
+On this cluster, both account and partition must be barton.
+
+20.5 Restart behaviour
+
+Snakemake owns its state under WORK_DIR/workflow_state. Published bundles and
+results are immutable. --resume is appropriate only when the exact config and
+input checksums still agree. Do not delete markers to force incompatible data
+through an old campaign. Use a new versioned work directory for changed inputs
+or scientific rules.
+
+
+21. CURRENT SMOKE TEST
+----------------------
+
+The active smoke-test command was:
+
+  RUN_ROOT="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/e3_end_to_end_runs/grant_aligned_corrected_expression_structural_all1972_v0_16_0_20260909"
+
+  SIGNATURE_TEST_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/protein_signature_runs/e3_all1972_automated_smoke_test_v0_1_0_20260915"
+
+  ./run_completed_e3_workflow.sh \
+    --phase all \
+    --run-root "${RUN_ROOT}" \
+    --work-dir "${SIGNATURE_TEST_WORK}" \
+    --campaign-id "e3_all1972_automated_smoke_test_20260915" \
+    --automated-test-labels \
+    --test-target-label ALL \
+    --test-samples-per-class 20 \
+    --minimum-mean-plddt 50 \
+    --submit-slurm \
+    --slurm-account barton \
+    --slurm-partition barton \
+    --slurm-memory 128G \
+    --slurm-time 2-00:00:00 \
+    --threads 24
+
+This checks software breadth across all default comparisons. It does not test
+whether the automated biological labels are correct and must not be used as a
+scientific result.
+
+
+22. FULL UNATTENDED E3 EVIDENCE RUN
+-----------------------------------
+
+Use a new work directory. Do not reuse the smoke-test directory or the earlier
+manual-review directory.
+
+Recommended command without an external seed catalogue:
+
+  RUN_ROOT="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/e3_end_to_end_runs/grant_aligned_corrected_expression_structural_all1972_v0_16_0_20260909"
+
+  SIGNATURE_PRODUCTION_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/protein_signature_runs/e3_all1972_evidence_provisional_v0_1_0_20260915"
+
+  ./run_completed_e3_workflow.sh \
+    --phase all \
+    --run-root "${RUN_ROOT}" \
+    --work-dir "${SIGNATURE_PRODUCTION_WORK}" \
+    --campaign-id "e3_all1972_evidence_provisional_20260915" \
+    --evidence-led-labels \
+    --accept-provisional-evidence-labels \
+    --evidence-rules e3 \
+    --minimum-mean-plddt 50 \
+    --submit-slurm \
+    --slurm-account barton \
+    --slurm-partition barton \
+    --slurm-memory 128G \
+    --slurm-time 2-00:00:00 \
+    --threads 24
+
+To add the E3 seed catalogue, first place it on persistent cluster storage and
+add one exact argument:
+
+    --seed-catalogue "${E3_SEED_CATALOGUE}"
+
+To add directly reviewed seed assignments, add:
+
+    --seed-assignments "${REVIEWED_SEED_ASSIGNMENTS}"
+
+To add an independent annotation export, add:
+
+    --external-annotations "${EXTERNAL_ANNOTATIONS}"
+
+Do not point these arguments at a temporary upload directory. Record the exact
+files beside the campaign or in another immutable project input directory.
+
+For the safest first biological execution, omit
+--accept-provisional-evidence-labels. The DAG will publish and verify only the
+evidence bundle. Inspect class_labelling_summary, unresolved_assignments,
+label_evidence_audit and control_matching_audit. Then rerun the identical
+command with the acceptance flag. For a deliberate unattended pilot, the
+command above includes the flag from the start.
+
+
+23. GENERIC UNATTENDED EVIDENCE RUN
+-----------------------------------
+
+The generic launcher requires a FASTA, a profile and an evidence ruleset. A
+real production campaign should also provide metadata, domains, structures and
+independent annotations.
+
+  ./run_evidence_signature_workflow.sh \
+    --work-dir /absolute/persistent/protein_signature_campaign \
+    --campaign-id my_protein_type_provisional_20260915 \
+    --sequences-fasta /absolute/inputs/proteins.faa \
+    --profile /absolute/inputs/profile.yaml \
+    --evidence-rules /absolute/inputs/evidence_rules.yaml \
+    --protein-metadata /absolute/inputs/protein_metadata.tsv \
+    --domains /absolute/inputs/domains.tsv \
+    --structures /absolute/inputs/structures.tsv \
+    --external-annotations /absolute/inputs/external_annotations.tsv \
+    --orthofinder-results /absolute/completed_orthofinder/Results \
+    --accept-provisional-evidence-labels \
+    --submit-slurm \
+    --slurm-account barton \
+    --slurm-partition barton \
+    --slurm-memory 128G \
+    --slurm-time 2-00:00:00 \
+    --threads 24
+
+For LEGACY_ORTHOGROUP input, use:
+
+    --orthofinder-group-type LEGACY_ORTHOGROUP
+
+and do not supply --orthofinder-hierarchy-node. HOG mode defaults to N0.
+
+The launcher propagates --skip-environment-sync into the submitted worker when
+explicitly requested. Use that flag only when the named Conda environment has
+already been created and contains the exact required tools.
+
+
+24. MONITORING AND COMPLETION CHECKS
+------------------------------------
+
+After Slurm submission:
+
+  squeue --job JOB_ID
+
+  tail -f "${WORK_DIR}/slurm_logs/protein_signature_evidence_JOB_ID.err"
+
+  tail -f "${WORK_DIR}/slurm_logs/protein_signature_evidence_JOB_ID.out"
+
+After a job leaves the queue:
+
+  sacct -j JOB_ID \
+    --format=JobID,State,Elapsed,AllocCPUS,MaxRSS,ReqMem,ExitCode
+
+For resource sampling during a run:
+
+  sstat -j JOB_ID.batch --format=JobID,MaxRSS,AveRSS,MaxVMSize
+
+Do not infer success because a directory exists. Require:
+
+  WORK_DIR/result/COMPLETED.json
+  WORK_DIR/result/manifest.json
+  WORK_DIR/workflow_state/... final verification marker
+
+The launcher prints the exact result path when the final verification succeeds.
+
+
+25. FIRST FILES TO REVIEW AFTER A REAL RUN
+------------------------------------------
+
+Begin with:
+
+  result/analysis/00_run_information/report_inventory.tsv
+  result/analysis/99_final_results/tables/class_labelling_summary.tsv
+  result/analysis/99_final_results/tables/unresolved_assignments.tsv
+  result/analysis/99_final_results/tables/control_matching_audit.tsv
+  result/analysis/99_final_results/tables/signatures.tsv
+  result/analysis/99_final_results/tables/associations.tsv
+  result/analysis/99_final_results/tables/ml_models.tsv
+  result/analysis/99_final_results/tables/ml_feature_importance.tsv
+  result/analysis/99_final_results/tables/ml_plot_inventory.tsv
+
+Then inspect:
+
+  * label counts by E3 subtype and component role;
+  * how many independent target and control blocks exist;
+  * classes that failed control construction;
+  * near-threshold and ambiguous assignments;
+  * all HOG-propagated assignments and their anchors;
+  * features removed for circularity;
+  * target/background species and structure-availability balance;
+  * discovery study_q_value and validation evidence class;
+  * model status before reading SHAP; and
+  * representative structures/alignment coverage before naming a fold.
+
+
+26. APPLICATION
+---------------
+
+Start the app against a completed result:
+
+  ./run_protein_signature_app.sh \
+    --resource "${SIGNATURE_PRODUCTION_WORK}/result"
+
+The app is a presentation layer. It verifies the result and opens DuckDB in
+read-only mode. It does not relabel proteins, rerun Foldseek or calculate new
+p-values. All tables displayed in the app have complete TSV and formatted XLSX
+downloads. All manifested plots have PDF downloads.
+
+The file-first result remains the scientific authority. The app is useful for
+interactive interrogation and presentation, but no conclusion requires it.
+
+
+27. DEFENSIVE AND PRODUCTION-QUALITY FEATURES
+---------------------------------------------
+
+Implemented safeguards include:
+
+  * named CLI arguments;
+  * safe identifier validation;
+  * strict required columns and controlled statuses;
+  * Google-style public docstrings;
+  * standard logging with selectable levels;
+  * explicit missing and failure states;
+  * safe subprocess argument arrays;
+  * HTTPS/domain restrictions for AlphaFold acquisition;
+  * streaming projected Parquet reads for the large E3 bridge;
+  * no silent rewrite of original inputs;
+  * output staging followed by atomic rename;
+  * immutable bundle/result destinations;
+  * SHA-256 and byte-size inventories;
+  * fixed Arrow schemas;
+  * safe DuckDB relation and column allowlists;
+  * formula-injection-safe Excel/TSV export;
+  * group-aware leakage protection;
+  * explicit underpowered/non-fitted states;
+  * bounded plots and app previews;
+  * Slurm resource and path validation; and
+  * refusal to use broad or unsafe work directories.
+
+
+28. QUALITY ASSURANCE COMPLETED FOR THIS HANDOVER
+-------------------------------------------------
+
+The user requested targeted validation only, not the full suite. That request
+was followed.
+
+Focused evidence and approval tests completed:
+
+  tests/test_evidence_labels.py
+  tests/test_e3_workflow_bridge.py::
+    test_evidence_led_approval_is_provisional_checksum_bound_and_verifiable
+
+Result:
+
+  6 passed
+
+Focused repository/packaging contract tests completed:
+
+  test_release_versions_and_launcher_modes_are_consistent
+  test_source_distribution_manifest_excludes_generated_and_sensitive_files
+  test_snakemake_workflow_profiles_and_environment_are_consistent
+
+Result:
+
+  3 passed
+
+Additional targeted checks completed:
+
+  * Python byte-compilation of the modified core and test modules;
+  * Bash syntax validation of both evidence/E3 launchers;
+  * Ruff validation of modified Python modules and focused tests;
+  * JSON Schema validation of configs/evidence_rules.example.yaml;
+  * generic evidence-only Snakemake dry run;
+  * generic accepted full-workflow Snakemake dry run;
+  * generic legacy-orthogroup Snakemake dry run; and
+  * accepted completed-E3 evidence Snakemake dry run.
+
+Earlier user-side tests established that the Streamlit all-page UI test passed
+after its timeout correction. The complete suite has not been rerun for this
+handover, by explicit request. Run it on the Mac or CI before tagging a release.
+
+
+29. KNOWN WARNINGS AND LIMITATIONS
+---------------------------------
+
+29.1 Provisional labels
+
+Automated labels are hypotheses. Rules can inherit annotation errors,
+taxonomic bias and incomplete Pfam coverage. The marker therefore keeps
+scientific_interpretation_allowed FALSE.
+
+29.2 Catch-all E3 classes
+
+Six other_reviewed E3 targets have no automatic rule. They require a trusted
+direct assignment. Empty output for these classes is expected in a purely
+pattern-driven run.
+
+29.3 Control availability
+
+Strict matching can fail for rare taxa, unusual lengths, complex domain
+architectures or classes whose structure coverage differs from the pool.
+Failure is preferable to an undisclosed unmatched comparison. A policy change
+requires a new ruleset version and sensitivity analysis.
+
+29.4 Residual dependence
+
+OrthoFinder and redundancy blocks reduce leakage but cannot guarantee that all
+evolutionary dependence is captured. Closely related unlinked proteins may
+remain.
+
+29.5 Structural uncertainty
+
+Mean pLDDT is a coarse filter. Flexible regions and domain orientations can be
+wrong. Foldseek similarity depends on thresholds and coverage. Structural
+association does not imply a binding pocket or biochemical activity.
+
+29.6 Multiple testing
+
+Local and study-wide FDR are both provided. Correlated hypotheses and adaptive
+post-hoc interpretation still demand caution. Pre-specify comparisons and use
+validation evidence.
+
+29.7 SHAP
+
+SHAP explains the fitted classifier. Correlated features can share attribution,
+and a strong contribution is not a causal effect. Read SHAP only after model
+status and held-out performance.
+
+29.8 Original input availability
+
+The portable result can be opened without original inputs. Computational resume
+and evidence-bundle verification intentionally require the original recorded
+authorities to remain byte-identical at their paths.
+
+29.9 Mac flock warning
+
+The Slurm controller requires the Linux flock utility. A test that invokes the
+worker directly on macOS must supply a fixture implementation or be skipped as
+Linux-specific. This does not affect execution on the Linux Slurm cluster.
+
+29.10 Streamlit/SHAP import time
+
+The comprehensive UI test can be slow because SHAP/Matplotlib and PDF rendering
+initialise browser/plotting resources. Targeted UI validation has passed, but a
+full local suite can take many minutes.
+
+
+30. RELEASE AND GITHUB HAND-OFF
+-------------------------------
+
+The repository was prepared in the shared development workspace. The user has
+requested a downloadable full-repository archive and will copy it over the Mac
+working tree, inspect it, commit it and push it.
+
+Recommended Mac sequence after extracting the delivered archive into a safe
+temporary directory:
+
+  cd /Users/PThorpe001/github_repos/protein-signature-analysis
+  git status --short
+
+Copy the archive contents while preserving the existing .git directory. Do not
+replace .git. Then:
+
+  git status --short
+  conda activate protein_signature_analysis
+  python -m pip install --no-deps --force-reinstall --editable '.[app,dev,workflow]'
+
+Run the desired targeted tests first. Before a tagged release, run:
+
+  ./run_tests.sh
+
+Review changes and commit:
+
+  git add --all
+  git status --short
+  git commit -m "Add evidence-led protein signature workflow"
+  git push --set-upstream origin feature/protein-signature-analysis-v0.1.0
+
+Open a pull request or merge according to the repository policy. Do not push a
+generated result directory, AlphaFold/Foldseek cache, Conda environment,
+.venv, test cache, coverage database or local secret file.
+
+
+31. WHAT TO DO WHEN THE SMOKE TEST FINISHES
+-------------------------------------------
+
+1. Confirm the Slurm state and exit code with sacct.
+2. Confirm result/COMPLETED.json and the final verification marker exist.
+3. Open the smoke result only to check route coverage, file creation, app
+   rendering and controlled non-fitted/underpowered states.
+4. Do not use its signature or SHAP values biologically.
+5. Install the delivered repository update on the cluster.
+6. Choose a new work directory for the evidence-led provisional run.
+7. Decide whether to supply the persistent E3 seed catalogue, direct reviewed
+   seed assignments and/or an independent annotation export.
+8. Submit the command in section 22.
+9. Review the evidence audit bundle and final result with the checklist in
+   sections 25 and 33.
+10. If labels are later manually reviewed, publish a new assignment authority
+    and run a separate human-reviewed campaign rather than editing the
+    provisional bundle.
+
+
+32. SCIENTIFIC SENSITIVITY ANALYSES RECOMMENDED AFTER THE FIRST RUN
+-----------------------------------------------------------------
+
+At minimum compare:
+
+  * evidence rules with and without weak cluster-associated catalogue text;
+  * direct curated seed anchors versus no direct anchors;
+  * structure-required versus a clearly named sequence/domain-only analysis;
+  * pLDDT eligibility thresholds such as 50 and 70;
+  * alternative structural TM-score and coverage thresholds;
+  * default three-controls-per-target matching versus another prespecified
+    ratio where the pool permits;
+  * strict species matching versus a defensible taxonomic-stratum match;
+  * tripeptide features alone versus an explicitly budgeted addition of
+    four-residue features;
+  * HOG propagation enabled versus disabled; and
+  * results at local and study-wide FDR thresholds without moving thresholds
+    in response to desired genes.
+
+Each sensitivity run needs a new campaign ID, work directory and versioned
+configuration. Compare concordance of direction, effect size, held-out class
+and representative structures, not only the number of q-values below 0.05.
+
+
+33. RESULT-INTERPRETATION CHECKLIST
+----------------------------------
+
+Before calling a feature an associated signature, confirm:
+
+  [ ] The target label is appropriate for the stated mechanistic class and
+      component role.
+  [ ] The label is human reviewed or explicitly described as provisional.
+  [ ] The background is the profile-defined matched class, not a generic
+      housekeeping family.
+  [ ] Target and background have adequate independent assessed blocks.
+  [ ] Unknown assessments are not being read as feature absence.
+  [ ] The feature was not used to create the automated label.
+  [ ] The discovery q_value passes the stated threshold.
+  [ ] The study_q_value and evidence-class prefix are reported.
+  [ ] Validation direction is concordant.
+  [ ] Validation status and q-values are reported honestly.
+  [ ] Effect size and prevalence intervals are shown with the p/q-values.
+  [ ] Structural coverage, TM score, pLDDT and representative alignment are
+      scientifically plausible.
+  [ ] SHAP is read as a model explanation, not a biochemical mechanism.
+  [ ] Correlated features and taxonomic breadth have been inspected.
+  [ ] Any conclusion stays within association/hypothesis-generation language.
+
+
+34. SAFE REPORTING LANGUAGE
+---------------------------
+
+Safe provisional statement:
+
+  "Under the versioned evidence rules and matched-background policy, this
+  feature was enriched among provisionally labelled F-box receptor independence
+  blocks in discovery and retained the same direction in held-out blocks. The
+  result is a computational hypothesis and requires label and experimental
+  review."
+
+Safe model statement:
+
+  "The fitted elastic-net model used this feature as a positive contributor for
+  the selected protein. SHAP describes the model's log-odds allocation and does
+  not establish a causal role."
+
+Unsafe statements to avoid:
+
+  "This motif proves the protein is an E3."
+  "SHAP identified the catalytic residue."
+  "No Pfam row means the protein lacks the domain."
+  "pLDDT 50 means the whole structure is accurate."
+  "q < 0.05 means there is a 95% chance the finding is true."
+  "The F-box receptor itself is the catalytic E3 enzyme."
+
+
+35. DEVELOPER CONTINUATION NOTES
+--------------------------------
+
+The main new implementation is src/protein_signatures/evidence_labels.py. Keep
+the following invariants if it is extended:
+
+  * profile vocabulary and evidence rules remain separate;
+  * direct labels require explicit trusted status and scope;
+  * record count never substitutes for independent evidence groups;
+  * ordinary annotation or Pfam alone does not establish a normal target;
+  * HOG propagation remains non-recursive within a run;
+  * structural outcomes never enter label creation;
+  * target/control and discovery/validation separation occur at independence-
+    block level;
+  * proposed and ambiguous proteins cannot become controls;
+  * matching never looks at sequence, domain or structural outcome signatures;
+  * label-defining features are excluded from confirmatory/ML inputs;
+  * all outputs have complete schemas even when empty;
+  * all bundle inputs and outputs remain checksum-bound;
+  * provisional acceptance remains explicit; and
+  * automated results are never represented as human reviewed.
+
+When adding a new protein type:
+
+  1. Create a profile with a stable profile_id and profile_version.
+  2. Define component roles and control labels explicitly.
+  3. Predeclare default comparisons.
+  4. Create an evidence ruleset with matching profile_id.
+  5. Validate it against evidence_rules.schema.json.
+  6. Identify which features define labels and must be excluded later.
+  7. Supply a broad candidate pool capable of producing matched controls.
+  8. Test exact, weak, conflicting and missing evidence cases.
+  9. Test HOG and no-HOG execution.
+ 10. Run an evidence-bundle-only campaign before accepting a full run.
+
+
+36. FINAL HANDOVER POSITION
+---------------------------
+
+The code now supports the requested generic, structure-centred,
+statistics-aware and explainable protein-signature workflow. E3 is the default
+scientific profile, and all 73 E3 comparisons are declared, including the
+F-box parent and F-box receptor subclasses. Sixty-seven classes have automated
+evidence rules; six reviewed-other catch-alls require direct trusted evidence.
+
+The smoke-test route remains available for execution QA. The new evidence-led
+route can run from start to finish without manual label editing when the user
+explicitly accepts provisional status. It produces complete label, control,
+circularity, statistical, structural, model and SHAP audits. A separate generic
+EvidenceSnakefile and launcher make the same route available to non-E3 protein
+projects.
+
+The repository is ready to package, transfer to the Mac working copy, run the
+user-selected test suite, commit and push. The first full evidence-led E3 result
+should remain named provisional until the label and sensitivity reviews above
+are complete.
+
+END OF HANDOVER
+===============

@@ -1,4 +1,4 @@
-"""Completed-E3 adapter workflow with reviewed and isolated smoke-test routes.
+"""Completed-E3 adapter workflow with human, evidence-led and smoke-test routes.
 
 This DAG consumes, but never modifies, the completed predecessor.  It stages an
 editable review authority outside the immutable preparation bundle, then stops
@@ -7,15 +7,26 @@ approval is present, the remaining campaign can run unattended to independent
 post-publication verification.  An explicitly requested automated test route
 creates conspicuously synthetic labels and approval authorities for software
 testing only; those outputs are never scientifically interpretable.
+The evidence-led route generates abstention-aware provisional labels, matched
+controls and circularity-exclusion ledgers. It can continue unattended only
+after the launcher receives an explicit provisional-evidence acceptance flag.
 """
 
+import shlex
 from pathlib import Path
+
+
+def setting_text(name, default=""):
+    """Return one trimmed setting while treating YAML null as empty."""
+
+    value = config.get(name, default)
+    return "" if value is None else str(value).strip()
 
 
 def required_path(name):
     """Resolve one required absolute path supplied through Snakemake config."""
 
-    value = str(config.get(name, "")).strip()
+    value = setting_text(name)
     if not value:
         raise ValueError(f"{name} must be supplied through --config.")
     source = Path(value).expanduser()
@@ -47,6 +58,24 @@ def boolean_setting(name, default=False):
     raise ValueError(f"{name} must be true or false.")
 
 
+def optional_file(name):
+    """Resolve one optional absolute existing input file."""
+
+    value = setting_text(name)
+    if not value:
+        return None
+    source = Path(value).expanduser()
+    if not source.is_absolute() or not source.is_file():
+        raise ValueError(f"{name} must be an existing absolute file: {value}")
+    return source.resolve()
+
+
+def optional_cli_argument(option, value):
+    """Return one shell-quoted optional named CLI argument."""
+
+    return "" if value is None else f"{option} {shlex.quote(str(value))}"
+
+
 RUN_ROOT = required_path("e3_run_root")
 WORK_DIR = required_path("e3_work_dir")
 PREPARED_DIR = WORK_DIR / "prepared_inputs"
@@ -64,17 +93,23 @@ APPROVAL_MARKER = Path(
 ).expanduser().resolve()
 CAMPAIGN_CONFIG = WORK_DIR / "campaign.yaml"
 RESULT_DIR = WORK_DIR / "result"
-CAMPAIGN_ID = str(config.get("e3_campaign_id", "")).strip()
-PROFILE = str(config.get("e3_profile", "e3")).strip()
+CAMPAIGN_ID = setting_text("e3_campaign_id")
+PROFILE = setting_text("e3_profile", "e3")
 MINIMUM_MEAN_PLDDT = float(config.get("e3_minimum_mean_plddt", 50.0))
 ANALYSIS_THREADS = positive_integer("e3_threads", 24)
 ANALYSIS_MEMORY_MB = positive_integer("e3_memory_mb", 128_000)
 ANALYSIS_RUNTIME_MINUTES = positive_integer("e3_runtime_minutes", 2_880)
-LOG_LEVEL = str(config.get("e3_log_level", "INFO"))
+LOG_LEVEL = setting_text("e3_log_level", "INFO")
 AUTOMATED_TEST_LABELS = boolean_setting("e3_automated_test_labels")
-TEST_TARGET_LABEL = str(
-    config.get("e3_test_target_label", "ALL")
-).strip()
+EVIDENCE_LED_LABELS = boolean_setting("e3_evidence_led_labels")
+ACCEPT_PROVISIONAL_EVIDENCE = boolean_setting(
+    "e3_accept_provisional_evidence_labels"
+)
+EVIDENCE_RULES = setting_text("e3_evidence_rules", "e3")
+SEED_ASSIGNMENTS = optional_file("e3_seed_assignments")
+SEED_CATALOGUE = optional_file("e3_seed_catalogue")
+EXTERNAL_ANNOTATIONS = optional_file("e3_external_annotations")
+TEST_TARGET_LABEL = setting_text("e3_test_target_label", "ALL")
 TEST_SAMPLES_PER_CLASS = positive_integer("e3_test_samples_per_class", 20)
 
 if not CAMPAIGN_ID:
@@ -97,6 +132,13 @@ AUTOMATED_LABELS_MARKER = (
 AUTOMATED_APPROVAL_MARKER = (
     STATE_DIR / "02_label_review" / "AUTOMATED_TEST_ONLY.REVIEW_APPROVED.json"
 )
+EVIDENCE_BUNDLE_DIR = WORK_DIR / "evidence_label_bundle"
+EVIDENCE_LABELS_PATH = EVIDENCE_BUNDLE_DIR / "label_assignments.tsv"
+EVIDENCE_LABELS_MARKER = EVIDENCE_BUNDLE_DIR / "EVIDENCE_LABELS.json"
+EVIDENCE_ANALYSIS_DOMAINS = EVIDENCE_BUNDLE_DIR / "domains.for_signature_analysis.tsv"
+EVIDENCE_APPROVAL_MARKER = (
+    STATE_DIR / "02_label_review" / "EVIDENCE_PROVISIONAL.REVIEW_APPROVED.json"
+)
 REVIEW_VERIFICATION_MARKER = STATE_DIR / "02_label_review" / "REVIEW_VERIFIED.json"
 CAMPAIGN_MARKER = STATE_DIR / "03_initialisation" / "CAMPAIGN_VALIDATED.json"
 CAMPAIGN_REVALIDATION_MARKER = STATE_DIR / "04_analysis" / "CAMPAIGN_REVALIDATED.json"
@@ -104,6 +146,16 @@ ANALYSIS_MARKER = STATE_DIR / "04_analysis" / "RESULT_VERIFIED.json"
 FINAL_MARKER = STATE_DIR / "05_verification" / "VERIFIED.json"
 LOG_DIR = STATE_DIR / "logs"
 
+if AUTOMATED_TEST_LABELS and EVIDENCE_LED_LABELS:
+    raise ValueError(
+        "e3_automated_test_labels and e3_evidence_led_labels are mutually exclusive."
+    )
+if ACCEPT_PROVISIONAL_EVIDENCE and not EVIDENCE_LED_LABELS:
+    raise ValueError(
+        "e3_accept_provisional_evidence_labels requires e3_evidence_led_labels=true."
+    )
+if not EVIDENCE_RULES:
+    raise ValueError("e3_evidence_rules must not be empty.")
 if AUTOMATED_TEST_LABELS:
     if REVIEWED_LABELS != AUTOMATED_LABELS_PATH:
         raise ValueError(
@@ -117,8 +169,19 @@ if AUTOMATED_TEST_LABELS:
         raise ValueError("e3_test_target_label must not be empty.")
     if TEST_SAMPLES_PER_CLASS < 20:
         raise ValueError("e3_test_samples_per_class must be at least 20.")
-elif REVIEWED_LABELS == AUTOMATED_LABELS_PATH or APPROVAL_MARKER == AUTOMATED_APPROVAL_MARKER:
-    raise ValueError("AUTOMATED_TEST_ONLY authorities require e3_automated_test_labels=true.")
+elif EVIDENCE_LED_LABELS:
+    if REVIEWED_LABELS != EVIDENCE_LABELS_PATH:
+        raise ValueError(
+            "Evidence-led mode requires the fixed evidence-bundle label path."
+        )
+    if APPROVAL_MARKER != EVIDENCE_APPROVAL_MARKER:
+        raise ValueError(
+            "Evidence-led mode requires the fixed provisional approval path."
+        )
+elif REVIEWED_LABELS in {AUTOMATED_LABELS_PATH, EVIDENCE_LABELS_PATH} or (
+    APPROVAL_MARKER in {AUTOMATED_APPROVAL_MARKER, EVIDENCE_APPROVAL_MARKER}
+):
+    raise ValueError("Automated authorities require their matching explicit workflow mode.")
 
 shell.executable("/bin/bash")
 
@@ -131,6 +194,11 @@ rule all:
 rule review_ready:
     input:
         str(REVIEW_MARKER)
+
+
+rule evidence_ready:
+    input:
+        str(EVIDENCE_LABELS_MARKER)
 
 
 rule campaign_ready:
@@ -165,12 +233,90 @@ rule ensure_e3_preparation:
         """
 
 
-rule stage_e3_label_review:
+rule create_evidence_labels:
     input:
         preparation=str(PREPARATION_MARKER)
     output:
+        marker=str(EVIDENCE_LABELS_MARKER),
+        labels=str(EVIDENCE_LABELS_PATH),
+        domains=str(EVIDENCE_ANALYSIS_DOMAINS),
+        label_audit=str(EVIDENCE_BUNDLE_DIR / "label_evidence_audit.tsv"),
+        control_audit=str(EVIDENCE_BUNDLE_DIR / "control_matching_audit.tsv"),
+        definitions=str(EVIDENCE_BUNDLE_DIR / "label_definition_features.tsv"),
+        summary=str(EVIDENCE_BUNDLE_DIR / "class_labelling_summary.tsv"),
+        unresolved=str(EVIDENCE_BUNDLE_DIR / "unresolved_assignments.tsv"),
+    params:
+        sequences=str(PREPARED_DIR / "proteins.faa"),
+        review_context=str(PREPARED_DIR / "e3_label_curation_review.tsv"),
+        source_domains=str(PREPARED_DIR / "domains.tsv"),
+        structures=str(PREPARED_DIR / "structures.tsv"),
+        template=str(PREPARED_DIR / "label_assignments.REVIEW_REQUIRED.tsv"),
+        orthofinder_results=str(RUN_ROOT / "04_orthofinder" / "Results"),
+        profile=PROFILE,
+        evidence_rules=EVIDENCE_RULES,
+        run_id=CAMPAIGN_ID,
+        evidence_mode=("true" if EVIDENCE_LED_LABELS else "false"),
+        seed_assignments=optional_cli_argument(
+            "--seed-assignments", SEED_ASSIGNMENTS
+        ),
+        seed_catalogue=optional_cli_argument("--seed-catalogue", SEED_CATALOGUE),
+        external_annotations=optional_cli_argument(
+            "--external-annotations", EXTERNAL_ANNOTATIONS
+        ),
+    threads:
+        1
+    resources:
+        mem_mb=64_000,
+        runtime=360
+    log:
+        str(LOG_DIR / "02_create_evidence_labels.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        if [[ {params.evidence_mode:q} != true ]]; then
+            echo 'create_evidence_labels requires e3_evidence_led_labels=true.' >&2
+            exit 2
+        fi
+        protein-signatures create-evidence-labels \
+            --sequences-fasta {params.sequences:q} \
+            --output-dir {EVIDENCE_BUNDLE_DIR:q} \
+            --profile {params.profile:q} \
+            --evidence-rules {params.evidence_rules:q} \
+            --review-context {params.review_context:q} \
+            --domains {params.source_domains:q} \
+            --structures {params.structures:q} \
+            --template-labels {params.template:q} \
+            --orthofinder-results {params.orthofinder_results:q} \
+            --orthofinder-group-type HOG \
+            --orthofinder-hierarchy-node N0 \
+            --orthofinder-run-id {params.run_id:q} \
+            --random-seed 1729 \
+            --validation-fraction 0.2 \
+            {params.seed_assignments} \
+            {params.seed_catalogue} \
+            {params.external_annotations} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+def label_review_inputs(wildcards):
+    """Return mode-specific authorities required before review staging."""
+
+    del wildcards
+    values = [str(PREPARATION_MARKER)]
+    if EVIDENCE_LED_LABELS:
+        values.append(str(EVIDENCE_LABELS_MARKER))
+    return values
+
+
+rule stage_e3_label_review:
+    input:
+        label_review_inputs
+    output:
         marker=str(REVIEW_MARKER)
     params:
+        preparation=str(PREPARATION_MARKER),
         reviewed_labels=str(REVIEWED_LABELS)
     threads:
         1
@@ -184,7 +330,7 @@ rule stage_e3_label_review:
         set -o pipefail
         mkdir -p -- {LOG_DIR:q}
         protein-signatures workflow-stage-e3-review \
-            --preparation-marker {input.preparation:q} \
+            --preparation-marker {params.preparation:q} \
             --reviewed-labels {params.reviewed_labels:q} \
             --marker {output.marker:q} \
             --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
@@ -268,6 +414,46 @@ rule approve_automated_test_labels:
             --profile {params.profile:q} \
             --automated-test-mode \
             --automated-test-marker {input.automated_marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+rule approve_evidence_labels:
+    input:
+        preparation=str(PREPARATION_MARKER),
+        review=str(REVIEW_MARKER),
+        labels=str(EVIDENCE_LABELS_PATH),
+        evidence_marker=str(EVIDENCE_LABELS_MARKER),
+    output:
+        approval=str(EVIDENCE_APPROVAL_MARKER)
+    params:
+        profile=PROFILE,
+        acceptance=("true" if ACCEPT_PROVISIONAL_EVIDENCE else "false"),
+    threads:
+        1
+    resources:
+        mem_mb=16_000,
+        runtime=120
+    log:
+        str(LOG_DIR / "02_approve_evidence_labels.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        if [[ {params.acceptance:q} != true ]]; then
+            echo 'Explicit provisional-evidence acceptance is required.' >&2
+            exit 2
+        fi
+        protein-signatures approve-e3-review \
+            --preparation-marker {input.preparation:q} \
+            --review-marker {input.review:q} \
+            --reviewed-labels {input.labels:q} \
+            --approval-marker {output.approval:q} \
+            --curator AUTOMATED_EVIDENCE_PIPELINE \
+            --note 'Automated evidence-supported proposals accepted for provisional hypothesis generation.' \
+            --profile {params.profile:q} \
+            --automated-evidence-mode \
+            --evidence-label-marker {input.evidence_marker:q} \
             --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
         """
 

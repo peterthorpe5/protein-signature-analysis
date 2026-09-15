@@ -23,6 +23,12 @@ def initialise_campaign(
     profile: str,
     sequences_fasta: Path,
     label_assignments: Path,
+    label_evidence_marker: Path | None = None,
+    label_evidence_audit: Path | None = None,
+    control_matching_audit: Path | None = None,
+    label_definition_features: Path | None = None,
+    class_labelling_summary: Path | None = None,
+    unresolved_assignments: Path | None = None,
     features: Path | None = None,
     domains: Path | None = None,
     redundancy_clusters: Path | None = None,
@@ -47,6 +53,12 @@ def initialise_campaign(
         profile: Built-in profile name or profile YAML path.
         sequences_fasta: Protein FASTA authority.
         label_assignments: Reviewed label-assignment TSV authority.
+        label_evidence_marker: Optional automated evidence-bundle marker.
+        label_evidence_audit: Optional complete label-decision audit TSV.
+        control_matching_audit: Optional matched-control audit TSV.
+        label_definition_features: Optional circularity-exclusion ledger TSV.
+        class_labelling_summary: Optional class-coverage summary TSV.
+        unresolved_assignments: Optional abstention and conflict review TSV.
         features: Optional externally derived feature TSV.
         domains: Optional domain-hit and assessment TSV.
         redundancy_clusters: Optional near-redundancy membership TSV.
@@ -94,6 +106,24 @@ def initialise_campaign(
     file_inputs = {
         "sequences_fasta": _input_file(path=sequences_fasta, field="sequences_fasta"),
         "label_assignments": _input_file(path=label_assignments, field="label_assignments"),
+        "label_evidence_marker": _optional_input_file(
+            path=label_evidence_marker, field="label_evidence_marker"
+        ),
+        "label_evidence_audit": _optional_input_file(
+            path=label_evidence_audit, field="label_evidence_audit"
+        ),
+        "control_matching_audit": _optional_input_file(
+            path=control_matching_audit, field="control_matching_audit"
+        ),
+        "label_definition_features": _optional_input_file(
+            path=label_definition_features, field="label_definition_features"
+        ),
+        "class_labelling_summary": _optional_input_file(
+            path=class_labelling_summary, field="class_labelling_summary"
+        ),
+        "unresolved_assignments": _optional_input_file(
+            path=unresolved_assignments, field="unresolved_assignments"
+        ),
         "features": _optional_input_file(path=features, field="features"),
         "domains": _optional_input_file(path=domains, field="domains"),
         "redundancy_clusters": _optional_input_file(

@@ -8,6 +8,13 @@ campaign:
 inputs:
   sequences_fasta: /absolute/path/proteins.faa
   label_assignments: /absolute/path/label_assignments.reviewed.tsv
+  # Set all six together when create-evidence-labels generated the labels.
+  label_evidence_marker: null
+  label_evidence_audit: null
+  control_matching_audit: null
+  label_definition_features: null
+  class_labelling_summary: null
+  unresolved_assignments: null
   features: /absolute/path/external_features.tsv
   domains: /absolute/path/domain_assessments_and_hits.tsv
   redundancy_clusters: /absolute/path/near_redundancy_clusters.tsv

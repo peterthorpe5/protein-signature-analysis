@@ -31,7 +31,7 @@ mechanism, complex role or control set.
 
 ```mermaid
 flowchart TD
-    A["Reviewed sequences and labels"] --> B["Homology and redundancy blocks"]
+    A["Reviewed or evidence-supported labels"] --> B["Homology and redundancy blocks"]
     C["Pfam and external features"] --> D["Discovery feature matrix"]
     E["Models and structural alignments"] --> D
     B --> F["Frozen discovery / validation split"]
@@ -189,6 +189,59 @@ Verify a copied result independently with:
 protein-signatures verify --resource /data/signature_campaigns/e3_1000/result
 ```
 
+## Evidence-led production proposals for any protein type
+
+The package can create conservative, provisional target labels and outcome-blind matched
+controls without manually editing every protein row. This is a production data route, not
+the synthetic smoke route. It is deliberately abstention-aware: weak, contradictory,
+domain-only or structurally ineligible records remain outside target and control cohorts.
+
+The generic launcher accepts any protein classification profile plus a matching versioned
+evidence-rules YAML. The built-in `e3` profile and `e3` rules are defaults only:
+
+```bash
+./run_evidence_signature_workflow.sh \
+  --work-dir /data/signature_campaigns/my_protein_type \
+  --campaign-id my_protein_type_2026_09 \
+  --sequences-fasta /data/authorities/proteins.faa \
+  --profile /data/authorities/my_profile.yaml \
+  --evidence-rules /data/authorities/my_evidence_rules.yaml \
+  --protein-metadata /data/authorities/protein_metadata.tsv \
+  --domains /data/authorities/pfam_domains.tsv \
+  --structures /data/authorities/structures.tsv \
+  --external-annotations /data/authorities/annotations.tsv \
+  --orthofinder-resource /data/orthofinder/published_resource \
+  --threads 24
+```
+
+Without `--accept-provisional-evidence-labels`, Snakemake stops after publishing the
+checksummed `evidence_label_bundle/`. Inspect its TSV/XLSX decision, conflict, matching and
+circularity-exclusion audits. To permit an unattended provisional analysis, rerun the exact
+command with `--accept-provisional-evidence-labels`. This switch does not claim that a human
+has reviewed the classifications; the marker, app and reports retain
+`PROVISIONAL_HYPOTHESIS_GENERATION` throughout.
+
+Evidence resolution uses, as configured by the ruleset:
+
+- exact-protein trusted labels and annotations;
+- independently assessed Pfam/domain architecture;
+- optional curated seed assignments and catalogues;
+- one-generation, unanimous OrthoFinder-group propagation with compatible required domains;
+- structural availability/quality as an eligibility and matching covariate, never as the
+  feature that defines a structural signature; and
+- deterministic homology/redundancy-block control matching by species, structure state,
+  sequence length and domain complexity before any outcome signature is inspected.
+
+Domains used to create a target label are recorded in `label_definition_features.tsv` and
+removed from `domains.for_signature_analysis.tsv`. They therefore cannot reappear as a
+tautological confirmatory association or SHAP feature. Ambiguous proteins, all proteins with
+any unresolved target-like evidence, input candidates when prohibited by the rules, and all
+members of a target homology/redundancy block are excluded from the clean-control pool.
+
+Exact generic schemas, policy semantics and interpretation guidance are in
+[Evidence-led labels and controls](docs/EVIDENCE_LED_LABELS.md). The public rules schema is
+[configs/evidence_rules.schema.json](configs/evidence_rules.schema.json).
+
 ## Completed E3 end-to-end workflow hand-off
 
 The completed `E3_project_draft` run root is a supported precursor. Do **not** point this
@@ -327,6 +380,45 @@ protein-signatures create-automated-test-labels \
 See [the completed-workflow hand-off guide](docs/E3_WORKFLOW_HANDOFF.md) for the source map,
 review gate, scheduler pattern and interpretation boundaries.
 
+### Full provisional E3 run with automated evidence labels
+
+After the synthetic smoke test completes, use a new production work directory. The following
+single Slurm submission prepares or reuses the precursor inputs, proposes supported E3
+subclasses and component roles, constructs matched controls, runs all signature analyses and
+verifies the final result:
+
+```bash
+RUN_ROOT="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/e3_end_to_end_runs/grant_aligned_corrected_expression_structural_all1972_v0_16_0_20260909"
+SIGNATURE_PRODUCTION_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/protein_signature_runs/e3_all1972_evidence_labels_v0_1_0_20260915"
+
+./run_completed_e3_workflow.sh \
+  --phase all \
+  --run-root "${RUN_ROOT}" \
+  --work-dir "${SIGNATURE_PRODUCTION_WORK}" \
+  --campaign-id "e3_all1972_evidence_labels_20260915" \
+  --evidence-led-labels \
+  --evidence-rules e3 \
+  --accept-provisional-evidence-labels \
+  --minimum-mean-plddt 50 \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition barton \
+  --slurm-memory 128G \
+  --slurm-time 2-00:00:00 \
+  --threads 24
+```
+
+Add `--seed-catalogue /absolute/path/e3_seed_catalogue.tsv`,
+`--seed-assignments /absolute/path/reviewed_seed_labels.tsv` and/or
+`--external-annotations /absolute/path/external_annotations.tsv` when those authorities are
+available. Omit `--accept-provisional-evidence-labels` on a first pass if you want the DAG to
+stop after the auditable label bundle.
+
+The six profile labels ending in `other_reviewed` remain eligible only through exact trusted
+assignments; catch-all membership is not guessed from the absence of a more specific rule.
+All other 67 automatically inferable E3 targets, including F-box, have built-in rules. All
+73 default comparisons remain available when trusted catch-all assignments are supplied.
+
 ## Preparing the supplied E3 seed catalogue
 
 The catalogue preparer converts the sequence-bearing TSV into FASTA and review templates.
@@ -349,7 +441,9 @@ accessions are also emitted to an AlphaFold review template.
 ## Required input principles
 
 1. FASTA identifiers are the campaign authority and are never normalised implicitly.
-2. Only `REVIEWED_POSITIVE` label assignments enter target or background membership.
+2. `REVIEWED_POSITIVE` assignments enter reviewed analyses. Checksum-bound
+   `EVIDENCE_SUPPORTED_POSITIVE` assignments enter only the explicitly accepted provisional
+   evidence route; proposed, ambiguous and unmapped rows remain ineligible.
 3. Targets and controls must be separate in every comparison.
 4. Pfam assessment must distinguish `ASSESSED_WITH_HIT`, `ASSESSED_NO_HIT`,
    `NOT_ASSESSED` and `FAILED`.
@@ -535,7 +629,7 @@ The nine pages cover campaign overview, candidate signatures, explainable predic
 SHAP graphics, protein/Pfam evidence, class roles, structures/folds, orthology/partitions, a
 complete canonical-data browser and data quality/provenance. Explicit feature-assessment
 states, association denominators and structure eligibility/comparison-universe fields remain
-browsable. Every one of the 26 canonical datasets has a bounded preview plus complete,
+browsable. Every canonical dataset has a bounded preview plus complete,
 manifested TSV and formatted Excel downloads; every interactive or displayed static plot has
 a PDF download. The app performs no scientific recomputation, opens only checksum-verified
 results, and restricts read-only queries to canonical result tables.

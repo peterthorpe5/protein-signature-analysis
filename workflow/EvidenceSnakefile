@@ -1,0 +1,377 @@
+"""Generic evidence-led labelling and protein-signature workflow.
+
+This workflow accepts arbitrary protein types through a profile plus a versioned
+evidence-rules YAML. It creates provisional labels, matched controls and a
+circularity-safe domain projection before initialising and running the ordinary
+campaign. OrthoFinder results are consumed but never generated.
+"""
+
+import shlex
+from pathlib import Path
+
+
+def setting_text(name, default=""):
+    """Return one trimmed setting while treating YAML null as empty."""
+
+    value = config.get(name, default)
+    return "" if value is None else str(value).strip()
+
+
+def required_text(name):
+    """Return one required non-empty workflow setting."""
+
+    value = setting_text(name)
+    if not value:
+        raise ValueError(f"{name} must be supplied through --config.")
+    return value
+
+
+def required_file(name):
+    """Resolve one required existing absolute file."""
+
+    source = Path(required_text(name)).expanduser()
+    if not source.is_absolute() or not source.is_file():
+        raise ValueError(f"{name} must be an existing absolute file: {source}")
+    return source.resolve()
+
+
+def optional_file(name):
+    """Resolve one optional existing absolute file."""
+
+    value = setting_text(name)
+    if not value:
+        return None
+    source = Path(value).expanduser()
+    if not source.is_absolute() or not source.is_file():
+        raise ValueError(f"{name} must be an existing absolute file: {source}")
+    return source.resolve()
+
+
+def optional_directory(name):
+    """Resolve one optional existing absolute directory."""
+
+    value = setting_text(name)
+    if not value:
+        return None
+    source = Path(value).expanduser()
+    if not source.is_absolute() or not source.is_dir():
+        raise ValueError(f"{name} must be an existing absolute directory: {source}")
+    return source.resolve()
+
+
+def positive_integer(name, default):
+    """Return one positive integer workflow setting."""
+
+    value = int(config.get(name, default))
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer.")
+    return value
+
+
+def boolean_setting(name, default=False):
+    """Return one strict Boolean workflow setting."""
+
+    value = config.get(name, default)
+    if isinstance(value, bool):
+        return value
+    normalised = str(value).strip().lower()
+    if normalised in {"true", "1", "yes"}:
+        return True
+    if normalised in {"false", "0", "no"}:
+        return False
+    raise ValueError(f"{name} must be true or false.")
+
+
+def optional_cli(option, value):
+    """Return one shell-quoted optional named argument."""
+
+    return "" if value is None else f"{option} {shlex.quote(str(value))}"
+
+
+WORK_DIR = Path(required_text("evidence_work_dir")).expanduser()
+if not WORK_DIR.is_absolute():
+    raise ValueError("evidence_work_dir must be absolute.")
+WORK_DIR = WORK_DIR.resolve()
+if WORK_DIR in {Path("/"), Path.home().resolve()}:
+    raise ValueError(f"Unsafe evidence_work_dir: {WORK_DIR}")
+
+CAMPAIGN_ID = required_text("evidence_campaign_id")
+PROFILE = required_text("evidence_profile")
+EVIDENCE_RULES = required_text("evidence_rules")
+SEQUENCES = required_file("evidence_sequences_fasta")
+PROTEIN_METADATA = optional_file("evidence_protein_metadata")
+REVIEW_CONTEXT = optional_file("evidence_review_context")
+DOMAINS = optional_file("evidence_domains")
+STRUCTURES = optional_file("evidence_structures")
+TEMPLATE_LABELS = optional_file("evidence_template_labels")
+SEED_ASSIGNMENTS = optional_file("evidence_seed_assignments")
+SEED_CATALOGUE = optional_file("evidence_seed_catalogue")
+EXTERNAL_ANNOTATIONS = optional_file("evidence_external_annotations")
+REDUNDANCY = optional_file("evidence_redundancy_clusters")
+FEATURES = optional_file("evidence_features")
+STRUCTURE_COMPARISONS = optional_file("evidence_structure_comparisons")
+STRUCTURAL_RESOURCE = optional_directory("evidence_structural_alignment_resource")
+ALPHAFOLD_ACCESSIONS = optional_file("evidence_alphafold_accessions")
+ORTHOFINDER_RESOURCE = optional_directory("evidence_orthofinder_resource")
+ORTHOFINDER_RESULTS = optional_directory("evidence_orthofinder_results")
+if ORTHOFINDER_RESOURCE is not None and ORTHOFINDER_RESULTS is not None:
+    raise ValueError("Supply either an OrthoFinder resource or raw results, not both.")
+
+GROUP_TYPE = required_text("evidence_orthofinder_group_type").upper()
+HIERARCHY_NODE = setting_text("evidence_orthofinder_hierarchy_node")
+RUN_ID = required_text("evidence_orthofinder_run_id")
+THREADS = positive_integer("evidence_threads", 1)
+MEMORY_MB = positive_integer("evidence_memory_mb", 64_000)
+RUNTIME_MINUTES = positive_integer("evidence_runtime_minutes", 1_440)
+FOLDSEEK_MAXIMUM_HITS = positive_integer("evidence_foldseek_maximum_hits", 1_000)
+ACCEPT_PROVISIONAL = boolean_setting("evidence_accept_provisional")
+ENABLE_ALPHAFOLD = boolean_setting("evidence_enable_alphafold")
+ENABLE_FOLDSEEK = boolean_setting("evidence_enable_foldseek")
+RESUME = boolean_setting("evidence_resume")
+LOG_LEVEL = required_text("evidence_log_level")
+
+if GROUP_TYPE not in {"HOG", "LEGACY_ORTHOGROUP"}:
+    raise ValueError("evidence_orthofinder_group_type must be HOG or LEGACY_ORTHOGROUP.")
+if GROUP_TYPE == "HOG" and not HIERARCHY_NODE:
+    raise ValueError("HOG membership requires evidence_orthofinder_hierarchy_node.")
+if GROUP_TYPE == "LEGACY_ORTHOGROUP" and HIERARCHY_NODE:
+    raise ValueError("Legacy orthogroups require an empty hierarchy node.")
+if ENABLE_ALPHAFOLD and ALPHAFOLD_ACCESSIONS is None:
+    raise ValueError("AlphaFold acquisition requires evidence_alphafold_accessions.")
+
+BUNDLE = WORK_DIR / "evidence_label_bundle"
+LABELS = BUNDLE / "label_assignments.tsv"
+EVIDENCE_MARKER = BUNDLE / "EVIDENCE_LABELS.json"
+ANALYSIS_DOMAINS = BUNDLE / "domains.for_signature_analysis.tsv" if DOMAINS else None
+CAMPAIGN_CONFIG = WORK_DIR / "campaign.yaml"
+RESULT_DIR = WORK_DIR / "result"
+STATE_DIR = WORK_DIR / "workflow_state" / "evidence"
+INITIALISATION_MARKER = STATE_DIR / "02_initialisation" / "VALIDATED.json"
+RESULT_MARKER = STATE_DIR / "03_analysis" / "RESULT_VERIFIED.json"
+FINAL_MARKER = STATE_DIR / "04_verification" / "VERIFIED.json"
+LOG_DIR = STATE_DIR / "logs"
+
+EVIDENCE_OUTPUTS = [
+    str(EVIDENCE_MARKER),
+    str(LABELS),
+    str(BUNDLE / "label_evidence_audit.tsv"),
+    str(BUNDLE / "control_matching_audit.tsv"),
+    str(BUNDLE / "label_definition_features.tsv"),
+    str(BUNDLE / "class_labelling_summary.tsv"),
+    str(BUNDLE / "unresolved_assignments.tsv"),
+]
+if ANALYSIS_DOMAINS is not None:
+    EVIDENCE_OUTPUTS.append(str(ANALYSIS_DOMAINS))
+
+FINAL_TARGET = FINAL_MARKER if ACCEPT_PROVISIONAL else EVIDENCE_MARKER
+
+shell.executable("/bin/bash")
+
+
+rule all:
+    input:
+        str(FINAL_TARGET)
+
+
+rule evidence_ready:
+    input:
+        str(EVIDENCE_MARKER)
+
+
+rule create_evidence_labels:
+    input:
+        sequences=str(SEQUENCES)
+    output:
+        EVIDENCE_OUTPUTS
+    params:
+        output_dir=str(BUNDLE),
+        profile=PROFILE,
+        rules=EVIDENCE_RULES,
+        protein_metadata=optional_cli("--protein-metadata", PROTEIN_METADATA),
+        review_context=optional_cli("--review-context", REVIEW_CONTEXT),
+        domains=optional_cli("--domains", DOMAINS),
+        structures=optional_cli("--structures", STRUCTURES),
+        template=optional_cli("--template-labels", TEMPLATE_LABELS),
+        seeds=optional_cli("--seed-assignments", SEED_ASSIGNMENTS),
+        catalogue=optional_cli("--seed-catalogue", SEED_CATALOGUE),
+        annotations=optional_cli("--external-annotations", EXTERNAL_ANNOTATIONS),
+        redundancy=optional_cli("--redundancy-clusters", REDUNDANCY),
+        orthofinder_resource=optional_cli(
+            "--orthofinder-resource", ORTHOFINDER_RESOURCE
+        ),
+        orthofinder_results=optional_cli("--orthofinder-results", ORTHOFINDER_RESULTS),
+    threads:
+        1
+    resources:
+        mem_mb=MEMORY_MB,
+        runtime=min(RUNTIME_MINUTES, 360)
+    log:
+        str(LOG_DIR / "01_create_evidence_labels.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures create-evidence-labels \
+            --sequences-fasta {input.sequences:q} \
+            --output-dir {params.output_dir:q} \
+            --profile {params.profile:q} \
+            --evidence-rules {params.rules:q} \
+            {params.protein_metadata} \
+            {params.review_context} \
+            {params.domains} \
+            {params.structures} \
+            {params.template} \
+            {params.seeds} \
+            {params.catalogue} \
+            {params.annotations} \
+            {params.redundancy} \
+            {params.orthofinder_resource} \
+            {params.orthofinder_results} \
+            --orthofinder-group-type {GROUP_TYPE:q} \
+            --orthofinder-hierarchy-node {HIERARCHY_NODE:q} \
+            --orthofinder-run-id {RUN_ID:q} \
+            --random-seed 1729 \
+            --validation-fraction 0.2 \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+rule initialise_campaign:
+    input:
+        evidence=EVIDENCE_OUTPUTS
+    output:
+        config=str(CAMPAIGN_CONFIG),
+        marker=str(INITIALISATION_MARKER),
+    params:
+        acceptance=("true" if ACCEPT_PROVISIONAL else "false"),
+        profile=PROFILE,
+        label_audit=str(BUNDLE / "label_evidence_audit.tsv"),
+        control_audit=str(BUNDLE / "control_matching_audit.tsv"),
+        definitions=str(BUNDLE / "label_definition_features.tsv"),
+        class_summary=str(BUNDLE / "class_labelling_summary.tsv"),
+        unresolved=str(BUNDLE / "unresolved_assignments.tsv"),
+        domains=optional_cli("--domains", ANALYSIS_DOMAINS),
+        features=optional_cli("--features", FEATURES),
+        redundancy=optional_cli("--redundancy-clusters", REDUNDANCY),
+        structures=optional_cli("--structures", STRUCTURES),
+        structure_comparisons=optional_cli(
+            "--structure-comparisons", STRUCTURE_COMPARISONS
+        ),
+        structural_resource=optional_cli(
+            "--structural-alignment-resource", STRUCTURAL_RESOURCE
+        ),
+        alphafold_accessions=optional_cli(
+            "--alphafold-accessions", ALPHAFOLD_ACCESSIONS
+        ),
+        orthofinder_resource=optional_cli(
+            "--orthofinder-resource", ORTHOFINDER_RESOURCE
+        ),
+        orthofinder_results=optional_cli("--orthofinder-results", ORTHOFINDER_RESULTS),
+        enable_alphafold=("--enable-alphafold" if ENABLE_ALPHAFOLD else ""),
+        enable_foldseek=("--enable-foldseek" if ENABLE_FOLDSEEK else ""),
+    threads:
+        1
+    resources:
+        mem_mb=min(MEMORY_MB, 32_000),
+        runtime=min(RUNTIME_MINUTES, 240)
+    log:
+        str(LOG_DIR / "02_initialise_campaign.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        if [[ {params.acceptance:q} != true ]]; then
+            echo 'Explicit provisional-evidence acceptance is required.' >&2
+            exit 2
+        fi
+        protein-signatures initialise \
+            --config {output.config:q} \
+            --campaign-id {CAMPAIGN_ID:q} \
+            --profile {params.profile:q} \
+            --sequences-fasta {SEQUENCES:q} \
+            --label-assignments {LABELS:q} \
+            --label-evidence-marker {EVIDENCE_MARKER:q} \
+            --label-evidence-audit {params.label_audit:q} \
+            --control-matching-audit {params.control_audit:q} \
+            --label-definition-features {params.definitions:q} \
+            --class-labelling-summary {params.class_summary:q} \
+            --unresolved-assignments {params.unresolved:q} \
+            {params.domains} \
+            {params.features} \
+            {params.redundancy} \
+            {params.structures} \
+            {params.structure_comparisons} \
+            {params.structural_resource} \
+            {params.alphafold_accessions} \
+            {params.orthofinder_resource} \
+            {params.orthofinder_results} \
+            --orthofinder-group-type {GROUP_TYPE:q} \
+            --orthofinder-hierarchy-node {HIERARCHY_NODE:q} \
+            --orthofinder-run-id {RUN_ID:q} \
+            {params.enable_alphafold} \
+            {params.enable_foldseek} \
+            --foldseek-maximum-hits {FOLDSEEK_MAXIMUM_HITS} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        protein-signatures workflow-validate \
+            --config {output.config:q} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee -a {log:q}
+        """
+
+
+rule run_campaign:
+    input:
+        config=str(CAMPAIGN_CONFIG),
+        initialisation=str(INITIALISATION_MARKER),
+    output:
+        marker=str(RESULT_MARKER)
+    params:
+        result_dir=str(RESULT_DIR),
+        resume=("--resume" if RESUME else ""),
+    threads:
+        THREADS
+    resources:
+        mem_mb=MEMORY_MB,
+        runtime=RUNTIME_MINUTES
+    log:
+        str(LOG_DIR / "03_run_campaign.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures run-all \
+            --config {input.config:q} \
+            --output-dir {params.result_dir:q} \
+            --threads {threads} \
+            {params.resume} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        protein-signatures workflow-verify \
+            --resource {params.result_dir:q} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee -a {log:q}
+        """
+
+
+rule verify_campaign:
+    input:
+        analysis=str(RESULT_MARKER)
+    output:
+        marker=str(FINAL_MARKER)
+    params:
+        result_dir=str(RESULT_DIR)
+    threads:
+        1
+    resources:
+        mem_mb=min(MEMORY_MB, 16_000),
+        runtime=min(RUNTIME_MINUTES, 240)
+    log:
+        str(LOG_DIR / "04_verify_campaign.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures workflow-verify \
+            --resource {params.result_dir:q} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """

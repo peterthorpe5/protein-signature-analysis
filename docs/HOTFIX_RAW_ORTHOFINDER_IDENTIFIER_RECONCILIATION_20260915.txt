@@ -1,0 +1,103 @@
+PROTEIN SIGNATURE ANALYSIS
+RAW ORTHOFINDER IDENTIFIER RECONCILIATION CORRECTION
+15 SEPTEMBER 2026
+
+1. PURPOSE
+----------
+
+This correction follows the first completed-E3 automated smoke run. The run
+correctly verified and reused the completed OrthoFinder 2.5.5 Stage 04 and
+successfully prepared 121,635 protein sequences, 11,404 structures and 10,827
+Foldseek-eligible structures. It then stopped while creating synthetic test
+labels with:
+
+  No campaign FASTA identifiers mapped to the selected OrthoFinder membership
+  table.
+
+The stop was safe. No scientific result was published, and the completed E3
+predecessor was not changed.
+
+
+2. ROOT CAUSE
+-------------
+
+The two validated authorities intentionally use different representations of
+the same protein identifier:
+
+  prepared proteins.faa:
+    Q9SA03
+
+  OrthoFinder SequenceIDs.txt retained source token:
+    sp|Q9SA03|FB27_ARATH
+
+The completed-E3 bridge uses the controlled parsed_accession field from the
+upstream candidate_group_member_sequences authority. The raw OrthoFinder
+adapter previously required an exact string match after resolving an internal
+identifier. It did not project the accession from a syntactically valid
+UniProt pipe identifier. Consequently, zero proteins matched even though both
+authorities were valid.
+
+
+3. CORRECTION
+-------------
+
+The raw OrthoFinder 2.5.5/3 adapter now resolves a group member using only:
+
+  1. its exact group-table identifier;
+  2. its exact SequenceIDs.txt source token;
+  3. the accession or entry captured from a complete, syntactically valid
+     sp|accession|entry or tr|accession|entry token; and
+  4. the same controlled forms after removing one documented
+     sample@@identifier collision-avoidance qualifier.
+
+It never performs substring or fuzzy matching. If one upstream member could
+refer to more than one campaign FASTA identifier, processing stops with an
+explicit ambiguity error. Existing checks for OrthoFinder completion,
+checksums, HOG identity, hierarchy node and one-group-per-protein membership
+remain unchanged.
+
+The same adapter is used by automated smoke labels, evidence-led provisional
+labels and normal leakage-safe discovery/validation partitioning. The fix
+therefore corrects the shared boundary rather than adding an E3-only bypass.
+
+
+4. TARGETED VALIDATION
+----------------------
+
+Ten focused tests passed. They cover:
+
+  - the existing raw OrthoFinder 2.5.5 HOG and orthogroup behaviour;
+  - raw UniProt accession reconciliation;
+  - sample@@UniProt reconciliation;
+  - fail-closed accession/entry ambiguity;
+  - all 73 default E3 comparisons, including F-box;
+  - the complete evidence-label unit-test module; and
+  - checksum-bound completed-E3 provisional approval and tamper rejection.
+
+Ruff formatting, Ruff lint and focused Python compilation passed. The complete
+test suite was deliberately not run during this targeted correction.
+
+
+5. RESUMING THE FAILED SMOKE RUN
+--------------------------------
+
+After the corrected commit has been pulled and installed on the cluster,
+repeat the exact original run_completed_e3_workflow.sh --phase all command with
+the same work directory and campaign ID. The Snakemake launcher uses
+--rerun-incomplete. It will validate and reuse completed preparation outputs
+and restart from the failed label-generation boundary. A new work directory is
+not required for this software smoke test.
+
+The generated smoke labels and all downstream results remain
+AUTOMATED_TEST_ONLY and must not be interpreted biologically.
+
+
+6. TRANSFER NOTE
+----------------
+
+The first GitHub main commit contains the automated-smoke implementation but
+does not contain the later evidence-led production layer. This was caused by
+copying from the wrong extracted directory, not by Git. Apply the complete
+corrected repository archive supplied with this note. It includes the full
+evidence-led implementation, this identifier correction and the previously
+missing tests/test_evidence_labels.py file.

@@ -28,6 +28,7 @@ class CurationStatus(StrEnum):
     """Controlled states for protein-to-label assignments."""
 
     REVIEWED_POSITIVE = "REVIEWED_POSITIVE"
+    EVIDENCE_SUPPORTED_POSITIVE = "EVIDENCE_SUPPORTED_POSITIVE"
     REVIEWED_NEGATIVE = "REVIEWED_NEGATIVE"
     REVIEWED_COMPONENT_NOT_CATALYTIC = "REVIEWED_COMPONENT_NOT_CATALYTIC"
     PROPOSED = "PROPOSED"
@@ -127,10 +128,14 @@ class LabelAssignment:
         """Return whether this assignment can enter positive analysis sets.
 
         Returns:
-            ``True`` only for reviewed positive assignments.
+            ``True`` for human-reviewed or explicitly evidence-supported
+            provisional positive assignments.
         """
 
-        return self.curation_status == CurationStatus.REVIEWED_POSITIVE
+        return self.curation_status in {
+            CurationStatus.REVIEWED_POSITIVE,
+            CurationStatus.EVIDENCE_SUPPORTED_POSITIVE,
+        }
 
     def to_record(self) -> dict[str, str]:
         """Return a serialisable label-assignment row.
@@ -427,6 +432,12 @@ class InputPaths:
 
     sequences_fasta: Path
     label_assignments: Path
+    label_evidence_marker: Path | None
+    label_evidence_audit: Path | None
+    control_matching_audit: Path | None
+    label_definition_features: Path | None
+    class_labelling_summary: Path | None
+    unresolved_assignments: Path | None
     features: Path | None
     domains: Path | None
     redundancy_clusters: Path | None

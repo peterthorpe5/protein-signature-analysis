@@ -24,6 +24,14 @@ from .checksums import sha256_file
 from .config import load_config
 from .e3_workflow_bridge import prepare_e3_workflow_inputs
 from .errors import InputValidationError, PublicationError
+from .evidence_labels import (
+    EVIDENCE_APPROVER,
+    EVIDENCE_CONTROL_STATUS,
+    EVIDENCE_INTERPRETATION_SCOPE,
+    EVIDENCE_POSITIVE_STATUS,
+    EVIDENCE_TARGET_STATUS,
+    verify_evidence_label_bundle,
+)
 from .fasta import iter_protein_fasta
 from .io_utils import iter_tsv, read_json, write_json_atomic
 from .pipeline import validate_campaign
@@ -309,6 +317,8 @@ def approve_e3_label_review(
     profile: str | Path = "e3",
     automated_test_mode: bool = False,
     automated_test_marker: Path | None = None,
+    automated_evidence_mode: bool = False,
+    evidence_label_marker: Path | None = None,
 ) -> Path:
     """Validate reviewed labels and publish an immutable curator approval.
 
@@ -322,6 +332,8 @@ def approve_e3_label_review(
         profile: Built-in or custom label profile.
         automated_test_mode: Accept only explicitly synthetic software-test labels.
         automated_test_marker: Required generation audit in automated test mode.
+        automated_evidence_mode: Accept a checksummed provisional evidence bundle.
+        evidence_label_marker: Required evidence-bundle marker in evidence mode.
 
     Returns:
         Published approval marker.
@@ -360,8 +372,17 @@ def approve_e3_label_review(
         profile=profile,
     )
     synthetic_count = summary["synthetic_test_positive_count"]
+    evidence_count = summary["evidence_supported_positive_count"]
     automated_authority: dict[str, Any] = {}
+    if automated_test_mode and automated_evidence_mode:
+        raise InputValidationError(
+            "Automated smoke-test and evidence-led approval modes are mutually exclusive."
+        )
     if automated_test_mode:
+        if evidence_label_marker is not None:
+            raise InputValidationError(
+                "Evidence-label markers cannot enter automated smoke-test approval."
+            )
         if curator_name != AUTOMATED_TEST_APPROVER:
             raise InputValidationError(
                 "Automated test approval requires curator='AUTOMATED_TEST_MODE'."
@@ -385,19 +406,69 @@ def approve_e3_label_review(
         approval_mode = "AUTOMATED_SMOKE_TEST"
         review_status = "AUTOMATED_TEST_ONLY"
         interpretation_allowed = False
-    else:
+        interpretation_scope = "SOFTWARE_EXECUTION_TEST_ONLY"
+    elif automated_evidence_mode:
         if automated_test_marker is not None:
+            raise InputValidationError("Automated test markers cannot enter evidence-led approval.")
+        if curator_name != EVIDENCE_APPROVER:
             raise InputValidationError(
-                "--automated-test-marker is valid only with automated test mode."
+                f"Automated evidence approval requires curator={EVIDENCE_APPROVER!r}."
+            )
+        if synthetic_count:
+            raise InputValidationError(
+                "Synthetic test labels cannot enter an evidence-led approval."
+            )
+        if evidence_count != summary["reviewed_positive_count"]:
+            raise InputValidationError(
+                "Evidence-led approval requires every analysis-positive assignment to use "
+                f"curation_status={EVIDENCE_POSITIVE_STATUS!r}."
+            )
+        if (
+            summary["evidence_supported_target_count"] + summary["evidence_supported_control_count"]
+            != evidence_count
+        ):
+            raise InputValidationError(
+                "Evidence-led positives must carry the controlled automated target or "
+                "matched-control evidence status."
+            )
+        marker_path, marker_digest, evidence_document = _validate_evidence_label_marker(
+            marker_path=evidence_label_marker,
+            prepared_dir=context["prepared_dir"],
+            reviewed_labels=context["reviewed_labels"],
+            reviewed_sha256=context["reviewed_sha256"],
+            profile=profile,
+        )
+        automated_authority = {
+            "evidence_label_marker": str(marker_path),
+            "evidence_label_marker_sha256": marker_digest,
+            "evidence_ruleset_id": evidence_document["ruleset_id"],
+            "evidence_ruleset_version": evidence_document["ruleset_version"],
+            "evidence_ruleset_sha256": evidence_document["ruleset_sha256"],
+        }
+        approval_mode = "AUTOMATED_EVIDENCE_PROPOSAL"
+        review_status = "PROVISIONAL_EVIDENCE_SUPPORTED"
+        interpretation_allowed = False
+        interpretation_scope = EVIDENCE_INTERPRETATION_SCOPE
+    else:
+        if automated_test_marker is not None or evidence_label_marker is not None:
+            raise InputValidationError(
+                "Automated generation markers are valid only in their explicit approval mode."
             )
         if synthetic_count:
             raise InputValidationError(
                 "Synthetic test labels cannot receive human-review approval; use the "
                 "explicit automated test workflow in an isolated smoke-test campaign."
             )
+        if evidence_count:
+            raise InputValidationError(
+                "Automated evidence-supported labels require the explicit provisional "
+                "evidence approval mode, or human review must replace their curation status "
+                "with REVIEWED_POSITIVE."
+            )
         approval_mode = "HUMAN_REVIEW"
         review_status = "APPROVED"
         interpretation_allowed = True
+        interpretation_scope = "HUMAN_REVIEWED_ANALYSIS"
     write_json_atomic(
         path=approval,
         value={
@@ -408,6 +479,7 @@ def approve_e3_label_review(
             "review_status": review_status,
             "approval_mode": approval_mode,
             "scientific_interpretation_allowed": interpretation_allowed,
+            "interpretation_scope": interpretation_scope,
             "approved_at_utc": datetime.now(timezone.utc).isoformat(),
             "curator": curator_name,
             "approval_note": approval_note,
@@ -490,7 +562,11 @@ def verify_e3_label_review(
                 f"Label-review approval summary {field!r} no longer matches reviewed labels."
             )
     approval_mode = approval.get("approval_mode", "HUMAN_REVIEW")
-    if approval_mode not in {"HUMAN_REVIEW", "AUTOMATED_SMOKE_TEST"}:
+    if approval_mode not in {
+        "HUMAN_REVIEW",
+        "AUTOMATED_SMOKE_TEST",
+        "AUTOMATED_EVIDENCE_PROPOSAL",
+    }:
         raise InputValidationError(f"Unknown E3 label approval mode: {approval_mode!r}")
     interpretation_allowed = approval_mode == "HUMAN_REVIEW"
     if (
@@ -498,6 +574,13 @@ def verify_e3_label_review(
         != interpretation_allowed
     ):
         raise InputValidationError("Label-review approval interpretation policy is inconsistent.")
+    expected_scope = {
+        "HUMAN_REVIEW": "HUMAN_REVIEWED_ANALYSIS",
+        "AUTOMATED_SMOKE_TEST": "SOFTWARE_EXECUTION_TEST_ONLY",
+        "AUTOMATED_EVIDENCE_PROPOSAL": EVIDENCE_INTERPRETATION_SCOPE,
+    }[approval_mode]
+    if approval.get("interpretation_scope", expected_scope) != expected_scope:
+        raise InputValidationError("Label-review approval interpretation scope is inconsistent.")
     if approval_mode == "AUTOMATED_SMOKE_TEST":
         test_marker_path, test_marker_sha256 = _validate_automated_test_marker(
             marker_path=Path(str(approval.get("automated_test_marker", ""))),
@@ -508,9 +591,37 @@ def verify_e3_label_review(
         )
         if approval.get("automated_test_marker_sha256") != test_marker_sha256:
             raise InputValidationError("Automated test-label marker changed after approval.")
+        evidence_marker_path = None
+        evidence_marker_sha256 = None
+    elif approval_mode == "AUTOMATED_EVIDENCE_PROPOSAL":
+        evidence_marker_path, evidence_marker_sha256, evidence_document = (
+            _validate_evidence_label_marker(
+                marker_path=Path(str(approval.get("evidence_label_marker", ""))),
+                prepared_dir=context["prepared_dir"],
+                reviewed_labels=context["reviewed_labels"],
+                reviewed_sha256=context["reviewed_sha256"],
+                profile=profile,
+            )
+        )
+        if approval.get("evidence_label_marker_sha256") != evidence_marker_sha256:
+            raise InputValidationError("Evidence-label marker changed after approval.")
+        expected_rules = {
+            "evidence_ruleset_id": evidence_document["ruleset_id"],
+            "evidence_ruleset_version": evidence_document["ruleset_version"],
+            "evidence_ruleset_sha256": evidence_document["ruleset_sha256"],
+        }
+        for field, expected_value in expected_rules.items():
+            if approval.get(field) != expected_value:
+                raise InputValidationError(
+                    f"Evidence approval field {field!r} differs from its bundle."
+                )
+        test_marker_path = None
+        test_marker_sha256 = None
     else:
         test_marker_path = None
         test_marker_sha256 = None
+        evidence_marker_path = None
+        evidence_marker_sha256 = None
     marker = Path(marker_path).expanduser().resolve()
     write_json_atomic(
         path=marker,
@@ -536,6 +647,14 @@ def verify_e3_label_review(
                 str(test_marker_path) if test_marker_path is not None else None
             ),
             "automated_test_marker_sha256": test_marker_sha256,
+            "evidence_label_marker": (
+                str(evidence_marker_path) if evidence_marker_path is not None else None
+            ),
+            "evidence_label_marker_sha256": evidence_marker_sha256,
+            "interpretation_scope": approval.get(
+                "interpretation_scope",
+                "HUMAN_REVIEWED_ANALYSIS" if interpretation_allowed else "RESTRICTED",
+            ),
             **summary,
         },
     )
@@ -617,6 +736,40 @@ def ensure_e3_campaign_marker(
                 "An automated smoke-test approval requires an isolated work directory whose "
                 "name contains 'smoke' or 'test'."
             )
+    analysis_domains = prepared / "domains.tsv"
+    evidence_inputs: dict[str, Path | None] = {
+        "label_evidence_marker": None,
+        "label_evidence_audit": None,
+        "control_matching_audit": None,
+        "label_definition_features": None,
+        "class_labelling_summary": None,
+        "unresolved_assignments": None,
+    }
+    if approval_mode == "AUTOMATED_EVIDENCE_PROPOSAL":
+        evidence_marker, evidence_digest, evidence_document = _validate_evidence_label_marker(
+            marker_path=Path(str(review.get("evidence_label_marker", ""))),
+            prepared_dir=prepared,
+            reviewed_labels=labels,
+            reviewed_sha256=str(review.get("reviewed_labels_sha256", "")),
+            profile=profile,
+        )
+        if review.get("evidence_label_marker_sha256") != evidence_digest:
+            raise InputValidationError("Evidence-label bundle changed after review verification.")
+        recorded_domains = evidence_document.get("analysis_domains")
+        if not recorded_domains:
+            raise InputValidationError(
+                "Completed-E3 evidence labelling requires a label-definition-safe "
+                "domain projection."
+            )
+        analysis_domains = Path(str(recorded_domains)).resolve()
+        evidence_inputs = {
+            "label_evidence_marker": evidence_marker,
+            "label_evidence_audit": evidence_marker.parent / "label_evidence_audit.tsv",
+            "control_matching_audit": evidence_marker.parent / "control_matching_audit.tsv",
+            "label_definition_features": (evidence_marker.parent / "label_definition_features.tsv"),
+            "class_labelling_summary": (evidence_marker.parent / "class_labelling_summary.tsv"),
+            "unresolved_assignments": (evidence_marker.parent / "unresolved_assignments.tsv"),
+        }
     expected_profile = _normalise_profile_source(profile=profile)
     creation_action = "ADOPTED_EXISTING" if config_path.exists() else "CREATED"
     if not config_path.exists():
@@ -626,7 +779,8 @@ def ensure_e3_campaign_marker(
             profile=expected_profile,
             sequences_fasta=prepared / "proteins.faa",
             label_assignments=labels,
-            domains=prepared / "domains.tsv",
+            domains=analysis_domains,
+            **evidence_inputs,
             structures=prepared / "structures.tsv",
             structural_alignment_resource=Path(
                 str(prepared_document.get("structural_alignment_resource", ""))
@@ -643,6 +797,8 @@ def ensure_e3_campaign_marker(
         profile=expected_profile,
         prepared_dir=prepared,
         reviewed_labels=labels,
+        domains=analysis_domains,
+        evidence_inputs=evidence_inputs,
         structural_resource=Path(str(prepared_document.get("structural_alignment_resource", ""))),
         orthofinder_results=Path(str(prepared_document.get("orthofinder_results", ""))),
         foldseek_maximum_hits=eligible_count,
@@ -671,6 +827,7 @@ def ensure_e3_campaign_marker(
             "scientific_interpretation_allowed": review.get(
                 "scientific_interpretation_allowed", True
             ),
+            "interpretation_scope": review.get("interpretation_scope", "HUMAN_REVIEWED_ANALYSIS"),
             "validation_summary": summary,
         },
     )
@@ -835,6 +992,80 @@ def _validate_automated_test_marker(
     return marker, sha256_file(path=marker)
 
 
+def _validate_evidence_label_marker(
+    *,
+    marker_path: Path | None,
+    prepared_dir: Path,
+    reviewed_labels: Path,
+    reviewed_sha256: str,
+    profile: str | Path,
+) -> tuple[Path, str, Mapping[str, Any]]:
+    """Validate and bind a provisional evidence-label bundle.
+
+    Args:
+        marker_path: Explicit ``EVIDENCE_LABELS.json`` authority.
+        prepared_dir: Verified completed-E3 input bundle.
+        reviewed_labels: Evidence-supported assignment table being approved.
+        reviewed_sha256: Current checksum of the assignment table.
+        profile: Built-in or custom classification profile.
+
+    Returns:
+        Marker path, marker digest and validated marker document.
+
+    Raises:
+        InputValidationError: If paths, inputs, profile or checksums disagree.
+    """
+
+    if marker_path is None:
+        raise InputValidationError("Automated evidence approval requires --evidence-label-marker.")
+    marker = Path(marker_path).expanduser().resolve()
+    if marker.name != "EVIDENCE_LABELS.json":
+        raise InputValidationError(
+            f"Evidence-label authority must be named EVIDENCE_LABELS.json: {marker}"
+        )
+    document = verify_evidence_label_bundle(bundle_dir=marker.parent)
+    recorded_labels = Path(str(document.get("label_assignments", ""))).resolve()
+    if recorded_labels != reviewed_labels.resolve():
+        raise InputValidationError("Evidence-label marker refers to a different assignment table.")
+    if document.get("label_assignments_sha256") != reviewed_sha256:
+        raise InputValidationError(
+            "Evidence-label assignment checksum differs from the reviewed authority."
+        )
+    loaded_profile = load_profile(source=profile)
+    if (
+        document.get("profile_id") != loaded_profile.profile_id
+        or document.get("profile_version") != loaded_profile.profile_version
+    ):
+        raise InputValidationError(
+            "Evidence-label marker refers to a different classification profile."
+        )
+    expected_inputs = {
+        prepared_dir / "proteins.faa",
+        prepared_dir / "domains.tsv",
+        prepared_dir / "structures.tsv",
+        prepared_dir / "e3_label_curation_review.tsv",
+        prepared_dir / "label_assignments.REVIEW_REQUIRED.tsv",
+    }
+    recorded_inputs = {
+        Path(str(row.get("path", ""))).resolve(): row
+        for row in document.get("inputs", ())
+        if isinstance(row, Mapping)
+    }
+    missing = expected_inputs - set(recorded_inputs)
+    if missing:
+        raise InputValidationError(
+            "Evidence-label marker is not bound to every required prepared authority: "
+            f"{sorted(str(path) for path in missing)}"
+        )
+    for path in expected_inputs:
+        row = recorded_inputs[path]
+        if row.get("size_bytes") != path.stat().st_size:
+            raise InputValidationError(f"Prepared evidence input size differs: {path}")
+        if row.get("sha256") != sha256_file(path=path):
+            raise InputValidationError(f"Prepared evidence input checksum differs: {path}")
+    return marker, sha256_file(path=marker), document
+
+
 def _validate_reviewed_assignments(
     *, prepared_dir: Path, reviewed_labels: Path, profile: str | Path
 ) -> dict[str, Any]:
@@ -897,6 +1128,7 @@ def _validate_reviewed_assignments(
             f"background label: {missing_matched_backgrounds}"
         )
     status_counts = Counter(assignment.curation_status.value for assignment in assignments)
+    evidence_supported_count = status_counts[EVIDENCE_POSITIVE_STATUS]
     return {
         "prepared_protein_count": len(protein_ids),
         "reviewed_assignment_count": len(assignments),
@@ -912,6 +1144,11 @@ def _validate_reviewed_assignments(
         "synthetic_test_positive_count": positive_evidence_status_counts[
             AUTOMATED_TEST_EVIDENCE_STATUS
         ],
+        "evidence_supported_positive_count": evidence_supported_count,
+        "evidence_supported_target_count": positive_evidence_status_counts[EVIDENCE_TARGET_STATUS],
+        "evidence_supported_control_count": positive_evidence_status_counts[
+            EVIDENCE_CONTROL_STATUS
+        ],
     }
 
 
@@ -922,6 +1159,8 @@ def _validate_existing_e3_campaign(
     profile: str,
     prepared_dir: Path,
     reviewed_labels: Path,
+    domains: Path,
+    evidence_inputs: Mapping[str, Path | None],
     structural_resource: Path,
     orthofinder_results: Path,
     foldseek_maximum_hits: int,
@@ -945,7 +1184,7 @@ def _validate_existing_e3_campaign(
         "profile": (config.profile_name, profile),
         "sequences_fasta": (config.inputs.sequences_fasta, prepared_dir / "proteins.faa"),
         "label_assignments": (config.inputs.label_assignments, reviewed_labels),
-        "domains": (config.inputs.domains, prepared_dir / "domains.tsv"),
+        "domains": (config.inputs.domains, domains),
         "structures": (config.inputs.structures, prepared_dir / "structures.tsv"),
         "structural_alignment_resource": (
             config.inputs.structural_alignment_resource,
@@ -958,6 +1197,10 @@ def _validate_existing_e3_campaign(
         "orthofinder_group_type": (config.inputs.orthofinder_group_type, "HOG"),
         "orthofinder_hierarchy_node": (config.inputs.orthofinder_hierarchy_node, "N0"),
         "foldseek.maximum_hits": (config.foldseek.maximum_hits, foldseek_maximum_hits),
+        **{
+            field: (getattr(config.inputs, field), expected)
+            for field, expected in evidence_inputs.items()
+        },
     }
     for field, (observed, wanted) in expected.items():
         if observed != wanted:

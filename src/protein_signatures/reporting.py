@@ -30,6 +30,11 @@ _TABLE_SECTIONS = {
     "proteins": "01_proteins_and_curation",
     "profile_labels": "01_proteins_and_curation",
     "label_assignments": "01_proteins_and_curation",
+    "label_evidence_audit": "01_proteins_and_curation",
+    "control_matching_audit": "01_proteins_and_curation",
+    "label_definition_features": "01_proteins_and_curation",
+    "class_labelling_summary": "01_proteins_and_curation",
+    "unresolved_assignments": "01_proteins_and_curation",
     "label_memberships": "01_proteins_and_curation",
     "comparisons": "01_proteins_and_curation",
     "redundancy_clusters": "02_homology_and_partitions",
@@ -56,6 +61,11 @@ _TABLE_SECTIONS = {
 }
 _FINAL_TABLES = (
     "comparisons",
+    "class_labelling_summary",
+    "label_evidence_audit",
+    "control_matching_audit",
+    "label_definition_features",
+    "unresolved_assignments",
     "signatures",
     "associations",
     "structures",
@@ -74,7 +84,8 @@ formatted, filterable Excel workbook. The `tables/` directory at result root rem
 machine authority in TSV and Parquet, and `protein_signatures.duckdb` remains the app/query
 authority.
 
-- `01_proteins_and_curation`: FASTA-derived inventory, labels and comparisons.
+- `01_proteins_and_curation`: FASTA inventory, labels, automated evidence decisions,
+  matched-control diagnostics, circularity exclusions, abstentions and comparisons.
 - `02_homology_and_partitions`: exact/near redundancy, OrthoFinder and frozen splits.
 - `03_sequence_and_domains`: unified amino-acid/Pfam evidence plus the complete imported
   feature-assessment and derivation-provenance ledger.
@@ -413,6 +424,70 @@ def _build_static_figures(
             "01_proteins_and_curation",
             "Counts for the forty most populated direct labels.",
             "direct_label_counts",
+            True,
+        )
+    )
+    class_summary = frames["class_labelling_summary"]
+    figure, axis = plt.subplots(figsize=(10.5, 6.0))
+    target_summary = class_summary[class_summary["label_type"].astype(str) == "TARGET"].copy()
+    if target_summary.empty:
+        _draw_no_data(
+            axis=axis,
+            message="Automated evidence-led labelling was not selected",
+        )
+    else:
+        target_summary["direct_positive_protein_count"] = pd.to_numeric(
+            target_summary["direct_positive_protein_count"], errors="coerce"
+        )
+        target_summary = target_summary.nlargest(
+            30,
+            "direct_positive_protein_count",
+        ).sort_values("direct_positive_protein_count")
+        axis.barh(
+            target_summary["label_id"].astype(str),
+            target_summary["direct_positive_protein_count"],
+            color="#2A9D8F",
+        )
+        axis.set_xlabel("Evidence-supported proteins")
+    axis.set_title("Automated provisional target-label coverage")
+    figures.append(
+        (
+            figure,
+            "01_evidence_supported_label_coverage",
+            "01_proteins_and_curation",
+            "Evidence-supported protein counts for populated provisional target classes.",
+            "evidence_supported_label_coverage",
+            True,
+        )
+    )
+    control_matches = frames["control_matching_audit"]
+    figure, axis = plt.subplots(figsize=(9.0, 5.8))
+    match_scores = pd.to_numeric(
+        control_matches.loc[
+            control_matches["status"].astype(str) == "MATCHED",
+            "match_score",
+        ],
+        errors="coerce",
+    ).dropna()
+    if match_scores.empty:
+        _draw_no_data(axis=axis, message="No matched-control audit was available")
+    else:
+        axis.hist(
+            match_scores,
+            bins=min(30, max(5, int(math.sqrt(len(match_scores))))),
+            color="#E9C46A",
+            edgecolor="#8C6D1F",
+        )
+        axis.set_xlabel("Prespecified matching distance (lower is closer)")
+        axis.set_ylabel("Target-control matches")
+    axis.set_title("Outcome-blind matched-control distance")
+    figures.append(
+        (
+            figure,
+            "02_matched_control_distance",
+            "01_proteins_and_curation",
+            "Distance distribution for controls passing every prespecified caliper.",
+            "matched_control_distance",
             True,
         )
     )

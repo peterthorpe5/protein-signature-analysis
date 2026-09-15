@@ -24,6 +24,12 @@
       "properties": {
         "sequences_fasta": {"$ref": "#/$defs/path"},
         "label_assignments": {"$ref": "#/$defs/path"},
+        "label_evidence_marker": {"$ref": "#/$defs/optionalPath"},
+        "label_evidence_audit": {"$ref": "#/$defs/optionalPath"},
+        "control_matching_audit": {"$ref": "#/$defs/optionalPath"},
+        "label_definition_features": {"$ref": "#/$defs/optionalPath"},
+        "class_labelling_summary": {"$ref": "#/$defs/optionalPath"},
+        "unresolved_assignments": {"$ref": "#/$defs/optionalPath"},
         "features": {"$ref": "#/$defs/optionalPath"},
         "domains": {"$ref": "#/$defs/optionalPath"},
         "redundancy_clusters": {"$ref": "#/$defs/optionalPath"},

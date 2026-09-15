@@ -206,6 +206,37 @@ def write_text_atomic(*, path: Path, text: str) -> None:
         raise PublicationError(f"Could not publish text {destination}: {error}") from error
 
 
+def write_bytes_atomic(*, path: Path, payload: bytes) -> None:
+    """Write binary content through a same-directory atomic rename.
+
+    Args:
+        path: Final binary destination.
+        payload: Complete immutable byte payload.
+
+    Raises:
+        PublicationError: If the payload is not bytes or publication fails.
+    """
+
+    if not isinstance(payload, bytes):
+        raise PublicationError("Atomic binary output must be bytes.")
+    destination = Path(path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(descriptor, mode="wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, destination)
+    except OSError as error:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise PublicationError(f"Could not publish binary file {destination}: {error}") from error
+
+
 def read_json(*, path: Path) -> Any:
     """Read one UTF-8 JSON document.
 

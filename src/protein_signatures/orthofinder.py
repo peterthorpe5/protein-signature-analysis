@@ -19,6 +19,7 @@ LOGGER = logging.getLogger(__name__)
 _VERSION_PATTERN = re.compile(r"OrthoFinder\s+(?:version\s+)?([0-9]+(?:\.[0-9A-Za-z]+)+)", re.I)
 _COMPLETION_MARKER = "OrthoFinder run completed"
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_UNIPROT_IDENTIFIER_PATTERN = re.compile(r"^(?:sp|tr)\|(?P<accession>[^|\s]+)\|(?P<entry>[^|\s]+)$")
 _RAW_SOURCE_MODE = "RAW_COMPLETED_RESULTS"
 _WORKFLOW_STAGE_SOURCE_MODE = "CHECKSUMMED_WORKFLOW_STAGE"
 _WORKFLOW_AUTHORITY_FIELDS = (
@@ -666,8 +667,12 @@ def _read_hog_table(
             clade = row.get(clade_field, "").strip() if clade_field else ""
             for species in species_fields:
                 for identifier in _split_members(value=row.get(species, "")):
-                    original = identifier_map.get(identifier, identifier)
-                    if original in protein_ids:
+                    campaign_id = _resolve_campaign_identifier(
+                        identifier=identifier,
+                        identifier_map=identifier_map,
+                        protein_ids=protein_ids,
+                    )
+                    if campaign_id is not None:
                         rows.append(
                             GroupMembership(
                                 run_id=run_id,
@@ -677,7 +682,7 @@ def _read_hog_table(
                                 legacy_orthogroup_id=legacy,
                                 gene_tree_parent_clade=clade,
                                 species_label=species,
-                                protein_id=original,
+                                protein_id=campaign_id,
                             )
                         )
     return tuple(
@@ -718,8 +723,12 @@ def _read_orthogroup_table(
             )
             for species in species_fields:
                 for identifier in _split_members(value=row.get(species, "")):
-                    original = identifier_map.get(identifier, identifier)
-                    if original in protein_ids:
+                    campaign_id = _resolve_campaign_identifier(
+                        identifier=identifier,
+                        identifier_map=identifier_map,
+                        protein_ids=protein_ids,
+                    )
+                    if campaign_id is not None:
                         rows.append(
                             GroupMembership(
                                 run_id=run_id,
@@ -729,7 +738,7 @@ def _read_orthogroup_table(
                                 legacy_orthogroup_id=group_id,
                                 gene_tree_parent_clade="",
                                 species_label=species,
-                                protein_id=original,
+                                protein_id=campaign_id,
                             )
                         )
     return tuple(
@@ -764,6 +773,79 @@ def _read_sequence_id_map(*, path: Path | None) -> dict[str, str]:
                 raise InputValidationError(f"Duplicate internal sequence identifier: {internal!r}")
             result[internal] = original.split(maxsplit=1)[0]
     return result
+
+
+def _resolve_campaign_identifier(
+    *,
+    identifier: str,
+    identifier_map: Mapping[str, str],
+    protein_ids: frozenset[str],
+) -> str | None:
+    """Resolve one raw OrthoFinder member to one campaign FASTA identifier.
+
+    Resolution is deliberately restricted to exact identifiers and controlled
+    aliases. The latter comprise the accession and entry from a syntactically
+    valid UniProt ``sp|accession|entry`` or ``tr|accession|entry`` token. A
+    single upstream ``sample@@identifier`` qualifier may be removed before the
+    same exact checks because that is the documented collision-avoidance form
+    used by the precursor discovery workflow. Arbitrary substrings are never
+    matched.
+
+    Args:
+        identifier: Member token read from an OrthoFinder group table.
+        identifier_map: OrthoFinder internal-to-original identifier mapping.
+        protein_ids: Authoritative campaign FASTA identifiers.
+
+    Returns:
+        The unique campaign identifier, or ``None`` when no controlled alias
+        matches.
+
+    Raises:
+        InputValidationError: If one upstream member matches more than one
+            campaign identifier.
+    """
+
+    original = identifier_map.get(identifier, identifier)
+    aliases = {
+        alias
+        for source in (identifier, original)
+        for alias in _controlled_identifier_aliases(value=source)
+    }
+    matches = sorted(aliases.intersection(protein_ids))
+    if len(matches) > 1:
+        raise InputValidationError(
+            "One OrthoFinder member ambiguously matches multiple campaign FASTA "
+            f"identifiers: {identifier!r} -> {matches!r}."
+        )
+    return matches[0] if matches else None
+
+
+def _controlled_identifier_aliases(*, value: str) -> tuple[str, ...]:
+    """Return exact and controlled aliases for one sequence identifier.
+
+    Args:
+        value: OrthoFinder member identifier or retained source-header token.
+
+    Returns:
+        Ordered unique aliases without empty values.
+    """
+
+    stripped = value.strip()
+    token = stripped.split(maxsplit=1)[0] if stripped else ""
+    if not token:
+        return ()
+    source_tokens = [token]
+    if token.count("@@") == 1:
+        qualifier, unqualified = token.split("@@", maxsplit=1)
+        if qualifier and unqualified:
+            source_tokens.append(unqualified)
+    aliases: list[str] = []
+    for source_token in source_tokens:
+        aliases.append(source_token)
+        match = _UNIPROT_IDENTIFIER_PATTERN.fullmatch(source_token)
+        if match is not None:
+            aliases.extend((match.group("accession"), match.group("entry")))
+    return tuple(dict.fromkeys(aliases))
 
 
 def _find_field(

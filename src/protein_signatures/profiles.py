@@ -297,7 +297,7 @@ def validate_assignment_profile_compatibility(
         profile: Selected classification profile.
 
     Raises:
-        InputValidationError: If a reviewed positive is disallowed, has the
+        InputValidationError: If an analysis-positive assignment is disallowed, has the
             wrong component role, or occupies conflicting exclusive strata.
     """
 
@@ -313,11 +313,11 @@ def validate_assignment_profile_compatibility(
         label = by_id[assignment.label_id]
         if not label.reviewed_positive_allowed:
             raise InputValidationError(
-                f"Label {label.label_id!r} does not permit REVIEWED_POSITIVE assignments."
+                f"Label {label.label_id!r} does not permit analysis-positive assignments."
             )
         if assignment.evidence_status.strip().upper() in (_NON_REVIEWED_POSITIVE_EVIDENCE_STATES):
             raise InputValidationError(
-                f"Protein {assignment.protein_id!r} has REVIEWED_POSITIVE curation "
+                f"Protein {assignment.protein_id!r} has analysis-positive curation "
                 f"but incompatible evidence_status {assignment.evidence_status!r}."
             )
         expected_role = label.component_role

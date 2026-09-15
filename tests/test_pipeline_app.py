@@ -228,7 +228,7 @@ def test_app_backend_exposes_every_complete_canonical_download(
     database = backend.resolve_database(resource=completed_result)
     names = backend.canonical_table_names()
     assert names == tuple(table_schemas())
-    assert len(names) == 26
+    assert len(names) == 31
     for table_name in names:
         count = backend.table_count(database=database, table_name=table_name)
         preview = backend.canonical_table_preview(

@@ -49,6 +49,11 @@ from protein_signatures.e3_workflow_orchestration import (
     verify_prepared_e3_bundle,
 )
 from protein_signatures.errors import InputValidationError, PublicationError
+from protein_signatures.evidence_labels import (
+    EVIDENCE_APPROVER,
+    EVIDENCE_POSITIVE_STATUS,
+    create_evidence_label_bundle,
+)
 from protein_signatures.fasta import read_protein_fasta
 from protein_signatures.io_utils import iter_tsv, write_tsv_atomic
 from protein_signatures.tables import LABEL_FIELDS, read_domains, read_structures
@@ -852,6 +857,100 @@ def test_automated_test_approval_is_isolated_checksum_bound_and_non_scientific(
             reviewed_labels=labels,
             approval_marker=approval,
             marker_path=state / "02_label_review" / "SECOND_VERIFICATION.json",
+        )
+
+
+def test_evidence_led_approval_is_provisional_checksum_bound_and_verifiable(
+    tmp_path: Path,
+) -> None:
+    """The completed-E3 bridge should accept only its exact evidence bundle."""
+
+    root = _completed_workflow(tmp_path)
+    work = tmp_path / "provisional_evidence_campaign"
+    prepared = work / "prepared_inputs"
+    state = work / "workflow_state" / "e3"
+    preparation = state / "01_preparation" / "PREPARED_VERIFIED.json"
+    review = state / "02_label_review" / "REVIEW_READY.json"
+    approval = state / "02_label_review" / "REVIEW_APPROVED.json"
+    verification = state / "02_label_review" / "REVIEW_VERIFIED.json"
+    evidence_bundle = work / "evidence_label_bundle"
+
+    ensure_e3_preparation_marker(
+        run_root=root,
+        prepared_dir=prepared,
+        minimum_mean_plddt=50.0,
+        marker_path=preparation,
+    )
+    rules_source = (
+        Path(orchestration_module.__file__).parent
+        / "data"
+        / "evidence_rules"
+        / "e3.yaml"
+    )
+    rules_document = yaml.safe_load(rules_source.read_text(encoding="utf-8"))
+    rules_document["ruleset_id"] = "e3_test_one_control"
+    rules_document["settings"]["control_units_per_target_unit"] = 1
+    rules_document["settings"]["minimum_control_units_per_background"] = 1
+    rules_path = work / "e3_test_rules.yaml"
+    rules_path.parent.mkdir(parents=True, exist_ok=True)
+    rules_path.write_text(
+        yaml.safe_dump(rules_document, sort_keys=False),
+        encoding="utf-8",
+    )
+    evidence_marker = create_evidence_label_bundle(
+        sequences_fasta=prepared / "proteins.faa",
+        output_dir=evidence_bundle,
+        profile="e3",
+        evidence_rules=rules_path,
+        review_context=prepared / "e3_label_curation_review.tsv",
+        domains=prepared / "domains.tsv",
+        structures=prepared / "structures.tsv",
+        template_labels=prepared / "label_assignments.REVIEW_REQUIRED.tsv",
+    )
+    labels = evidence_bundle / "label_assignments.tsv"
+    stage_e3_label_review(
+        preparation_marker=preparation,
+        reviewed_labels=labels,
+        marker_path=review,
+    )
+
+    approve_e3_label_review(
+        preparation_marker=preparation,
+        review_marker=review,
+        reviewed_labels=labels,
+        approval_marker=approval,
+        curator=EVIDENCE_APPROVER,
+        automated_evidence_mode=True,
+        evidence_label_marker=evidence_marker,
+    )
+    approval_document = json.loads(approval.read_text(encoding="utf-8"))
+    assert approval_document["approval_mode"] == "AUTOMATED_EVIDENCE_PROPOSAL"
+    assert approval_document["review_status"] == "PROVISIONAL_EVIDENCE_SUPPORTED"
+    assert approval_document["scientific_interpretation_allowed"] is False
+    assert approval_document["evidence_supported_positive_count"] == 2
+    assert approval_document["curation_status_counts"][EVIDENCE_POSITIVE_STATUS] == 2
+
+    verify_e3_label_review(
+        preparation_marker=preparation,
+        review_marker=review,
+        reviewed_labels=labels,
+        approval_marker=approval,
+        marker_path=verification,
+    )
+    verification_document = json.loads(verification.read_text(encoding="utf-8"))
+    assert verification_document["approval_mode"] == "AUTOMATED_EVIDENCE_PROPOSAL"
+    assert verification_document["scientific_interpretation_allowed"] is False
+
+    (evidence_bundle / "label_evidence_audit.tsv").write_bytes(
+        (evidence_bundle / "label_evidence_audit.tsv").read_bytes() + b"\n"
+    )
+    with pytest.raises(InputValidationError, match="size differs|checksum differs"):
+        verify_e3_label_review(
+            preparation_marker=preparation,
+            review_marker=review,
+            reviewed_labels=labels,
+            approval_marker=approval,
+            marker_path=state / "02_label_review" / "SECOND_EVIDENCE_VERIFICATION.json",
         )
 
 

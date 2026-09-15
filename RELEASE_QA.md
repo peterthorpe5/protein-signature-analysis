@@ -27,6 +27,48 @@ checksum-bound test approval, the unchanged human approval path and shell/Snakem
 passed. A real Snakemake 9 dry-run resolved all nine automated E3 DAG jobs. The exact patched
 tree still requires the independent full Mac/CI gate before tagging.
 
+### Post-QA evidence-led labelling extension
+
+The evidence-led implementation was added after the retained complete-suite baseline. At the
+operator's request, the full suite was not repeated in this packaging session. Focused tests
+cover a non-E3 profile, independent annotation plus Pfam acceptance, conflicting and
+below-policy abstention, outcome-blind control matching, label-feature removal, full campaign
+configuration validation, rules-schema validation, E3/F-box coverage and checksum tamper
+detection. The generic and completed-E3 launchers, Snakefiles and marker contracts require
+independent Mac/cluster confirmation before release tagging. Automated evidence results are
+explicitly provisional and are not represented as human-reviewed classifications.
+
+### Final evidence-led handover validation
+
+The final packaging pass deliberately used focused checks only. Six evidence-label tests,
+including the completed-E3 provisional approval and checksum-tamper contract, passed. Three
+repository/distribution contract tests passed separately. Python compilation, Ruff, Bash
+syntax and validation of both the generic example and built-in E3 evidence rules against the
+published JSON schema also passed. The source distribution and universal wheel built offline;
+the source distribution contains the complete text handover, generic rules example,
+EvidenceSnakefile and both launchers, while the wheel contains the built-in E3 profile and
+rules. The standalone Word guide rendered to 23 non-empty letter-sized pages and every page
+was visually inspected. The complete test suite was not run in this pass, as requested by the
+operator.
+
+### Post-push raw OrthoFinder identifier correction
+
+The first cluster smoke run exposed a cross-authority identifier mismatch that
+the synthetic fixture had not represented. Completed-E3 preparation uses the
+controlled parsed accession from `candidate_group_member_sequences`, while the
+reused OrthoFinder HOG authority retains an internal identifier mapped to a raw
+FASTA token such as `sp|Q9SA03|FB27_ARATH`. The raw-results adapter formerly
+required an exact match between these two representations. It now implements
+the same narrow, ambiguity-rejecting UniProt alias policy as the published
+`orthofinder-results` adapter and recognises the precursor's single
+`sample@@identifier` qualifier. Focused regression tests cover successful
+accession reconciliation and fail-closed ambiguity. Ten targeted tests passed,
+including the raw 2.5.5 adapter, E3/F-box default-comparison contract,
+evidence-label suite and checksum-bound completed-E3 approval contract. Ruff
+formatting/lint and focused Python compilation also passed. This correction
+does not weaken HOG identity, completion-authority or checksum validation. The
+complete test suite was not run.
+
 ## Code-quality and test gates
 
 | Gate | Result |

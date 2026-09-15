@@ -16,6 +16,15 @@ from .associations import analyse_feature_associations, summarise_signatures
 from .checksums import sha256_json
 from .config import config_to_record, load_config
 from .errors import ExternalToolError, InputValidationError, PublicationError
+from .evidence_labels import (
+    CLASS_SUMMARY_FIELDS,
+    CONTROL_MATCH_FIELDS,
+    EVIDENCE_AUDIT_FIELDS,
+    LABEL_DEFINITION_FIELDS,
+    UNRESOLVED_FIELDS,
+    read_evidence_audit_table,
+    verify_evidence_label_bundle,
+)
 from .explainable_ml import run_explainable_models
 from .fasta import read_protein_fasta
 from .feature_provenance import (
@@ -146,6 +155,7 @@ def run_campaign(
         "imported_structural_alignment": data["imported_structural_alignment"],
         "explainable_ml": data["explainable_ml"],
         "human_reports": data["human_reports"],
+        "automated_label_evidence": data["automated_label_evidence"],
         "determinism": {
             "partition_seed": config.analysis.random_seed,
             "stable_sorting": True,
@@ -184,6 +194,7 @@ def validate_campaign(*, config_path: Path) -> dict[str, Any]:
         label_ids=profile.label_ids(),
     )
     validate_assignment_profile_compatibility(assignments=assignments, profile=profile)
+    _, label_evidence_metadata = _load_label_evidence_tables(config=config)
     external_feature_records = (
         read_features(path=config.inputs.features, sequences=sequences)
         if config.inputs.features is not None
@@ -333,6 +344,7 @@ def validate_campaign(*, config_path: Path) -> dict[str, Any]:
             else "NOT_SELECTED"
         ),
         "profile_structural_evidence": structural_policy,
+        "automated_label_evidence": label_evidence_metadata,
     }
 
 
@@ -530,6 +542,7 @@ def _prepare_campaign(
         label_ids=profile.label_ids(),
     )
     validate_assignment_profile_compatibility(assignments=assignments, profile=profile)
+    label_evidence_tables, label_evidence_metadata = _load_label_evidence_tables(config=config)
     exact_redundancy = derive_exact_sequence_clusters(sequences=sequences)
     supplied_redundancy = (
         read_redundancy_clusters(
@@ -763,6 +776,7 @@ def _prepare_campaign(
         ),
         "features": tuple(item.to_record() for item in features),
         "label_assignments": tuple(item.to_record() for item in assignments),
+        **label_evidence_tables,
         "label_memberships": label_memberships,
         "ml_explanations": explainable_ml.explanations,
         "ml_feature_importance": explainable_ml.feature_importance,
@@ -855,6 +869,7 @@ def _prepare_campaign(
             "near_redundancy": ("COMPLETE" if supplied_redundancy else "INPUT_UNAVAILABLE"),
             "alphafold_acquisition": ("COMPLETE" if acquisitions else "NOT_SELECTED"),
             "explainable_ml": explainable_ml.status,
+            "automated_label_evidence": label_evidence_metadata["status"],
         },
         "orthofinder": (
             orthofinder_source.to_record()
@@ -907,6 +922,7 @@ def _prepare_campaign(
             "excel_workbook_count": human_reports.workbook_count,
             "inventory_row_count": len(human_reports.inventory),
         },
+        "automated_label_evidence": label_evidence_metadata,
     }
 
 
@@ -1142,6 +1158,118 @@ def _profile_label_record(*, item: Any) -> dict[str, Any]:
         "aliases": "|".join(item.aliases),
         "description": item.description,
     }
+
+
+def _load_label_evidence_tables(
+    *, config: CampaignConfig
+) -> tuple[dict[str, tuple[dict[str, Any], ...]], dict[str, Any]]:
+    """Load and cross-check an optional automated label-evidence bundle.
+
+    Args:
+        config: Validated campaign configuration.
+
+    Returns:
+        Canonical audit tables and a metadata summary. All audit tables are
+        present but empty when automated evidence labelling was not selected.
+
+    Raises:
+        InputValidationError: If the bundle is partial or does not match the
+            configured label/domain authorities.
+    """
+
+    table_contract = {
+        "label_evidence_audit": (
+            config.inputs.label_evidence_audit,
+            EVIDENCE_AUDIT_FIELDS,
+        ),
+        "control_matching_audit": (
+            config.inputs.control_matching_audit,
+            CONTROL_MATCH_FIELDS,
+        ),
+        "label_definition_features": (
+            config.inputs.label_definition_features,
+            LABEL_DEFINITION_FIELDS,
+        ),
+        "class_labelling_summary": (
+            config.inputs.class_labelling_summary,
+            CLASS_SUMMARY_FIELDS,
+        ),
+        "unresolved_assignments": (
+            config.inputs.unresolved_assignments,
+            UNRESOLVED_FIELDS,
+        ),
+    }
+    configured_paths = {path for path, _ in table_contract.values() if path is not None}
+    marker = config.inputs.label_evidence_marker
+    if marker is None and configured_paths:
+        raise InputValidationError(
+            "Automated label audit tables require inputs.label_evidence_marker."
+        )
+    if marker is None:
+        return (
+            {name: () for name in table_contract},
+            {"status": "NOT_SELECTED", "interpretation_scope": "NOT_APPLICABLE"},
+        )
+    missing = [name for name, (path, _) in table_contract.items() if path is None]
+    if missing:
+        raise InputValidationError(
+            f"An automated evidence bundle requires every audit table; missing={missing}."
+        )
+    marker_path = Path(marker).resolve()
+    if marker_path.name != "EVIDENCE_LABELS.json":
+        raise InputValidationError(
+            "inputs.label_evidence_marker must be named EVIDENCE_LABELS.json."
+        )
+    document = verify_evidence_label_bundle(bundle_dir=marker_path.parent)
+    expected_paths = {
+        "label_assignments": config.inputs.label_assignments,
+        **{name: path for name, (path, _) in table_contract.items()},
+    }
+    for field, configured in expected_paths.items():
+        if configured is None:
+            raise InputValidationError(
+                f"Evidence bundle requires a configured {field!r} authority."
+            )
+        recorded = Path(str(document.get(field, marker_path.parent / f"{field}.tsv"))).resolve()
+        if field not in document:
+            recorded = (marker_path.parent / f"{field}.tsv").resolve()
+        if recorded != Path(configured).resolve():
+            raise InputValidationError(
+                f"Evidence bundle field {field!r} differs from campaign configuration."
+            )
+    recorded_domains = document.get("analysis_domains")
+    configured_domains = config.inputs.domains
+    if recorded_domains is None:
+        if configured_domains is not None:
+            raise InputValidationError(
+                "Campaign domains were configured but the evidence bundle has no "
+                "label-definition-safe domain projection."
+            )
+    elif (
+        configured_domains is None
+        or Path(str(recorded_domains)).resolve() != Path(configured_domains).resolve()
+    ):
+        raise InputValidationError(
+            "Evidence bundle analysis_domains differs from campaign configuration."
+        )
+    tables = {
+        name: read_evidence_audit_table(path=path, fields=fields)
+        for name, (path, fields) in table_contract.items()
+    }
+    return (
+        tables,
+        {
+            "status": "PROVISIONAL_EVIDENCE_SUPPORTED",
+            "interpretation_scope": document["interpretation_scope"],
+            "human_review_completed": document["human_review_completed"],
+            "ruleset_id": document["ruleset_id"],
+            "ruleset_version": document["ruleset_version"],
+            "ruleset_sha256": document["ruleset_sha256"],
+            "evidence_supported_target_count": document["evidence_supported_target_count"],
+            "matched_control_protein_count": document["matched_control_protein_count"],
+            "warning": document["warning"],
+        },
+    )
 
 
 def _input_authorities(*, config: CampaignConfig, source: Any, resource_mode: bool) -> list[Path]:

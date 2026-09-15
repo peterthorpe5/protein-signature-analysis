@@ -72,6 +72,75 @@ def table_schemas() -> dict[str, pa.Schema]:
                 ("curation_reason", text),
             ]
         ),
+        "label_evidence_audit": pa.schema(
+            [
+                ("protein_id", text),
+                ("label_id", text),
+                ("rule_id", text),
+                ("decision", text),
+                ("confidence_tier", text),
+                ("score", number),
+                ("evidence_group_count", integer),
+                ("evidence_groups", text),
+                ("evidence_items", text),
+                ("independence_unit", text),
+                ("conflicting_label_ids", text),
+                ("reason", text),
+            ]
+        ),
+        "control_matching_audit": pa.schema(
+            [
+                ("background_label_id", text),
+                ("target_label_ids", text),
+                ("target_protein_id", text),
+                ("target_unit_id", text),
+                ("control_protein_id", text),
+                ("control_unit_id", text),
+                ("species_match", boolean),
+                ("structure_eligibility_match", boolean),
+                ("length_log2_difference", number),
+                ("domain_count_difference", integer),
+                ("domain_architecture_jaccard", number),
+                ("mean_confidence_difference", number),
+                ("match_score", number),
+                ("status", text),
+                ("reason", text),
+            ]
+        ),
+        "label_definition_features": pa.schema(
+            [
+                ("label_id", text),
+                ("feature_type", text),
+                ("feature_id", text),
+                ("feature_name", text),
+                ("rule_id", text),
+                ("evidence_role", text),
+                ("exclusion_scope", text),
+                ("reason", text),
+            ]
+        ),
+        "class_labelling_summary": pa.schema(
+            [
+                ("label_id", text),
+                ("label_type", text),
+                ("direct_positive_protein_count", integer),
+                ("independent_unit_count", integer),
+                ("matched_background_label_id", text),
+                ("matched_control_protein_count", integer),
+                ("matched_control_unit_count", integer),
+                ("status", text),
+            ]
+        ),
+        "unresolved_assignments": pa.schema(
+            [
+                ("protein_id", text),
+                ("provisional_label_id", text),
+                ("curation_status", text),
+                ("best_score", number),
+                ("candidate_label_ids", text),
+                ("reason", text),
+            ]
+        ),
         "label_memberships": pa.schema(
             [
                 ("protein_id", text),

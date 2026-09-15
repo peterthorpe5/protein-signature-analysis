@@ -78,7 +78,7 @@ protein-signature-app = "protein_signature_app.launcher:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-protein_signatures = ["data/profiles/*.yaml"]
+protein_signatures = ["data/profiles/*.yaml", "data/evidence_rules/*.yaml"]
 
 [tool.coverage.run]
 branch = true

@@ -110,6 +110,8 @@ while [[ $# -gt 0 ]]; do
             LOG_LEVEL="${2:-}"
             shift 2
             ;;
+        --label-evidence-marker|--label-evidence-audit|--control-matching-audit|\
+        --label-definition-features|--class-labelling-summary|--unresolved-assignments|\
         --features|--domains|--redundancy-clusters|--structures|--structure-comparisons|\
         --structural-alignment-resource|--alphafold-accessions|\
         --orthofinder-resource|--orthofinder-results|--orthofinder-group-type|\

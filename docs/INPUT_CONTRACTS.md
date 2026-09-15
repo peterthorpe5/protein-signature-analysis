@@ -57,6 +57,7 @@ protein_id	label_id	curation_status	evidence_status	evidence_source	evidence_ref
 `label_id` must exist in the chosen profile. Accepted `curation_status` values are:
 
 - `REVIEWED_POSITIVE`
+- `EVIDENCE_SUPPORTED_POSITIVE`
 - `REVIEWED_NEGATIVE`
 - `REVIEWED_COMPONENT_NOT_CATALYTIC`
 - `PROPOSED`
@@ -64,9 +65,25 @@ protein_id	label_id	curation_status	evidence_status	evidence_source	evidence_ref
 - `UNMAPPED`
 - `EXCLUDED`
 
-Only `REVIEWED_POSITIVE` is expanded into analysis membership. A background control must
-therefore be positively reviewed as a member of its background label, not merely marked
-`REVIEWED_NEGATIVE` against a target label. `(protein_id, label_id)` must be unique.
+`REVIEWED_POSITIVE` is expanded into reviewed analysis membership.
+`EVIDENCE_SUPPORTED_POSITIVE` is accepted only when the campaign also supplies the complete,
+checksum-valid evidence bundle created by `create-evidence-labels`; it remains explicitly
+provisional. A background control must therefore be positively assigned as a member of its
+background label, not merely marked `REVIEWED_NEGATIVE` against a target label.
+`(protein_id, label_id)` must be unique.
+
+Evidence-led campaigns set all six additional `inputs` paths together:
+
+- `label_evidence_marker`;
+- `label_evidence_audit`;
+- `control_matching_audit`;
+- `label_definition_features`;
+- `class_labelling_summary`; and
+- `unresolved_assignments`.
+
+The marker must be named `EVIDENCE_LABELS.json`, every path must resolve to the same verified
+bundle, and `domains` must equal its circularity-safe projection when that projection exists.
+See [Evidence-led labels and controls](EVIDENCE_LED_LABELS.md).
 
 For software testing only, `protein-signatures create-automated-test-labels` can create a
 complete table from any valid FASTA and built-in or custom profile. `--target-label ALL`

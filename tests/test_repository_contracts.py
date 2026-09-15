@@ -109,6 +109,7 @@ def test_release_versions_and_launcher_modes_are_consistent() -> None:
         "run_protein_signature_app.sh",
         "start_from_inputs.sh",
         "run_completed_e3_workflow.sh",
+        "run_evidence_signature_workflow.sh",
         "submit_protein_signature_workflow_slurm.sh",
         "slurm/protein_signature_workflow_controller.sbatch",
         "slurm/run_completed_e3_workflow.sbatch",
@@ -125,6 +126,8 @@ def test_source_distribution_manifest_excludes_generated_and_sensitive_files() -
     assert "prune examples/minimal_e3/.protein_signature_cache" in manifest
     assert "global-exclude .env .env.* *.pem *.key *.p12 *.pfx" in manifest
     assert "recursive-include workflow Snakefile E3Snakefile" in manifest
+    assert "EvidenceSnakefile" in manifest
+    assert "include run_evidence_signature_workflow.sh" in manifest
     assert "recursive-include profiles *.yaml" in manifest
     assert "recursive-include slurm *.sbatch" in manifest
 
@@ -135,6 +138,9 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
     root = Path(__file__).parents[1]
     snakefile = (root / "workflow/Snakefile").read_text(encoding="utf-8")
     e3_snakefile = (root / "workflow/E3Snakefile").read_text(encoding="utf-8")
+    evidence_snakefile = (root / "workflow/EvidenceSnakefile").read_text(
+        encoding="utf-8"
+    )
     assert "rule validate_campaign:" in snakefile
     assert "rule run_campaign:" in snakefile
     assert "rule verify_campaign:" in snakefile
@@ -160,6 +166,12 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
     assert "protein-signatures workflow-initialise-e3" in e3_snakefile
     assert "PREPARED_DIR in REVIEWED_LABELS.parents" in e3_snakefile
     assert "--resume" in e3_snakefile
+    assert "rule create_evidence_labels:" in evidence_snakefile
+    assert "rule initialise_campaign:" in evidence_snakefile
+    assert "rule run_campaign:" in evidence_snakefile
+    assert "rule verify_campaign:" in evidence_snakefile
+    assert "--label-definition-features" in evidence_snakefile
+    assert "Explicit provisional-evidence acceptance is required" in evidence_snakefile
 
     local_profile = yaml.safe_load(
         (root / "profiles/local/config.v8+.yaml").read_text(encoding="utf-8")

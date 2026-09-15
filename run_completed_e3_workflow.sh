@@ -32,6 +32,25 @@ Usage:
     --slurm-time 2-00:00:00 \
     --threads 24
 
+  # Evidence-led PROVISIONAL run with automated labels and matched controls.
+  ./run_completed_e3_workflow.sh \
+    --phase all \
+    --run-root /absolute/path/completed_e3_end_to_end_run \
+    --work-dir /persistent/path/e3_evidence_signatures \
+    --campaign-id e3_evidence_signatures \
+    --evidence-led-labels \
+    --accept-provisional-evidence-labels \
+    [--evidence-rules e3] \
+    [--seed-assignments /absolute/path/reviewed_seed_labels.tsv] \
+    [--seed-catalogue /absolute/path/e3_seed_catalogue.tsv] \
+    [--external-annotations /absolute/path/external_annotations.tsv] \
+    --submit-slurm \
+    --slurm-account barton \
+    --slurm-partition barton \
+    --slurm-memory 128G \
+    --slurm-time 2-00:00:00 \
+    --threads 24
+
   # Fully automated SOFTWARE SMOKE TEST with synthetic labels and no human review.
   # Use a separate work directory and campaign ID containing "smoke" or "test".
   ./run_completed_e3_workflow.sh \
@@ -68,6 +87,13 @@ conspicuous provenance. Its results MUST NOT be interpreted scientifically.
   --test-samples-per-class N  Synthetic samples per direct cohort (default: 20;
                              minimum: 20).
 
+--evidence-led-labels uses versioned annotation/Pfam rules, optional curated
+direct labels, one-generation unanimous HOG propagation, structure eligibility
+and prespecified outcome-blind matching. Without
+--accept-provisional-evidence-labels it stops after the evidence bundle is ready.
+With that explicit flag it runs unattended, but results remain provisional
+hypothesis-generation evidence until human scientific review.
+
 Slurm options:
   --submit-slurm          Submit prepare, initialise, all or run.
   --slurm-account NAME   Account (default: barton).
@@ -98,6 +124,13 @@ REVIEW_NOTE=""
 PROFILE="e3"
 AUTOMATED_TEST_LABELS="false"
 AUTOMATED_TEST_OPTION_SEEN="false"
+EVIDENCE_LED_LABELS="false"
+ACCEPT_PROVISIONAL_EVIDENCE="false"
+EVIDENCE_OPTION_SEEN="false"
+EVIDENCE_RULES="e3"
+SEED_ASSIGNMENTS=""
+SEED_CATALOGUE=""
+EXTERNAL_ANNOTATIONS=""
 TEST_TARGET_LABEL="ALL"
 TEST_SAMPLES_PER_CLASS="20"
 MINIMUM_MEAN_PLDDT="50"
@@ -165,6 +198,39 @@ while [[ $# -gt 0 ]]; do
         --automated-test-labels)
             AUTOMATED_TEST_LABELS="true"
             shift
+            ;;
+        --evidence-led-labels)
+            EVIDENCE_LED_LABELS="true"
+            shift
+            ;;
+        --accept-provisional-evidence-labels)
+            ACCEPT_PROVISIONAL_EVIDENCE="true"
+            EVIDENCE_OPTION_SEEN="true"
+            shift
+            ;;
+        --evidence-rules)
+            require_option_value "$@"
+            EVIDENCE_RULES="${2:-}"
+            EVIDENCE_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --seed-assignments)
+            require_option_value "$@"
+            SEED_ASSIGNMENTS="${2:-}"
+            EVIDENCE_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --seed-catalogue)
+            require_option_value "$@"
+            SEED_CATALOGUE="${2:-}"
+            EVIDENCE_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --external-annotations)
+            require_option_value "$@"
+            EXTERNAL_ANNOTATIONS="${2:-}"
+            EVIDENCE_OPTION_SEEN="true"
+            shift 2
             ;;
         --test-target-label)
             require_option_value "$@"
@@ -302,6 +368,41 @@ if [[ "${AUTOMATED_TEST_OPTION_SEEN}" == "true" && \
     echo "Automated test label options require --automated-test-labels." >&2
     exit 2
 fi
+if [[ "${AUTOMATED_TEST_LABELS}" == "true" && \
+        "${EVIDENCE_LED_LABELS}" == "true" ]]; then
+    echo "--automated-test-labels and --evidence-led-labels are mutually exclusive." >&2
+    exit 2
+fi
+if [[ "${EVIDENCE_OPTION_SEEN}" == "true" && \
+        "${EVIDENCE_LED_LABELS}" != "true" ]]; then
+    echo "Evidence-label options require --evidence-led-labels." >&2
+    exit 2
+fi
+if [[ "${EVIDENCE_LED_LABELS}" == "true" && "${PHASE}" != "all" ]]; then
+    echo "--evidence-led-labels is supported only with --phase all." >&2
+    exit 2
+fi
+if [[ -z "${EVIDENCE_RULES}" ]]; then
+    echo "--evidence-rules must not be empty." >&2
+    exit 2
+fi
+if [[ "${EVIDENCE_RULES}" == */* ]]; then
+    if [[ "${EVIDENCE_RULES}" != /* || ! -s "${EVIDENCE_RULES}" ]]; then
+        echo "Custom --evidence-rules must be an existing absolute file." >&2
+        exit 2
+    fi
+elif [[ ! "${EVIDENCE_RULES}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "Built-in --evidence-rules contains unsafe characters." >&2
+    exit 2
+fi
+for evidence_file in "${SEED_ASSIGNMENTS}" "${SEED_CATALOGUE}" \
+        "${EXTERNAL_ANNOTATIONS}"; do
+    if [[ -n "${evidence_file}" && \
+            ("${evidence_file}" != /* || ! -s "${evidence_file}") ]]; then
+        echo "Evidence authorities must be existing non-empty absolute files: ${evidence_file}" >&2
+        exit 2
+    fi
+done
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "${WORK_DIR}" == "/" || "${WORK_DIR}" == "${HOME:-}" || \
@@ -319,6 +420,9 @@ CAMPAIGN_ID="${CAMPAIGN_ID:-$(basename "${WORK_DIR}")}"
 readonly AUTOMATED_LABELS_PATH="${WORK_DIR}/AUTOMATED_TEST_ONLY.label_assignments.tsv"
 readonly AUTOMATED_LABELS_MARKER="${E3_STATE_DIR}/02_label_review/AUTOMATED_TEST_ONLY.LABELS.json"
 readonly AUTOMATED_APPROVAL_PATH="${E3_STATE_DIR}/02_label_review/AUTOMATED_TEST_ONLY.REVIEW_APPROVED.json"
+readonly EVIDENCE_BUNDLE_DIR="${WORK_DIR}/evidence_label_bundle"
+readonly EVIDENCE_LABELS_PATH="${EVIDENCE_BUNDLE_DIR}/label_assignments.tsv"
+readonly EVIDENCE_APPROVAL_PATH="${E3_STATE_DIR}/02_label_review/EVIDENCE_PROVISIONAL.REVIEW_APPROVED.json"
 if [[ "${AUTOMATED_TEST_LABELS}" == "true" ]]; then
     if [[ "${PHASE}" != "all" ]]; then
         echo "--automated-test-labels is supported only with --phase all." >&2
@@ -342,6 +446,19 @@ if [[ "${AUTOMATED_TEST_LABELS}" == "true" ]]; then
     fi
     LABEL_ASSIGNMENTS="${AUTOMATED_LABELS_PATH}"
     REVIEW_APPROVAL="${AUTOMATED_APPROVAL_PATH}"
+elif [[ "${EVIDENCE_LED_LABELS}" == "true" ]]; then
+    if [[ -n "${LABEL_ASSIGNMENTS}" && \
+            "${LABEL_ASSIGNMENTS}" != "${EVIDENCE_LABELS_PATH}" ]]; then
+        echo "Evidence-led mode reserves its fixed evidence-bundle label path." >&2
+        exit 2
+    fi
+    if [[ -n "${REVIEW_APPROVAL}" && \
+            "${REVIEW_APPROVAL}" != "${EVIDENCE_APPROVAL_PATH}" ]]; then
+        echo "Evidence-led mode reserves its fixed provisional approval path." >&2
+        exit 2
+    fi
+    LABEL_ASSIGNMENTS="${EVIDENCE_LABELS_PATH}"
+    REVIEW_APPROVAL="${EVIDENCE_APPROVAL_PATH}"
 else
     LABEL_ASSIGNMENTS="${LABEL_ASSIGNMENTS:-${WORK_DIR}/reviewed_label_assignments.tsv}"
     REVIEW_APPROVAL="${REVIEW_APPROVAL:-${E3_STATE_DIR}/02_label_review/REVIEW_APPROVED.json}"
@@ -407,6 +524,24 @@ submit_slurm_phase() {
             --test-target-label "${TEST_TARGET_LABEL}"
             --test-samples-per-class "${TEST_SAMPLES_PER_CLASS}"
         )
+    fi
+    if [[ "${EVIDENCE_LED_LABELS}" == "true" ]]; then
+        worker_arguments+=(
+            --evidence-led-labels
+            --evidence-rules "${EVIDENCE_RULES}"
+        )
+        if [[ "${ACCEPT_PROVISIONAL_EVIDENCE}" == "true" ]]; then
+            worker_arguments+=(--accept-provisional-evidence-labels)
+        fi
+        if [[ -n "${SEED_ASSIGNMENTS}" ]]; then
+            worker_arguments+=(--seed-assignments "${SEED_ASSIGNMENTS}")
+        fi
+        if [[ -n "${SEED_CATALOGUE}" ]]; then
+            worker_arguments+=(--seed-catalogue "${SEED_CATALOGUE}")
+        fi
+        if [[ -n "${EXTERNAL_ANNOTATIONS}" ]]; then
+            worker_arguments+=(--external-annotations "${EXTERNAL_ANNOTATIONS}")
+        fi
     fi
     if [[ -n "${SLURM_ACCOUNT}" ]]; then
         sbatch_arguments+=("--account=${SLURM_ACCOUNT}")
@@ -540,6 +675,12 @@ run_e3_snakemake() {
         "e3_reviewed_labels=${LABEL_ASSIGNMENTS}"
         "e3_review_approval=${REVIEW_APPROVAL}"
         "e3_automated_test_labels=${AUTOMATED_TEST_LABELS}"
+        "e3_evidence_led_labels=${EVIDENCE_LED_LABELS}"
+        "e3_accept_provisional_evidence_labels=${ACCEPT_PROVISIONAL_EVIDENCE}"
+        "e3_evidence_rules=${EVIDENCE_RULES}"
+        "e3_seed_assignments=${SEED_ASSIGNMENTS}"
+        "e3_seed_catalogue=${SEED_CATALOGUE}"
+        "e3_external_annotations=${EXTERNAL_ANNOTATIONS}"
         "e3_test_target_label=${TEST_TARGET_LABEL}"
         "e3_test_samples_per_class=${TEST_SAMPLES_PER_CLASS}"
         "e3_threads=${THREADS}"
@@ -616,6 +757,20 @@ if [[ "${PHASE}" == "all" ]]; then
         echo "Completed AUTOMATED TEST ONLY campaign: ${RESULT_DIR}"
         echo "These synthetic-label results test software execution and MUST NOT be " \
             "interpreted scientifically."
+        exit 0
+    fi
+    if [[ "${EVIDENCE_LED_LABELS}" == "true" ]]; then
+        if [[ "${ACCEPT_PROVISIONAL_EVIDENCE}" != "true" ]]; then
+            run_e3_snakemake review_ready
+            echo "Evidence-led label and matched-control bundle is ready:"
+            echo "  ${EVIDENCE_BUNDLE_DIR}"
+            echo "No analysis was started. Inspect its TSV/XLSX audits, then rerun the same"
+            echo "command with --accept-provisional-evidence-labels to continue unattended."
+            exit 0
+        fi
+        run_e3_snakemake all
+        echo "Completed provisional evidence-led E3 signature result: ${RESULT_DIR}"
+        echo "Interpret as hypothesis-generation evidence until human scientific review."
         exit 0
     fi
     if [[ ! -s "${REVIEW_APPROVAL}" ]]; then

@@ -1,0 +1,61 @@
+schema_version: 1
+ruleset_id: kinase_example_rules
+ruleset_version: "1.0.0"
+profile_id: kinase_example
+
+# This example deliberately requires annotation plus domain corroboration.
+# Replace these rules with a versioned, protein-type-specific scientific
+# authority before using the generic workflow on another protein family.
+settings:
+  annotation_score: 2.0
+  specific_annotation_score: 4.0
+  pfam_score: 2.0
+  supporting_pfam_score: 0.5
+  orthology_score: 2.0
+  trusted_label_score: 5.0
+  minimum_acceptance_score: 3.5
+  minimum_evidence_groups: 2
+  minimum_score_margin: 1.0
+  require_target_structure_eligible: false
+  orthology_propagation_enabled: true
+  minimum_orthology_anchor_proteins: 2
+  control_units_per_target_unit: 2
+  minimum_control_units_per_background: 3
+  require_species_match: true
+  require_structure_match: true
+  maximum_log2_length_difference: 0.75
+  maximum_domain_count_difference: 2
+  exclude_input_candidates_from_controls: true
+
+label_rules:
+  - rule_id: serine_threonine_kinase
+    label_id: protein:kinase:serine_threonine
+    priority: 100
+    annotation_patterns:
+      - '\bserine[/ -]?threonine(?: protein)? kinase\b'
+      - '\bSTK\b'
+    specific_annotation_patterns:
+      - '\bserine[/ -]?threonine(?:-protein)? kinase(?: family)?\b'
+    exclusion_patterns:
+      - '\btyrosine kinase\b'
+    required_domain_patterns:
+      - '^PF00069\b|\bprotein kinase domain\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: tyrosine_kinase
+    label_id: protein:kinase:tyrosine
+    priority: 100
+    annotation_patterns:
+      - '\btyrosine(?: protein)? kinase\b'
+      - '\bTK\b'
+    specific_annotation_patterns:
+      - '\bprotein[- ]tyrosine kinase(?: family)?\b'
+    exclusion_patterns:
+      - '\bserine[/ -]?threonine kinase\b'
+    required_domain_patterns:
+      - '^PF00069\b|\bprotein kinase domain\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true

@@ -1,0 +1,786 @@
+schema_version: 1
+ruleset_id: e3_evidence_defaults
+ruleset_version: "1.0.0"
+profile_id: e3_default
+
+# These rules create provisional evidence-supported hypotheses, not reviewed
+# biochemical truth. A normal annotation requires independent corroboration;
+# a single annotation can stand alone only when it is both highly specific and
+# supplied as direct/exact-protein evidence by a trusted authority.
+settings:
+  annotation_score: 2.0
+  specific_annotation_score: 4.0
+  pfam_score: 2.0
+  supporting_pfam_score: 0.5
+  orthology_score: 2.0
+  trusted_label_score: 5.0
+  minimum_acceptance_score: 3.5
+  minimum_evidence_groups: 2
+  minimum_score_margin: 1.0
+  require_target_structure_eligible: true
+  orthology_propagation_enabled: true
+  minimum_orthology_anchor_proteins: 2
+  control_units_per_target_unit: 3
+  minimum_control_units_per_background: 3
+  require_species_match: true
+  require_structure_match: true
+  maximum_log2_length_difference: 0.75
+  maximum_domain_count_difference: 2
+  exclude_input_candidates_from_controls: true
+
+label_rules:
+  - rule_id: ring_parent
+    label_id: e3:ubiquitin:ring
+    priority: 50
+    annotation_patterns: ['\bRING(?:[- ](?:finger|type))?\b']
+    specific_annotation_patterns: ['\bRING[- ]type E3(?: ubiquitin)? ligase\b']
+    exclusion_patterns: ['\bRING[- ]box\b', '\bRING1\b.*\bIBR\b.*\bRING2\b']
+    required_domain_patterns: &ring_domains ['^(PF00097|PF12906|PF13639|PF13920|PF15227)\b|\bRING(?: finger)?(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_h2
+    label_id: e3:ubiquitin:ring:ring_h2
+    priority: 100
+    annotation_patterns: ['\bRING[- ]?H2\b']
+    specific_annotation_patterns: ['\bRING[- ]?H2(?: E3)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_hc
+    label_id: e3:ubiquitin:ring:ring_hc
+    priority: 90
+    annotation_patterns: ['\bRING[- ]?HC\b', '\bC3HC4\b']
+    specific_annotation_patterns: ['\bRING[- ]?HC(?: group)?\b']
+    exclusion_patterns: ['\bRING[- ]?HC[ab]\b']
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_hca
+    label_id: e3:ubiquitin:ring:ring_hc:ring_hca
+    priority: 110
+    annotation_patterns: ['\bRING[- ]?HCa\b']
+    specific_annotation_patterns: ['\bRING[- ]?HCa(?: E3)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_hcb
+    label_id: e3:ubiquitin:ring:ring_hc:ring_hcb
+    priority: 110
+    annotation_patterns: ['\bRING[- ]?HCb\b']
+    specific_annotation_patterns: ['\bRING[- ]?HCb(?: E3)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_c2
+    label_id: e3:ubiquitin:ring:ring_c2
+    priority: 100
+    annotation_patterns: ['\bRING[- ]?C2\b']
+    specific_annotation_patterns: ['\bRING[- ]?C2(?: E3)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_d
+    label_id: e3:ubiquitin:ring:ring_d
+    priority: 100
+    annotation_patterns: ['\bRING[- ]?D\b']
+    specific_annotation_patterns: ['\bRING[- ]?D(?: E3)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_g
+    label_id: e3:ubiquitin:ring:ring_g
+    priority: 100
+    annotation_patterns: ['\bRING[- ]?G\b']
+    specific_annotation_patterns: ['\bRING[- ]?G(?: E3)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_s_t
+    label_id: e3:ubiquitin:ring:ring_s_t
+    priority: 100
+    annotation_patterns: ['\bRING[- ]?(?:S(?:/T)?|T)\b']
+    specific_annotation_patterns: ['\bRING[- ]?S/T(?: E3)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_v
+    label_id: e3:ubiquitin:ring:ring_v
+    priority: 100
+    annotation_patterns: ['\bRING[- ]?v\b']
+    specific_annotation_patterns: ['\bRING[- ]?v(?: E3)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_trim
+    label_id: e3:ubiquitin:ring:trim
+    priority: 120
+    annotation_patterns: ['\bTRIM(?:[- ]like)?\b', '\btripartite motif\b']
+    specific_annotation_patterns: ['\bTRIM\d+[A-Za-z-]*\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: ['\bB[- ]box\b|^PF00643\b']
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: ring_march
+    label_id: e3:ubiquitin:ring:march
+    priority: 120
+    annotation_patterns: ['\bMARCH(?:F|\d+)?\b', '\bmembrane[- ]associated RING[- ]CH\b']
+    specific_annotation_patterns: ['\bMARCH(?:F|\d+)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: u_box_parent
+    label_id: e3:ubiquitin:u_box
+    priority: 50
+    annotation_patterns: ['\bU[- ]?box\b']
+    specific_annotation_patterns: ['\bU[- ]?box E3(?: ubiquitin)? ligase\b']
+    exclusion_patterns: []
+    required_domain_patterns: &u_box_domains ['^PF04564\b|\bU[- ]?box(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: u_box_pub_arm
+    label_id: e3:ubiquitin:u_box:pub_arm
+    priority: 110
+    annotation_patterns: ['\bPUB(?:[- ]ARM)?\b', '\bplant U[- ]box\b']
+    specific_annotation_patterns: ['\bPUB\d+[A-Za-z-]*\b']
+    exclusion_patterns: []
+    required_domain_patterns: *u_box_domains
+    supporting_domain_patterns: ['\bARM(?:ADILLO)?(?: repeat)?\b|^PF00514\b']
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: u_box_chip
+    label_id: e3:ubiquitin:u_box:chip
+    priority: 110
+    annotation_patterns: ['\bCHIP(?:[- ]like)?\b', '\bSTUB1\b']
+    specific_annotation_patterns: ['\b(?:CHIP|STUB1)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *u_box_domains
+    supporting_domain_patterns: ['\bTPR(?: repeat)?\b|^PF00515\b']
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: u_box_ufd2_e4
+    label_id: e3:ubiquitin:u_box:ufd2_e4
+    priority: 110
+    annotation_patterns: ['\bUFD2\b', '\bE4 ubiquit(?:in|ination) factor\b', '\bUBE4[AB]\b']
+    specific_annotation_patterns: ['\b(?:UFD2|UBE4[AB])\b']
+    exclusion_patterns: []
+    required_domain_patterns: *u_box_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: hect_parent
+    label_id: e3:ubiquitin:hect
+    priority: 50
+    annotation_patterns: ['\bHECT\b']
+    specific_annotation_patterns: ['\bHECT(?:[- ]type)? E3(?: ubiquitin)? ligase\b']
+    exclusion_patterns: []
+    required_domain_patterns: &hect_domains ['^PF00632\b|\bHECT(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: hect_upl_plant
+    label_id: e3:ubiquitin:hect:upl_plant
+    priority: 110
+    annotation_patterns: ['\bUPL\d*\b', '\bubiquitin protein ligase UPL\b']
+    specific_annotation_patterns: ['\bUPL[1-9]\d*\b']
+    exclusion_patterns: []
+    required_domain_patterns: *hect_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: hect_nedd4
+    label_id: e3:ubiquitin:hect:nedd4
+    priority: 110
+    annotation_patterns: ['\bNEDD4(?:L)?\b']
+    specific_annotation_patterns: ['\bNEDD4(?:L)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: *hect_domains
+    supporting_domain_patterns: ['\bWW(?: domain)?\b|^PF00397\b']
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: hect_herc
+    label_id: e3:ubiquitin:hect:herc
+    priority: 110
+    annotation_patterns: ['\bHERC[1-6]?\b']
+    specific_annotation_patterns: ['\bHERC[1-6]\b']
+    exclusion_patterns: []
+    required_domain_patterns: *hect_domains
+    supporting_domain_patterns: ['\bRCC1(?: repeat)?\b']
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: hect_ube3
+    label_id: e3:ubiquitin:hect:ube3
+    priority: 110
+    annotation_patterns: ['\bUBE3[ABC]\b', '\bE6[- ]AP\b']
+    specific_annotation_patterns: ['\b(?:UBE3[ABC]|E6[- ]AP)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *hect_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: hect_hectd
+    label_id: e3:ubiquitin:hect:hectd
+    priority: 110
+    annotation_patterns: ['\bHECTD[1-4]?\b']
+    specific_annotation_patterns: ['\bHECTD[1-4]\b']
+    exclusion_patterns: []
+    required_domain_patterns: *hect_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: hect_huwe
+    label_id: e3:ubiquitin:hect:huwe
+    priority: 110
+    annotation_patterns: ['\bHUWE1?\b', '\bMULE\b', '\bARF[- ]BP1\b']
+    specific_annotation_patterns: ['\b(?:HUWE1|MULE|ARF[- ]BP1)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *hect_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: rbr_parent
+    label_id: e3:ubiquitin:rbr
+    priority: 60
+    annotation_patterns: ['\bRBR\b', '\bRING[- ]between[- ]RING\b', '\bRING1[- ]IBR[- ]RING2\b']
+    specific_annotation_patterns: ['\bRBR E3(?: ubiquitin)? ligase\b']
+    exclusion_patterns: []
+    required_domain_patterns:
+      - '^(PF00097|PF12906|PF13639|PF13920|PF15227)\b|\bRING(?: finger)?(?: domain)?\b'
+      - '^PF01485\b|\bIBR(?: domain)?\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: rbr_ariadne
+    label_id: e3:ubiquitin:rbr:ariadne
+    priority: 120
+    annotation_patterns: ['\bARIADNE\b', '\bARI[1-9]\d*\b']
+    specific_annotation_patterns: ['\bARIADNE(?:[- ]family)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^PF01485\b|\bIBR(?: domain)?\b']
+    supporting_domain_patterns: *ring_domains
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: rbr_parkin
+    label_id: e3:ubiquitin:rbr:parkin
+    priority: 120
+    annotation_patterns: ['\bPARKIN\b', '\bPRKN\b']
+    specific_annotation_patterns: ['\b(?:PARKIN|PRKN)\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^PF01485\b|\bIBR(?: domain)?\b']
+    supporting_domain_patterns: *ring_domains
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: rbr_hoip
+    label_id: e3:ubiquitin:rbr:hoip
+    priority: 120
+    annotation_patterns: ['\bHOIP\b', '\bRNF31\b']
+    specific_annotation_patterns: ['\b(?:HOIP|RNF31)\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^PF01485\b|\bIBR(?: domain)?\b']
+    supporting_domain_patterns: *ring_domains
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: rbr_hhari
+    label_id: e3:ubiquitin:rbr:hhari
+    priority: 120
+    annotation_patterns: ['\bHHARI\b', '\bARIH1\b']
+    specific_annotation_patterns: ['\b(?:HHARI|ARIH1)\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^PF01485\b|\bIBR(?: domain)?\b']
+    supporting_domain_patterns: *ring_domains
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: rcr_parent
+    label_id: e3:ubiquitin:rcr
+    priority: 80
+    annotation_patterns: ['\bRING[- ]Cys(?:teine)?[- ]relay\b', '\bRCR E3\b']
+    specific_annotation_patterns: ['\bRING[- ]Cys(?:teine)?[- ]relay E3\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: rcr_mycbp2
+    label_id: e3:ubiquitin:rcr:mycbp2_like
+    priority: 130
+    annotation_patterns: ['\bMYCBP2\b', '\bPAM\b.*\bE3\b']
+    specific_annotation_patterns: ['\bMYCBP2\b']
+    exclusion_patterns: []
+    required_domain_patterns: []
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: false
+
+  - rule_id: rnf213_rz
+    label_id: e3:ubiquitin:rnf213_rz
+    priority: 130
+    annotation_patterns: ['\bRNF213\b', '\bmysterin\b', '\bRZ[- ]finger\b']
+    specific_annotation_patterns: ['\b(?:RNF213|mysterin)\b']
+    exclusion_patterns: []
+    required_domain_patterns: []
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: false
+
+  - rule_id: crl_rbx
+    label_id: e3:ubiquitin:crl:rbx
+    priority: 120
+    annotation_patterns: ['\bRBX[12]?\b', '\bROC1\b']
+    specific_annotation_patterns: ['\b(?:RBX1|RBX2|ROC1)\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^PF12678\b|\bRING[- ]box\b|\bRBX\b']
+    supporting_domain_patterns: *ring_domains
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_elongin_bc
+    label_id: e3:ubiquitin:crl:elongin_bc
+    priority: 100
+    annotation_patterns: ['\bElongin[- ]?[BC]\b', '\bElongin B[- ]C\b']
+    specific_annotation_patterns: ['\bElongin[- ]?[BC]\b']
+    exclusion_patterns: ['\bElongin A\b']
+    required_domain_patterns: []
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: false
+
+  - rule_id: crl_cul1
+    label_id: e3:ubiquitin:crl:crl1_scf:cul1
+    priority: 120
+    annotation_patterns: ['\bCUL(?:LIN)?[- ]?1\b']
+    specific_annotation_patterns: ['\b(?:CUL1|Cullin[- ]?1)\b']
+    exclusion_patterns: []
+    required_domain_patterns: &cullin_domains ['^PF00888\b|\bCullin(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_skp1
+    label_id: e3:ubiquitin:crl:crl1_scf:skp1
+    priority: 120
+    annotation_patterns: ['\bSKP1(?:[- ]like)?\b']
+    specific_annotation_patterns: ['\bSKP1[A-Za-z0-9-]*\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^(PF01466|PF03931)\b|\bSkp1(?: family)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: f_box_parent
+    label_id: e3:ubiquitin:crl:crl1_scf:f_box
+    priority: 80
+    annotation_patterns: ['\bF[- ]?box\b']
+    specific_annotation_patterns: ['\bF[- ]?box(?: containing)? protein\b']
+    exclusion_patterns: []
+    required_domain_patterns: &f_box_domains ['^PF00646\b|\bF[- ]?box(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: f_box_kelch
+    label_id: e3:ubiquitin:crl:crl1_scf:f_box:kelch
+    priority: 130
+    annotation_patterns: ['\bF[- ]?box\b.*\bKelch\b', '\bFBK\d*\b']
+    specific_annotation_patterns: ['\bF[- ]?box/Kelch\b', '\bFBK\d+\b']
+    exclusion_patterns: []
+    required_domain_patterns:
+      - '^PF00646\b|\bF[- ]?box(?: domain)?\b'
+      - '\bKelch(?: repeat)?\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: f_box_lrr
+    label_id: e3:ubiquitin:crl:crl1_scf:f_box:lrr
+    priority: 130
+    annotation_patterns: ['\bF[- ]?box\b.*\bLRR\b', '\bFBL\d*\b']
+    specific_annotation_patterns: ['\bF[- ]?box/LRR\b', '\bFBL\d+\b']
+    exclusion_patterns: []
+    required_domain_patterns:
+      - '^PF00646\b|\bF[- ]?box(?: domain)?\b'
+      - '^(PF00560|PF07723|PF07725|PF12799|PF13306|PF13516|PF13855)\b|\b(?:LRR|leucine[- ]rich repeat)\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: f_box_wd40
+    label_id: e3:ubiquitin:crl:crl1_scf:f_box:wd40
+    priority: 130
+    annotation_patterns: ['\bF[- ]?box\b.*\bWD[- ]?(?:40|repeat)\b', '\bFBW\d*\b']
+    specific_annotation_patterns: ['\bF[- ]?box/WD40\b', '\bFBW\d+\b']
+    exclusion_patterns: []
+    required_domain_patterns:
+      - '^PF00646\b|\bF[- ]?box(?: domain)?\b'
+      - '^PF00400\b|\bWD[- ]?(?:40|repeat)\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: f_box_fba
+    label_id: e3:ubiquitin:crl:crl1_scf:f_box:fba
+    priority: 130
+    annotation_patterns: ['\bF[- ]?box associated\b', '\bFBA\d*\b']
+    specific_annotation_patterns: ['\bF[- ]?box associated[- ]domain\b', '\bFBA\d+\b']
+    exclusion_patterns: []
+    required_domain_patterns:
+      - '^PF00646\b|\bF[- ]?box(?: domain)?\b'
+      - '\bF[- ]?box associated(?: domain)?\b|\bFBA(?: domain)?\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: f_box_tubby
+    label_id: e3:ubiquitin:crl:crl1_scf:f_box:tubby
+    priority: 130
+    annotation_patterns: ['\bF[- ]?box\b.*\bTubby\b', '\bTLP\d*\b.*\bF[- ]?box\b']
+    specific_annotation_patterns: ['\bF[- ]?box/Tubby\b']
+    exclusion_patterns: []
+    required_domain_patterns:
+      - '^PF00646\b|\bF[- ]?box(?: domain)?\b'
+      - '^PF01167\b|\bTubby(?: domain)?\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_cul2
+    label_id: e3:ubiquitin:crl:crl2_vhl:cul2
+    priority: 120
+    annotation_patterns: ['\bCUL(?:LIN)?[- ]?2\b']
+    specific_annotation_patterns: ['\b(?:CUL2|Cullin[- ]?2)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *cullin_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_vhl_box
+    label_id: e3:ubiquitin:crl:crl2_vhl:vhl_box
+    priority: 120
+    annotation_patterns: ['\bVHL[- ]?box\b', '\bvon Hippel[- ]Lindau\b']
+    specific_annotation_patterns: ['\bVHL[- ]?box(?: protein)?\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['\bVHL(?: beta)?(?: domain)?\b|^PF01847\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_cul3
+    label_id: e3:ubiquitin:crl:crl3_btb:cul3
+    priority: 120
+    annotation_patterns: ['\bCUL(?:LIN)?[- ]?3\b']
+    specific_annotation_patterns: ['\b(?:CUL3|Cullin[- ]?3)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *cullin_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_btb
+    label_id: e3:ubiquitin:crl:crl3_btb:btb
+    priority: 80
+    annotation_patterns: ['\bBTB(?:/POZ)?\b']
+    specific_annotation_patterns: ['\bBTB(?:/POZ)?(?: domain)? protein\b']
+    exclusion_patterns: []
+    required_domain_patterns: &btb_domains ['^PF00651\b|\bBTB(?:/POZ)?(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_btb_kelch
+    label_id: e3:ubiquitin:crl:crl3_btb:btb_kelch
+    priority: 130
+    annotation_patterns: ['\bBTB\b.*\bBACK\b.*\bKelch\b', '\bBTB[- ]BACK[- ]Kelch\b']
+    specific_annotation_patterns: ['\b(?:BTB[- ]BACK[- ]Kelch|BBK)\b']
+    exclusion_patterns: []
+    required_domain_patterns:
+      - '^PF00651\b|\bBTB(?:/POZ)?(?: domain)?\b'
+      - '\bBACK(?: domain)?\b'
+      - '\bKelch(?: repeat)?\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_math_btb
+    label_id: e3:ubiquitin:crl:crl3_btb:math_btb
+    priority: 130
+    annotation_patterns: ['\bMATH\b.*\bBTB\b', '\bBPM\d*\b']
+    specific_annotation_patterns: ['\b(?:MATH[- ]BTB|BPM\d+)\b']
+    exclusion_patterns: []
+    required_domain_patterns:
+      - '^PF00651\b|\bBTB(?:/POZ)?(?: domain)?\b'
+      - '\bMATH(?: domain)?\b|\bTRAF(?: domain)?\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_cul4
+    label_id: e3:ubiquitin:crl:crl4_dcaf:cul4
+    priority: 120
+    annotation_patterns: ['\bCUL(?:LIN)?[- ]?4[AB]?\b']
+    specific_annotation_patterns: ['\b(?:CUL4A|CUL4B|Cullin[- ]?4)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *cullin_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_ddb1
+    label_id: e3:ubiquitin:crl:crl4_dcaf:ddb1
+    priority: 120
+    annotation_patterns: ['\bDDB1\b', '\bDNA damage[- ]binding protein 1\b']
+    specific_annotation_patterns: ['\bDDB1\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['\bDDB1(?: domain)?\b|\bBPA\b|\bBPB\b|\bBPC\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_dcaf
+    label_id: e3:ubiquitin:crl:crl4_dcaf:dcaf
+    priority: 120
+    annotation_patterns: ['\bDCAF\d*\b', '\bDDB1[- ]CUL4 associated factor\b', '\bDWD protein\b']
+    specific_annotation_patterns: ['\bDCAF\d+\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^PF00400\b|\bWD[- ]?(?:40|repeat)\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_cul5
+    label_id: e3:ubiquitin:crl:crl5_socs:cul5
+    priority: 120
+    annotation_patterns: ['\bCUL(?:LIN)?[- ]?5\b']
+    specific_annotation_patterns: ['\b(?:CUL5|Cullin[- ]?5)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *cullin_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_socs_box
+    label_id: e3:ubiquitin:crl:crl5_socs:socs_box
+    priority: 120
+    annotation_patterns: ['\bSOCS[- ]?box\b']
+    specific_annotation_patterns: ['\bSOCS[- ]?box(?: containing)? protein\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^PF07525\b|\bSOCS[- ]?box(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_cul7
+    label_id: e3:ubiquitin:crl:crl7_fbxw8:cul7
+    priority: 120
+    annotation_patterns: ['\bCUL(?:LIN)?[- ]?7\b']
+    specific_annotation_patterns: ['\b(?:CUL7|Cullin[- ]?7)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *cullin_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_fbxw8
+    label_id: e3:ubiquitin:crl:crl7_fbxw8:fbxw8
+    priority: 140
+    annotation_patterns: ['\bFBXW8\b', '\bF[- ]box/WD repeat[- ]containing protein 8\b']
+    specific_annotation_patterns: ['\bFBXW8\b']
+    exclusion_patterns: []
+    required_domain_patterns:
+      - '^PF00646\b|\bF[- ]?box(?: domain)?\b'
+      - '^PF00400\b|\bWD[- ]?(?:40|repeat)\b'
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: crl_cul9
+    label_id: e3:ubiquitin:crl:cul9
+    priority: 140
+    annotation_patterns: ['\bCUL9\b', '\bPARC\b.*\bE3\b']
+    specific_annotation_patterns: ['\b(?:CUL9|PARC)\b']
+    exclusion_patterns: []
+    required_domain_patterns: *cullin_domains
+    supporting_domain_patterns: *ring_domains
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: apc2
+    label_id: e3:ubiquitin:apc_c:apc2
+    priority: 120
+    annotation_patterns: ['\bAPC2\b', '\banaphase[- ]promoting complex subunit 2\b']
+    specific_annotation_patterns: ['\bAPC2\b']
+    exclusion_patterns: []
+    required_domain_patterns: *cullin_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: apc11
+    label_id: e3:ubiquitin:apc_c:apc11
+    priority: 130
+    annotation_patterns: ['\bAPC11\b', '\banaphase[- ]promoting complex subunit 11\b']
+    specific_annotation_patterns: ['\bAPC11\b']
+    exclusion_patterns: []
+    required_domain_patterns: *ring_domains
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: apc_coactivator
+    label_id: e3:ubiquitin:apc_c:coactivator
+    priority: 120
+    annotation_patterns: ['\bCDC20\b', '\bCDH1\b', '\bCCS52[A-C]?\b']
+    specific_annotation_patterns: ['\b(?:CDC20|CDH1|CCS52[A-C]?)\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^PF00400\b|\bWD[- ]?(?:40|repeat)\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: sumo_siz_pias
+    label_id: e3:ubl:sumo:siz_pias
+    priority: 130
+    annotation_patterns: ['\bSIZ[12]?\b', '\bPIAS[1-4xy]?\b', '\bPIAL[12]?\b', '\bSP[- ]RING\b']
+    specific_annotation_patterns: ['\b(?:SIZ[12]|PIAS[1-4xy]?|PIAL[12])\b']
+    exclusion_patterns: ['\bNSE2\b', '\bMMS21\b']
+    required_domain_patterns: ['\bSP[- ]RING(?: domain)?\b|\bSAP(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: true
+
+  - rule_id: sumo_nse2_mms21
+    label_id: e3:ubl:sumo:nse2_mms21
+    priority: 140
+    annotation_patterns: ['\bNSE2\b', '\bMMS21\b', '\bHPY2\b']
+    specific_annotation_patterns: ['\b(?:NSE2|MMS21|HPY2)\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['\bSP[- ]RING(?: domain)?\b|\bNse2(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: true
+
+  - rule_id: sumo_ranbp2
+    label_id: e3:ubl:sumo:ranbp2
+    priority: 140
+    annotation_patterns: ['\bRanBP2\b', '\bNUP358\b']
+    specific_annotation_patterns: ['\b(?:RanBP2|NUP358)\b']
+    exclusion_patterns: []
+    required_domain_patterns: []
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: false
+
+  - rule_id: sumo_znf451
+    label_id: e3:ubl:sumo:znf451
+    priority: 140
+    annotation_patterns: ['\bZNF451\b']
+    specific_annotation_patterns: ['\bZNF451\b']
+    exclusion_patterns: []
+    required_domain_patterns: []
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: false
+
+  - rule_id: nedd8_rbx
+    label_id: e3:ubl:nedd8:rbx
+    priority: 140
+    annotation_patterns: ['\bNEDD8\b.*\bRBX\b', '\bRBX\b.*\bNEDD8\b']
+    specific_annotation_patterns: ['\bNEDD8 RBX E3\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['^PF12678\b|\bRING[- ]box\b|\bRBX\b']
+    supporting_domain_patterns: *ring_domains
+    allow_specific_annotation_only: false
+    propagate_by_orthology: true
+
+  - rule_id: nedd8_dcn1
+    label_id: e3:ubl:nedd8:dcn1
+    priority: 140
+    annotation_patterns: ['\bDCN1\b', '\bDCUN1D[1-5]?\b', '\bdefective in cullin neddylation\b']
+    specific_annotation_patterns: ['\b(?:DCN1|DCUN1D[1-5])\b']
+    exclusion_patterns: []
+    required_domain_patterns: ['\bDCUN1(?: domain)?\b|\bPONY(?: domain)?\b']
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: true
+
+  - rule_id: ufm1_ufl1
+    label_id: e3:ubl:ufm1:ufl1
+    priority: 140
+    annotation_patterns: ['\bUFL1\b', '\bRCAD\b']
+    specific_annotation_patterns: ['\b(?:UFL1|RCAD)\b']
+    exclusion_patterns: []
+    required_domain_patterns: []
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: false
+
+  - rule_id: ufm1_ufbp1
+    label_id: e3:ubl:ufm1:ufbp1
+    priority: 140
+    annotation_patterns: ['\bUFBP1\b', '\bDDRGK1\b']
+    specific_annotation_patterns: ['\b(?:UFBP1|DDRGK1)\b']
+    exclusion_patterns: []
+    required_domain_patterns: []
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: false
+
+  - rule_id: ufm1_cdk5rap3
+    label_id: e3:ubl:ufm1:cdk5rap3
+    priority: 140
+    annotation_patterns: ['\bCDK5RAP3\b', '\bLZAP\b', '\bC53\b.*\bUFM1\b']
+    specific_annotation_patterns: ['\b(?:CDK5RAP3|LZAP)\b']
+    exclusion_patterns: []
+    required_domain_patterns: []
+    supporting_domain_patterns: []
+    allow_specific_annotation_only: true
+    propagate_by_orthology: false

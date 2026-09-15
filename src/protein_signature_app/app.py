@@ -111,11 +111,11 @@ def _render_canonical_data(*, database: Path) -> None:
     """
 
     st.title("Canonical data & downloads")
+    names = canonical_table_names()
     st.caption(
         "Browse a bounded preview, then download the complete checksum-verified "
-        "TSV or formatted Excel workbook. All 26 canonical datasets are available."
+        f"TSV or formatted Excel workbook. All {len(names)} canonical datasets are available."
     )
-    names = canonical_table_names()
     table_name = st.selectbox("Canonical dataset", names)
     row_count = table_count(database=database, table_name=table_name)
     st.subheader(str(table_name).replace("_", " ").title())
@@ -803,6 +803,24 @@ def _render_classes(*, database: Path) -> None:
         "Mechanistic class, system class and component role are independent fields; "
         "a substrate receptor is not silently relabelled as a catalytic protein."
     )
+    provisional = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT * FROM class_labelling_summary "
+            "ORDER BY label_type, direct_positive_protein_count DESC, label_id"
+        ),
+    )
+    if not provisional.empty:
+        st.warning(
+            "These automated labels are evidence-supported proposals for hypothesis "
+            "generation. They are not equivalent to human-reviewed biochemical truth."
+        )
+        st.subheader("Automated evidence-label coverage")
+        _render_downloadable_table(
+            frame=provisional,
+            download_name="automated_evidence_label_coverage",
+            height=420,
+        )
     coverage = query_dataframe(
         database=database,
         sql=(
@@ -1056,6 +1074,46 @@ def _render_quality(*, database: Path, metadata: dict[str, object]) -> None:
 
     st.title("Data quality & provenance")
     st.success("Completion marker and all checksums verified when this resource was opened.")
+    label_evidence = metadata.get("automated_label_evidence", {})
+    if isinstance(label_evidence, dict) and label_evidence.get("status") != "NOT_SELECTED":
+        st.subheader("Automated label evidence and circularity safeguards")
+        warning = str(label_evidence.get("warning") or "").strip()
+        if warning:
+            st.warning(warning)
+        evidence_tabs = st.tabs(
+            ("Decisions", "Matched controls", "Excluded label features", "Abstentions")
+        )
+        evidence_queries = (
+            (
+                "SELECT * FROM label_evidence_audit ORDER BY protein_id, label_id, rule_id",
+                "label_evidence_audit",
+            ),
+            (
+                "SELECT * FROM control_matching_audit "
+                "ORDER BY background_label_id, target_unit_id, control_unit_id",
+                "control_matching_audit",
+            ),
+            (
+                "SELECT * FROM label_definition_features "
+                "ORDER BY label_id, feature_type, feature_id",
+                "label_definition_features",
+            ),
+            (
+                "SELECT * FROM unresolved_assignments ORDER BY curation_status, protein_id",
+                "unresolved_assignments",
+            ),
+        )
+        for tab, (sql, download_name) in zip(
+            evidence_tabs,
+            evidence_queries,
+            strict=True,
+        ):
+            with tab:
+                _render_downloadable_table(
+                    frame=query_dataframe(database=database, sql=sql),
+                    download_name=download_name,
+                    height=420,
+                )
     st.subheader("Feature assessment coverage")
     st.caption(
         "A missing positive row is not treated as absence: explicit assessment state and "

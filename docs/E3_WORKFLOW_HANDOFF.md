@@ -283,6 +283,37 @@ default background because its conserved fold creates a severe family-versus-fam
 confound. Real inference continues to require the 14 biologically matched E3 controls and
 the human-review path.
 
+## Automated evidence-led provisional E3 campaign
+
+For a complete biological-data analysis without manual row-by-row labelling, use the separate
+evidence-led route and a new non-test work directory. It combines exact annotations, Pfam,
+optional trusted seeds and conservative one-generation HOG propagation, then constructs
+outcome-blind matched controls. The result remains provisional rather than human-reviewed.
+
+```bash
+./run_completed_e3_workflow.sh \
+  --phase all \
+  --run-root "${RUN_ROOT}" \
+  --work-dir "${SIGNATURE_PRODUCTION_WORK}" \
+  --campaign-id "e3_all1972_evidence_labels_20260915" \
+  --evidence-led-labels \
+  --evidence-rules e3 \
+  --accept-provisional-evidence-labels \
+  --minimum-mean-plddt 50 \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition barton \
+  --slurm-memory 128G \
+  --slurm-time 2-00:00:00 \
+  --threads 24
+```
+
+Omit the acceptance flag to stop after `evidence_label_bundle/` for inspection. Add optional
+`--seed-catalogue`, `--seed-assignments` or `--external-annotations` absolute paths when
+available. The built-in rules infer 67 target labels; six `other_reviewed` catch-alls require
+trusted direct assignments. See [Evidence-led labels and controls](EVIDENCE_LED_LABELS.md)
+for the full decision, matching and circularity contract.
+
 ## Phase 4: verify and inspect
 
 ```bash
