@@ -1,10 +1,12 @@
-"""Completed-E3 adapter workflow with an explicit human-curation checkpoint.
+"""Completed-E3 adapter workflow with reviewed and isolated smoke-test routes.
 
 This DAG consumes, but never modifies, the completed predecessor.  It stages an
 editable review authority outside the immutable preparation bundle, then stops
 until a separately issued checksum-bound curator approval exists.  Once that
 approval is present, the remaining campaign can run unattended to independent
-post-publication verification.
+post-publication verification.  An explicitly requested automated test route
+creates conspicuously synthetic labels and approval authorities for software
+testing only; those outputs are never scientifically interpretable.
 """
 
 from pathlib import Path
@@ -31,6 +33,20 @@ def positive_integer(name, default):
     return value
 
 
+def boolean_setting(name, default=False):
+    """Return one strict Boolean workflow setting."""
+
+    value = config.get(name, default)
+    if isinstance(value, bool):
+        return value
+    normalised = str(value).strip().lower()
+    if normalised in {"true", "1", "yes"}:
+        return True
+    if normalised in {"false", "0", "no"}:
+        return False
+    raise ValueError(f"{name} must be true or false.")
+
+
 RUN_ROOT = required_path("e3_run_root")
 WORK_DIR = required_path("e3_work_dir")
 PREPARED_DIR = WORK_DIR / "prepared_inputs"
@@ -55,6 +71,11 @@ ANALYSIS_THREADS = positive_integer("e3_threads", 24)
 ANALYSIS_MEMORY_MB = positive_integer("e3_memory_mb", 128_000)
 ANALYSIS_RUNTIME_MINUTES = positive_integer("e3_runtime_minutes", 2_880)
 LOG_LEVEL = str(config.get("e3_log_level", "INFO"))
+AUTOMATED_TEST_LABELS = boolean_setting("e3_automated_test_labels")
+TEST_TARGET_LABEL = str(
+    config.get("e3_test_target_label", "ALL")
+).strip()
+TEST_SAMPLES_PER_CLASS = positive_integer("e3_test_samples_per_class", 20)
 
 if not CAMPAIGN_ID:
     raise ValueError("e3_campaign_id must be supplied through --config.")
@@ -69,12 +90,35 @@ if PREPARED_DIR in REVIEWED_LABELS.parents or REVIEWED_LABELS == PREPARED_DIR:
 
 PREPARATION_MARKER = STATE_DIR / "01_preparation" / "PREPARED_VERIFIED.json"
 REVIEW_MARKER = STATE_DIR / "02_label_review" / "REVIEW_READY.json"
+AUTOMATED_LABELS_PATH = WORK_DIR / "AUTOMATED_TEST_ONLY.label_assignments.tsv"
+AUTOMATED_LABELS_MARKER = (
+    STATE_DIR / "02_label_review" / "AUTOMATED_TEST_ONLY.LABELS.json"
+)
+AUTOMATED_APPROVAL_MARKER = (
+    STATE_DIR / "02_label_review" / "AUTOMATED_TEST_ONLY.REVIEW_APPROVED.json"
+)
 REVIEW_VERIFICATION_MARKER = STATE_DIR / "02_label_review" / "REVIEW_VERIFIED.json"
 CAMPAIGN_MARKER = STATE_DIR / "03_initialisation" / "CAMPAIGN_VALIDATED.json"
 CAMPAIGN_REVALIDATION_MARKER = STATE_DIR / "04_analysis" / "CAMPAIGN_REVALIDATED.json"
 ANALYSIS_MARKER = STATE_DIR / "04_analysis" / "RESULT_VERIFIED.json"
 FINAL_MARKER = STATE_DIR / "05_verification" / "VERIFIED.json"
 LOG_DIR = STATE_DIR / "logs"
+
+if AUTOMATED_TEST_LABELS:
+    if REVIEWED_LABELS != AUTOMATED_LABELS_PATH:
+        raise ValueError(
+            "Automated test mode requires the fixed AUTOMATED_TEST_ONLY label path."
+        )
+    if APPROVAL_MARKER != AUTOMATED_APPROVAL_MARKER:
+        raise ValueError(
+            "Automated test mode requires the fixed AUTOMATED_TEST_ONLY approval path."
+        )
+    if not TEST_TARGET_LABEL:
+        raise ValueError("e3_test_target_label must not be empty.")
+    if TEST_SAMPLES_PER_CLASS < 20:
+        raise ValueError("e3_test_samples_per_class must be at least 20.")
+elif REVIEWED_LABELS == AUTOMATED_LABELS_PATH or APPROVAL_MARKER == AUTOMATED_APPROVAL_MARKER:
+    raise ValueError("AUTOMATED_TEST_ONLY authorities require e3_automated_test_labels=true.")
 
 shell.executable("/bin/bash")
 
@@ -143,6 +187,87 @@ rule stage_e3_label_review:
             --preparation-marker {input.preparation:q} \
             --reviewed-labels {params.reviewed_labels:q} \
             --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+rule create_automated_test_labels:
+    input:
+        preparation=str(PREPARATION_MARKER),
+        review=str(REVIEW_MARKER),
+    output:
+        labels=str(AUTOMATED_LABELS_PATH),
+        marker=str(AUTOMATED_LABELS_MARKER),
+    params:
+        sequences=str(PREPARED_DIR / "proteins.faa"),
+        template=str(PREPARED_DIR / "label_assignments.REVIEW_REQUIRED.tsv"),
+        structures=str(PREPARED_DIR / "structures.tsv"),
+        orthofinder_results=str(RUN_ROOT / "04_orthofinder" / "Results"),
+        profile=PROFILE,
+        target_label=TEST_TARGET_LABEL,
+        samples_per_class=TEST_SAMPLES_PER_CLASS,
+        run_id=CAMPAIGN_ID,
+    threads:
+        1
+    resources:
+        mem_mb=64_000,
+        runtime=240
+    log:
+        str(LOG_DIR / "02_create_automated_test_labels.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures create-automated-test-labels \
+            --sequences-fasta {params.sequences:q} \
+            --template-labels {params.template:q} \
+            --output-labels {output.labels:q} \
+            --marker {output.marker:q} \
+            --profile {params.profile:q} \
+            --target-label {params.target_label:q} \
+            --structures {params.structures:q} \
+            --orthofinder-results {params.orthofinder_results:q} \
+            --orthofinder-group-type HOG \
+            --orthofinder-hierarchy-node N0 \
+            --orthofinder-run-id {params.run_id:q} \
+            --samples-per-class {params.samples_per_class} \
+            --random-seed 1729 \
+            --validation-fraction 0.2 \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+rule approve_automated_test_labels:
+    input:
+        preparation=str(PREPARATION_MARKER),
+        review=str(REVIEW_MARKER),
+        labels=str(AUTOMATED_LABELS_PATH),
+        automated_marker=str(AUTOMATED_LABELS_MARKER),
+    output:
+        approval=str(AUTOMATED_APPROVAL_MARKER)
+    params:
+        profile=PROFILE
+    threads:
+        1
+    resources:
+        mem_mb=16_000,
+        runtime=120
+    log:
+        str(LOG_DIR / "02_approve_automated_test_labels.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures approve-e3-review \
+            --preparation-marker {input.preparation:q} \
+            --review-marker {input.review:q} \
+            --reviewed-labels {input.labels:q} \
+            --approval-marker {output.approval:q} \
+            --curator AUTOMATED_TEST_MODE \
+            --note 'AUTOMATED TEST ONLY; no human review and no scientific interpretation.' \
+            --profile {params.profile:q} \
+            --automated-test-mode \
+            --automated-test-marker {input.automated_marker:q} \
             --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
         """
 

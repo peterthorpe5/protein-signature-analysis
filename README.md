@@ -267,6 +267,63 @@ preferred. `--phase all` is idempotent: it reuses only an unchanged, checksum-va
 result. If invoked before approval it runs only through `review_ready`, reports the human
 checkpoint and exits successfully; resubmit the same command after approval.
 
+### Automated all-class software smoke test
+
+To test the complete implementation before scientific curation, use a **new** work directory
+and a campaign ID containing `smoke` or `test`. One submitted command then runs preparation,
+synthetic-label generation, test-only approval, initialisation, analysis and verification:
+
+```bash
+RUN_ROOT="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/e3_end_to_end_runs/grant_aligned_corrected_expression_structural_all1972_v0_16_0_20260909"
+SIGNATURE_TEST_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/protein_signature_runs/e3_all1972_automated_smoke_test_v0_1_0_20260915"
+
+./run_completed_e3_workflow.sh \
+  --phase all \
+  --run-root "${RUN_ROOT}" \
+  --work-dir "${SIGNATURE_TEST_WORK}" \
+  --campaign-id "e3_all1972_automated_smoke_test_20260915" \
+  --automated-test-labels \
+  --test-target-label ALL \
+  --test-samples-per-class 20 \
+  --minimum-mean-plddt 50 \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition barton \
+  --slurm-memory 128G \
+  --slurm-time 2-00:00:00 \
+  --threads 24
+```
+
+`ALL` exercises all 73 E3 default comparisons, including F-box. It creates 65 terminal
+target-label cohorts and the 14 profile-defined matched-control cohorts; inherited membership
+also exercises parent-class comparisons. Selection is restricted to structure-eligible
+proteins and assigns whole HOG/exact-sequence/redundancy blocks to only one synthetic label,
+with separate discovery and validation blocks. Discovery cohorts contain enough samples and
+independent groups to exercise model fitting and SHAP. Small held-out cohorts may correctly
+report insufficient validation power.
+
+These labels are random deterministic software fixtures, not inferred E3 annotations. Every
+positive row says `SYNTHETIC_TEST_ONLY`, the label/approval files contain
+`AUTOMATED_TEST_ONLY`, their checksums are bound together, and the wrapper refuses a normal
+scientific campaign directory or ID. Results from this route **must not be interpreted
+biologically** and never replace the human-reviewed production route above. A single
+housekeeping family is deliberately not used as background because its conserved fold would
+confound “protein type” with “one unusually narrow control family”.
+
+The label generator itself is profile-agnostic and can test any supplied FASTA and custom
+profile. It accepts optional structure eligibility, raw OrthoFinder 2.5.5/3 results, a
+published `orthofinder-results` resource and near-redundancy clusters:
+
+```bash
+protein-signatures create-automated-test-labels \
+  --sequences-fasta /data/proteins.faa \
+  --profile /data/custom_profile.yaml \
+  --target-label ALL \
+  --output-labels /testing/AUTOMATED_TEST_ONLY.labels.tsv \
+  --marker /testing/AUTOMATED_TEST_ONLY.labels.json \
+  --samples-per-class 20
+```
+
 See [the completed-workflow hand-off guide](docs/E3_WORKFLOW_HANDOFF.md) for the source map,
 review gate, scheduler pattern and interpretation boundaries.
 

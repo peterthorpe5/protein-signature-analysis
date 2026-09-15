@@ -146,12 +146,16 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
     assert "RESULT_COMPLETION" not in snakefile
     assert "rule ensure_e3_preparation:" in e3_snakefile
     assert "rule stage_e3_label_review:" in e3_snakefile
+    assert "rule create_automated_test_labels:" in e3_snakefile
+    assert "rule approve_automated_test_labels:" in e3_snakefile
     assert "rule verify_e3_label_review:" in e3_snakefile
     assert "rule initialise_e3_campaign:" in e3_snakefile
     assert "rule run_e3_campaign:" in e3_snakefile
     assert "rule verify_e3_campaign:" in e3_snakefile
     assert "protein-signatures workflow-prepare-e3" in e3_snakefile
     assert "protein-signatures workflow-stage-e3-review" in e3_snakefile
+    assert "protein-signatures create-automated-test-labels" in e3_snakefile
+    assert "--automated-test-marker" in e3_snakefile
     assert "protein-signatures workflow-verify-e3-review" in e3_snakefile
     assert "protein-signatures workflow-initialise-e3" in e3_snakefile
     assert "PREPARED_DIR in REVIEWED_LABELS.parents" in e3_snakefile
@@ -175,6 +179,74 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
     assert "snakemake>=9,<10" in dependencies
     assert "snakemake-executor-plugin-slurm>=2.7.1,<3" in dependencies
     assert environment["channels"][-1] == "nodefaults"
+
+
+def test_completed_e3_automated_smoke_route_is_explicit_and_submit_only(
+    tmp_path: Path,
+) -> None:
+    """One Slurm command should request all classes without creating local state."""
+
+    root = Path(__file__).parents[1]
+    launcher = root / "run_completed_e3_workflow.sh"
+    predecessor = tmp_path / "completed_e3_run"
+    predecessor.mkdir()
+    work = tmp_path / "all_classes_smoke_test"
+    result = subprocess.run(
+        (
+            "bash",
+            str(launcher),
+            "--phase",
+            "all",
+            "--run-root",
+            str(predecessor),
+            "--work-dir",
+            str(work),
+            "--campaign-id",
+            "all_classes_smoke_test",
+            "--automated-test-labels",
+            "--submit-slurm",
+            "--slurm-account",
+            "barton",
+            "--slurm-partition",
+            "barton",
+            "--slurm-dry-run",
+            "--threads",
+            "24",
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    command = result.stdout.replace("\\ ", " ")
+    assert "nothing was submitted" in command
+    assert "--automated-test-labels" in command
+    assert "--test-target-label ALL" in command
+    assert "--test-samples-per-class 20" in command
+    assert "--account=barton" in command
+    assert "--partition=barton" in command
+    assert not work.exists()
+
+    unsafe = subprocess.run(
+        (
+            "bash",
+            str(launcher),
+            "--phase",
+            "all",
+            "--run-root",
+            str(predecessor),
+            "--work-dir",
+            str(tmp_path / "scientific_campaign"),
+            "--campaign-id",
+            "scientific_campaign",
+            "--automated-test-labels",
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert unsafe.returncode == 2
+    assert "require 'smoke' or 'test'" in unsafe.stderr
 
 
 def test_launchers_reject_missing_option_values() -> None:
@@ -770,6 +842,9 @@ def test_generic_controller_dry_run_and_worker_contract(tmp_path: Path) -> None:
     conda = fake_bin / "conda"
     conda.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     conda.chmod(conda.stat().st_mode | stat.S_IXUSR)
+    flock = fake_bin / "flock"
+    flock.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    flock.chmod(flock.stat().st_mode | stat.S_IXUSR)
     environment = os.environ.copy()
     environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
     environment["BASH_COMPAT"] = "3.2"
@@ -811,7 +886,9 @@ def test_generic_controller_dry_run_and_worker_contract(tmp_path: Path) -> None:
     )
     assert outside_slurm.returncode == 2
     assert "must be launched by sbatch" in outside_slurm.stderr
-    worker_environment = os.environ.copy()
+    # The worker runs on Linux Slurm, where flock is a required dependency.
+    # Supply the fixture implementation so this contract remains portable to macOS.
+    worker_environment = environment.copy()
     worker_environment["SLURM_JOB_ID"] = "24680"
     inside_slurm = subprocess.run(
         ("bash", str(worker), "--state-dir", str(work_dir), "--", true_executable),

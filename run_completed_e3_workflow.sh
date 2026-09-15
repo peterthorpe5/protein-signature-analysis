@@ -32,6 +32,23 @@ Usage:
     --slurm-time 2-00:00:00 \
     --threads 24
 
+  # Fully automated SOFTWARE SMOKE TEST with synthetic labels and no human review.
+  # Use a separate work directory and campaign ID containing "smoke" or "test".
+  ./run_completed_e3_workflow.sh \
+    --phase all \
+    --run-root /absolute/path/completed_e3_end_to_end_run \
+    --work-dir /persistent/path/e3_automated_smoke_test \
+    --campaign-id e3_automated_smoke_test \
+    --automated-test-labels \
+    --test-target-label ALL \
+    --test-samples-per-class 20 \
+    --submit-slurm \
+    --slurm-account barton \
+    --slurm-partition barton \
+    --slurm-memory 128G \
+    --slurm-time 2-00:00:00 \
+    --threads 24
+
   # Optional checkpoints and backward-compatible operations.
   ./run_completed_e3_workflow.sh \
     --phase initialise|run|verify \
@@ -43,6 +60,13 @@ initialisation, atomic analysis and independent final verification. It never
 overwrites reviewed_label_assignments.tsv. Generated assignments begin as
 UNMAPPED, so the one intentional pause is human curation plus explicit approval.
 After approval, --phase all is unattended and safely resumable.
+
+--automated-test-labels is a separate end-to-end software-test route. It creates
+deterministic synthetic target/control cohorts, automated test-only approval and
+conspicuous provenance. Its results MUST NOT be interpreted scientifically.
+  --test-target-label ID  Profile target/alias, or ALL (default: ALL).
+  --test-samples-per-class N  Synthetic samples per direct cohort (default: 20;
+                             minimum: 20).
 
 Slurm options:
   --submit-slurm          Submit prepare, initialise, all or run.
@@ -72,6 +96,10 @@ REVIEW_APPROVAL=""
 CURATOR=""
 REVIEW_NOTE=""
 PROFILE="e3"
+AUTOMATED_TEST_LABELS="false"
+AUTOMATED_TEST_OPTION_SEEN="false"
+TEST_TARGET_LABEL="ALL"
+TEST_SAMPLES_PER_CLASS="20"
 MINIMUM_MEAN_PLDDT="50"
 CONDA_ENVIRONMENT="protein_signature_analysis"
 THREADS="1"
@@ -132,6 +160,22 @@ while [[ $# -gt 0 ]]; do
         --profile)
             require_option_value "$@"
             PROFILE="${2:-}"
+            shift 2
+            ;;
+        --automated-test-labels)
+            AUTOMATED_TEST_LABELS="true"
+            shift
+            ;;
+        --test-target-label)
+            require_option_value "$@"
+            TEST_TARGET_LABEL="${2:-}"
+            AUTOMATED_TEST_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --test-samples-per-class)
+            require_option_value "$@"
+            TEST_SAMPLES_PER_CLASS="${2:-}"
+            AUTOMATED_TEST_OPTION_SEEN="true"
             shift 2
             ;;
         --minimum-mean-plddt)
@@ -234,6 +278,11 @@ if [[ ! "${THREADS}" =~ ^[1-9][0-9]*$ ]]; then
     echo "--threads must be a positive integer: ${THREADS}" >&2
     exit 2
 fi
+if [[ ! "${TEST_SAMPLES_PER_CLASS}" =~ ^[1-9][0-9]*$ ]] || \
+        (( TEST_SAMPLES_PER_CLASS < 20 )); then
+    echo "--test-samples-per-class must be an integer of at least 20." >&2
+    exit 2
+fi
 if [[ ! "${MINIMUM_MEAN_PLDDT}" =~ ^([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]] || \
         ! awk -v value="${MINIMUM_MEAN_PLDDT}" \
             'BEGIN { exit !(value >= 0 && value <= 100) }'; then
@@ -246,6 +295,11 @@ if [[ ! "${CONDA_ENVIRONMENT}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
 fi
 if [[ "${SLURM_OPTION_SEEN}" == "true" && "${SUBMIT_SLURM}" != "true" ]]; then
     echo "Slurm options require --submit-slurm." >&2
+    exit 2
+fi
+if [[ "${AUTOMATED_TEST_OPTION_SEEN}" == "true" && \
+        "${AUTOMATED_TEST_LABELS}" != "true" ]]; then
+    echo "Automated test label options require --automated-test-labels." >&2
     exit 2
 fi
 
@@ -261,9 +315,37 @@ readonly RESULT_DIR="${WORK_DIR}/result"
 readonly E3_STATE_DIR="${WORK_DIR}/workflow_state/e3"
 readonly PREPARATION_MARKER="${E3_STATE_DIR}/01_preparation/PREPARED_VERIFIED.json"
 readonly REVIEW_MARKER="${E3_STATE_DIR}/02_label_review/REVIEW_READY.json"
-LABEL_ASSIGNMENTS="${LABEL_ASSIGNMENTS:-${WORK_DIR}/reviewed_label_assignments.tsv}"
-REVIEW_APPROVAL="${REVIEW_APPROVAL:-${E3_STATE_DIR}/02_label_review/REVIEW_APPROVED.json}"
 CAMPAIGN_ID="${CAMPAIGN_ID:-$(basename "${WORK_DIR}")}"
+readonly AUTOMATED_LABELS_PATH="${WORK_DIR}/AUTOMATED_TEST_ONLY.label_assignments.tsv"
+readonly AUTOMATED_LABELS_MARKER="${E3_STATE_DIR}/02_label_review/AUTOMATED_TEST_ONLY.LABELS.json"
+readonly AUTOMATED_APPROVAL_PATH="${E3_STATE_DIR}/02_label_review/AUTOMATED_TEST_ONLY.REVIEW_APPROVED.json"
+if [[ "${AUTOMATED_TEST_LABELS}" == "true" ]]; then
+    if [[ "${PHASE}" != "all" ]]; then
+        echo "--automated-test-labels is supported only with --phase all." >&2
+        exit 2
+    fi
+    if [[ ! "${CAMPAIGN_ID}" =~ ([Ss][Mm][Oo][Kk][Ee]|[Tt][Ee][Ss][Tt]) ]]; then
+        echo "Automated labels require 'smoke' or 'test' in --campaign-id." >&2
+        exit 2
+    fi
+    if [[ ! "$(basename "${WORK_DIR}")" =~ ([Ss][Mm][Oo][Kk][Ee]|[Tt][Ee][Ss][Tt]) ]]; then
+        echo "Automated labels require a separate work directory containing 'smoke' or 'test'." >&2
+        exit 2
+    fi
+    if [[ -n "${LABEL_ASSIGNMENTS}" && "${LABEL_ASSIGNMENTS}" != "${AUTOMATED_LABELS_PATH}" ]]; then
+        echo "Automated mode reserves its fixed AUTOMATED_TEST_ONLY label path." >&2
+        exit 2
+    fi
+    if [[ -n "${REVIEW_APPROVAL}" && "${REVIEW_APPROVAL}" != "${AUTOMATED_APPROVAL_PATH}" ]]; then
+        echo "Automated mode reserves its fixed AUTOMATED_TEST_ONLY approval path." >&2
+        exit 2
+    fi
+    LABEL_ASSIGNMENTS="${AUTOMATED_LABELS_PATH}"
+    REVIEW_APPROVAL="${AUTOMATED_APPROVAL_PATH}"
+else
+    LABEL_ASSIGNMENTS="${LABEL_ASSIGNMENTS:-${WORK_DIR}/reviewed_label_assignments.tsv}"
+    REVIEW_APPROVAL="${REVIEW_APPROVAL:-${E3_STATE_DIR}/02_label_review/REVIEW_APPROVED.json}"
+fi
 readonly SLURM_WORKER="${SCRIPT_DIR}/slurm/run_completed_e3_workflow.sbatch"
 
 validate_slurm_time() {
@@ -318,6 +400,13 @@ submit_slurm_phase() {
         )
     elif [[ "${RESUME}" == "true" ]]; then
         worker_arguments+=(--resume)
+    fi
+    if [[ "${AUTOMATED_TEST_LABELS}" == "true" ]]; then
+        worker_arguments+=(
+            --automated-test-labels
+            --test-target-label "${TEST_TARGET_LABEL}"
+            --test-samples-per-class "${TEST_SAMPLES_PER_CLASS}"
+        )
     fi
     if [[ -n "${SLURM_ACCOUNT}" ]]; then
         sbatch_arguments+=("--account=${SLURM_ACCOUNT}")
@@ -450,6 +539,9 @@ run_e3_snakemake() {
         "e3_minimum_mean_plddt=${MINIMUM_MEAN_PLDDT}"
         "e3_reviewed_labels=${LABEL_ASSIGNMENTS}"
         "e3_review_approval=${REVIEW_APPROVAL}"
+        "e3_automated_test_labels=${AUTOMATED_TEST_LABELS}"
+        "e3_test_target_label=${TEST_TARGET_LABEL}"
+        "e3_test_samples_per_class=${TEST_SAMPLES_PER_CLASS}"
         "e3_threads=${THREADS}"
         "e3_memory_mb=128000"
         "e3_runtime_minutes=2880"
@@ -519,6 +611,13 @@ if [[ "${PHASE}" == "initialise" ]]; then
 fi
 
 if [[ "${PHASE}" == "all" ]]; then
+    if [[ "${AUTOMATED_TEST_LABELS}" == "true" ]]; then
+        run_e3_snakemake all
+        echo "Completed AUTOMATED TEST ONLY campaign: ${RESULT_DIR}"
+        echo "These synthetic-label results test software execution and MUST NOT be " \
+            "interpreted scientifically."
+        exit 0
+    fi
     if [[ ! -s "${REVIEW_APPROVAL}" ]]; then
         run_e3_snakemake review_ready
         echo "Workflow paused cleanly at the required human-curation checkpoint."

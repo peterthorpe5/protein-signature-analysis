@@ -68,6 +68,15 @@ Only `REVIEWED_POSITIVE` is expanded into analysis membership. A background cont
 therefore be positively reviewed as a member of its background label, not merely marked
 `REVIEWED_NEGATIVE` against a target label. `(protein_id, label_id)` must be unique.
 
+For software testing only, `protein-signatures create-automated-test-labels` can create a
+complete table from any valid FASTA and built-in or custom profile. `--target-label ALL`
+uses every single-target/single-background default comparison; a canonical ID or alias limits
+the test to one default comparison. Optional structure, OrthoFinder 2.5.5/3 or published
+`orthofinder-results`, and redundancy inputs restrict eligibility and define leakage-safe
+blocks. Both output filenames must contain `AUTOMATED_TEST_ONLY`; positive rows carry
+`SYNTHETIC_TEST_ONLY`, and the JSON audit prohibits scientific interpretation. This is not a
+label-prediction method and is not valid for biological association claims.
+
 ## `features.tsv`
 
 This optional generic bridge accepts versioned feature calls from tools not run natively.

@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .automated_test_labels import (
+    AUTOMATED_TEST_APPROVER,
+    AUTOMATED_TEST_EVIDENCE_STATUS,
+    AUTOMATED_TEST_TOKEN,
+)
 from .checksums import sha256_file
 from .config import load_config
 from .e3_workflow_bridge import prepare_e3_workflow_inputs
@@ -302,6 +307,8 @@ def approve_e3_label_review(
     curator: str,
     note: str = "",
     profile: str | Path = "e3",
+    automated_test_mode: bool = False,
+    automated_test_marker: Path | None = None,
 ) -> Path:
     """Validate reviewed labels and publish an immutable curator approval.
 
@@ -313,6 +320,8 @@ def approve_e3_label_review(
         curator: Named person accepting the reviewed authority.
         note: Optional bounded approval note.
         profile: Built-in or custom label profile.
+        automated_test_mode: Accept only explicitly synthetic software-test labels.
+        automated_test_marker: Required generation audit in automated test mode.
 
     Returns:
         Published approval marker.
@@ -350,6 +359,45 @@ def approve_e3_label_review(
         reviewed_labels=context["reviewed_labels"],
         profile=profile,
     )
+    synthetic_count = summary["synthetic_test_positive_count"]
+    automated_authority: dict[str, Any] = {}
+    if automated_test_mode:
+        if curator_name != AUTOMATED_TEST_APPROVER:
+            raise InputValidationError(
+                "Automated test approval requires curator='AUTOMATED_TEST_MODE'."
+            )
+        if synthetic_count != summary["reviewed_positive_count"]:
+            raise InputValidationError(
+                "Automated test approval requires every positive assignment to carry "
+                f"evidence_status={AUTOMATED_TEST_EVIDENCE_STATUS!r}."
+            )
+        test_marker_path, test_marker_sha256 = _validate_automated_test_marker(
+            marker_path=automated_test_marker,
+            prepared_dir=context["prepared_dir"],
+            reviewed_labels=context["reviewed_labels"],
+            reviewed_sha256=context["reviewed_sha256"],
+            profile=profile,
+        )
+        automated_authority = {
+            "automated_test_marker": str(test_marker_path),
+            "automated_test_marker_sha256": test_marker_sha256,
+        }
+        approval_mode = "AUTOMATED_SMOKE_TEST"
+        review_status = "AUTOMATED_TEST_ONLY"
+        interpretation_allowed = False
+    else:
+        if automated_test_marker is not None:
+            raise InputValidationError(
+                "--automated-test-marker is valid only with automated test mode."
+            )
+        if synthetic_count:
+            raise InputValidationError(
+                "Synthetic test labels cannot receive human-review approval; use the "
+                "explicit automated test workflow in an isolated smoke-test campaign."
+            )
+        approval_mode = "HUMAN_REVIEW"
+        review_status = "APPROVED"
+        interpretation_allowed = True
     write_json_atomic(
         path=approval,
         value={
@@ -357,7 +405,9 @@ def approve_e3_label_review(
             "status": "VALID",
             "action": "E3_LABEL_REVIEW_APPROVAL",
             "package_version": __version__,
-            "review_status": "APPROVED",
+            "review_status": review_status,
+            "approval_mode": approval_mode,
+            "scientific_interpretation_allowed": interpretation_allowed,
             "approved_at_utc": datetime.now(timezone.utc).isoformat(),
             "curator": curator_name,
             "approval_note": approval_note,
@@ -370,6 +420,7 @@ def approve_e3_label_review(
             "reviewed_labels": str(context["reviewed_labels"]),
             "reviewed_labels_size_bytes": context["reviewed_labels"].stat().st_size,
             "reviewed_labels_sha256": context["reviewed_sha256"],
+            **automated_authority,
             **summary,
         },
     )
@@ -438,6 +489,28 @@ def verify_e3_label_review(
             raise InputValidationError(
                 f"Label-review approval summary {field!r} no longer matches reviewed labels."
             )
+    approval_mode = approval.get("approval_mode", "HUMAN_REVIEW")
+    if approval_mode not in {"HUMAN_REVIEW", "AUTOMATED_SMOKE_TEST"}:
+        raise InputValidationError(f"Unknown E3 label approval mode: {approval_mode!r}")
+    interpretation_allowed = approval_mode == "HUMAN_REVIEW"
+    if (
+        approval.get("scientific_interpretation_allowed", interpretation_allowed)
+        != interpretation_allowed
+    ):
+        raise InputValidationError("Label-review approval interpretation policy is inconsistent.")
+    if approval_mode == "AUTOMATED_SMOKE_TEST":
+        test_marker_path, test_marker_sha256 = _validate_automated_test_marker(
+            marker_path=Path(str(approval.get("automated_test_marker", ""))),
+            prepared_dir=context["prepared_dir"],
+            reviewed_labels=context["reviewed_labels"],
+            reviewed_sha256=context["reviewed_sha256"],
+            profile=profile,
+        )
+        if approval.get("automated_test_marker_sha256") != test_marker_sha256:
+            raise InputValidationError("Automated test-label marker changed after approval.")
+    else:
+        test_marker_path = None
+        test_marker_sha256 = None
     marker = Path(marker_path).expanduser().resolve()
     write_json_atomic(
         path=marker,
@@ -457,6 +530,12 @@ def verify_e3_label_review(
             "review_marker_sha256": context["review_marker_sha256"],
             "reviewed_labels": str(context["reviewed_labels"]),
             "reviewed_labels_sha256": context["reviewed_sha256"],
+            "approval_mode": approval_mode,
+            "scientific_interpretation_allowed": interpretation_allowed,
+            "automated_test_marker": (
+                str(test_marker_path) if test_marker_path is not None else None
+            ),
+            "automated_test_marker_sha256": test_marker_sha256,
             **summary,
         },
     )
@@ -527,6 +606,17 @@ def ensure_e3_campaign_marker(
     if eligible_count < 2:
         raise InputValidationError("At least two Foldseek-eligible structures are required.")
     config_path = Path(campaign_config).expanduser().resolve()
+    approval_mode = str(review.get("approval_mode", "HUMAN_REVIEW"))
+    if approval_mode == "AUTOMATED_SMOKE_TEST":
+        if re.search(r"(?:smoke|test)", campaign_id, flags=re.IGNORECASE) is None:
+            raise InputValidationError(
+                "An automated smoke-test approval requires 'smoke' or 'test' in campaign_id."
+            )
+        if re.search(r"(?:smoke|test)", config_path.parent.name, flags=re.IGNORECASE) is None:
+            raise InputValidationError(
+                "An automated smoke-test approval requires an isolated work directory whose "
+                "name contains 'smoke' or 'test'."
+            )
     expected_profile = _normalise_profile_source(profile=profile)
     creation_action = "ADOPTED_EXISTING" if config_path.exists() else "CREATED"
     if not config_path.exists():
@@ -576,6 +666,10 @@ def ensure_e3_campaign_marker(
             "preparation_marker_sha256": sha256_file(path=preparation_path),
             "review_verification_marker_sha256": sha256_file(
                 path=Path(review_verification_marker).expanduser().resolve()
+            ),
+            "approval_mode": approval_mode,
+            "scientific_interpretation_allowed": review.get(
+                "scientific_interpretation_allowed", True
             ),
             "validation_summary": summary,
         },
@@ -666,6 +760,81 @@ def _review_context(
     }
 
 
+def _validate_automated_test_marker(
+    *,
+    marker_path: Path | None,
+    prepared_dir: Path,
+    reviewed_labels: Path,
+    reviewed_sha256: str,
+    profile: str | Path,
+) -> tuple[Path, str]:
+    """Validate and bind one synthetic-label generation authority.
+
+    Args:
+        marker_path: Explicit automated label-generation marker.
+        prepared_dir: Verified completed-E3 input bundle.
+        reviewed_labels: Synthetic label table being approved.
+        reviewed_sha256: Current checksum of the synthetic label table.
+        profile: Built-in or custom classification profile.
+
+    Returns:
+        Resolved marker path and its current SHA-256 digest.
+
+    Raises:
+        InputValidationError: If the audit is absent, inconsistent or mutable.
+    """
+
+    if marker_path is None:
+        raise InputValidationError("Automated test approval requires --automated-test-marker.")
+    marker = Path(marker_path).expanduser().resolve()
+    if AUTOMATED_TEST_TOKEN not in marker.name.upper():
+        raise InputValidationError(
+            f"Automated test marker filename must contain {AUTOMATED_TEST_TOKEN!r}."
+        )
+    document = read_json(path=marker)
+    if not isinstance(document, dict):
+        raise InputValidationError(f"Automated test-label marker must contain an object: {marker}")
+    if (
+        document.get("schema_version") != 1
+        or document.get("status") != "AUTOMATED_TEST_ONLY"
+        or document.get("action") != "AUTOMATED_TEST_LABEL_GENERATION"
+        or document.get("scientific_interpretation_allowed") is not False
+    ):
+        raise InputValidationError(
+            f"Automated test-label marker is not a complete test-only authority: {marker}"
+        )
+    expected_paths = {
+        "sequence_fasta": prepared_dir / "proteins.faa",
+        "template_labels": prepared_dir / "label_assignments.REVIEW_REQUIRED.tsv",
+        "output_labels": reviewed_labels,
+    }
+    for field, expected_path in expected_paths.items():
+        recorded = Path(str(document.get(field, ""))).expanduser().resolve()
+        if recorded != expected_path.resolve():
+            raise InputValidationError(
+                f"Automated test-label marker {field!r} refers to another authority."
+            )
+    expected_digests = {
+        "sequence_fasta_sha256": sha256_file(path=expected_paths["sequence_fasta"]),
+        "template_labels_sha256": sha256_file(path=expected_paths["template_labels"]),
+        "output_labels_sha256": reviewed_sha256,
+    }
+    for field, expected_digest in expected_digests.items():
+        if document.get(field) != expected_digest:
+            raise InputValidationError(
+                f"Automated test-label marker {field!r} no longer matches its authority."
+            )
+    loaded_profile = load_profile(source=profile)
+    if (
+        document.get("profile_id") != loaded_profile.profile_id
+        or document.get("profile_version") != loaded_profile.profile_version
+    ):
+        raise InputValidationError(
+            "Automated test-label marker refers to a different classification profile."
+        )
+    return marker, sha256_file(path=marker)
+
+
 def _validate_reviewed_assignments(
     *, prepared_dir: Path, reviewed_labels: Path, profile: str | Path
 ) -> dict[str, Any]:
@@ -701,6 +870,9 @@ def _validate_reviewed_assignments(
         if label.label_id.startswith("control:") or label.system_class.upper() == "CONTROL"
     )
     positive_label_counts = Counter(assignment.label_id for assignment in positives)
+    positive_evidence_status_counts = Counter(
+        assignment.evidence_status for assignment in positives
+    )
     control_positive_count = sum(
         count for label_id, count in positive_label_counts.items() if label_id in control_label_ids
     )
@@ -734,6 +906,12 @@ def _validate_reviewed_assignments(
         "control_reviewed_positive_count": control_positive_count,
         "curation_status_counts": dict(sorted(status_counts.items())),
         "reviewed_positive_label_counts": dict(sorted(positive_label_counts.items())),
+        "reviewed_positive_evidence_status_counts": dict(
+            sorted(positive_evidence_status_counts.items())
+        ),
+        "synthetic_test_positive_count": positive_evidence_status_counts[
+            AUTOMATED_TEST_EVIDENCE_STATUS
+        ],
     }
 
 

@@ -67,5 +67,13 @@
   checksum-bound curator approval verification, campaign initialisation, atomic analysis and
   independent final verification. The all-`UNMAPPED` template cannot be approved, and every
   populated analysis target must have its profile-resolved matched background.
+- Add an isolated, fully automated software-smoke route that deterministically exercises all
+  profile-default comparisons without human label review. It uses structure-eligible proteins,
+  keeps whole HOG/exact-sequence/redundancy blocks exclusive to one label, checksum-binds
+  synthetic labels to test-only approval and prohibits scientific interpretation.
+- Make the synthetic-label generator profile-agnostic for arbitrary FASTA, custom profile,
+  structure, OrthoFinder 2.5.5/3, published OrthoFinder-resource and redundancy inputs; the E3
+  default covers all 73 comparisons (including F-box) through terminal targets and all 14
+  profile-defined matched controls.
 - Add `gawk`, the strict `nodefaults` channel, Snakemake and its Slurm executor plugin to the
   Conda environment; retain Kaleido as a pip-installed dependency for channel compatibility.

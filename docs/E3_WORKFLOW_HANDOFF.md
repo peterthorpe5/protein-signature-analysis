@@ -66,9 +66,11 @@ The completed-E3 Snakemake DAG therefore enforces this order:
 7. `run_e3_campaign` revalidates the campaign and executes the atomic analysis; and
 8. `verify_e3_campaign` independently checks every result and input checksum.
 
-Only step 3 is manual. Once the checksum-bound approval exists, `--phase all` executes steps
-5–8 unattended. Calling `--phase all` before approval stops cleanly at step 2 rather than
-guessing labels.
+Only step 3 is manual in a scientific campaign. Once the checksum-bound approval exists,
+`--phase all` executes steps 5–8 unattended. Calling `--phase all` before approval stops
+cleanly at step 2 rather than guessing labels. The separate automated smoke-test route below
+can exercise all software stages without a person, but its synthetic memberships are never
+scientific results.
 
 ## Phase 1: prepare inputs
 
@@ -236,6 +238,50 @@ Foldseek can be the dominant work unit. Before submission, record the prepared s
 count from `PREPARED.json`, confirm storage capacity for its cache and choose CPU, memory and
 wall time from the site's top-200/top-1,000 benchmark experience.
 The full execution and recovery contract is in [Snakemake and Slurm](SNAKEMAKE_SLURM.md).
+
+## Automated all-class smoke test without human review
+
+Do not bypass the review gate in a production campaign. For a software integration test,
+create a separate work directory and campaign ID containing `smoke` or `test`, then submit the
+complete nine-rule DAG with one command:
+
+```bash
+RUN_ROOT="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/e3_end_to_end_runs/grant_aligned_corrected_expression_structural_all1972_v0_16_0_20260909"
+SIGNATURE_TEST_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/protein_signature_runs/e3_all1972_automated_smoke_test_v0_1_0_20260915"
+
+./run_completed_e3_workflow.sh \
+  --phase all \
+  --run-root "${RUN_ROOT}" \
+  --work-dir "${SIGNATURE_TEST_WORK}" \
+  --campaign-id "e3_all1972_automated_smoke_test_20260915" \
+  --automated-test-labels \
+  --test-target-label ALL \
+  --test-samples-per-class 20 \
+  --minimum-mean-plddt 50 \
+  --log-level INFO \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition barton \
+  --slurm-memory 128G \
+  --slurm-time 2-00:00:00 \
+  --threads 24
+```
+
+The DAG verifies or creates `prepared_inputs`, stages the safe template, creates synthetic
+cohorts, issues a checksum-bound `AUTOMATED_SMOKE_TEST` approval, verifies the approval,
+initialises the campaign, performs the structural/sequence/domain/statistical/SHAP analysis
+and independently verifies the result. `ALL` covers all 73 default E3 comparisons, including
+F-box, through 65 terminal target cohorts and 14 distinct profile-resolved control cohorts.
+Whole HOG, exact-sequence and supplied redundancy blocks are exclusive to a single synthetic
+label, preventing target/control leakage.
+
+The synthetic assignments test execution only. They do not infer protein class from Pfam,
+sequence, AlphaFold structure or upstream E3 hints, and they cannot establish associated
+motifs. Small held-out cohorts may be reported as underpowered; the discovery cohorts are
+designed to exercise fitted models and SHAP. A single housekeeping family is not a suitable
+default background because its conserved fold creates a severe family-versus-family
+confound. Real inference continues to require the 14 biologically matched E3 controls and
+the human-review path.
 
 ## Phase 4: verify and inspect
 

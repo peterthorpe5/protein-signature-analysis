@@ -13,6 +13,10 @@ import yaml
 
 import protein_signatures.e3_workflow_bridge as bridge_module
 import protein_signatures.e3_workflow_orchestration as orchestration_module
+from protein_signatures.automated_test_labels import (
+    AUTOMATED_TEST_APPROVER,
+    AUTOMATED_TEST_EVIDENCE_STATUS,
+)
 from protein_signatures.checksums import sha256_file
 from protein_signatures.e3_workflow_bridge import (
     _iter_parquet_records,
@@ -736,6 +740,118 @@ def test_e3_review_approval_rejects_placeholder_incomplete_and_changed_labels(
             reviewed_labels=reviewed,
             approval_marker=approval_marker,
             marker_path=tmp_path / "state" / "REVIEW_VERIFIED.json",
+        )
+
+
+def test_automated_test_approval_is_isolated_checksum_bound_and_non_scientific(
+    tmp_path: Path,
+) -> None:
+    """Only a matching synthetic-generation audit can bypass human approval."""
+
+    root = _completed_workflow(tmp_path)
+    work = tmp_path / "automated_smoke_test"
+    prepared = work / "prepared_inputs"
+    state = work / "workflow_state" / "e3"
+    preparation = state / "01_preparation" / "PREPARED_VERIFIED.json"
+    review = state / "02_label_review" / "REVIEW_READY.json"
+    labels = work / "AUTOMATED_TEST_ONLY.label_assignments.tsv"
+    test_marker = state / "02_label_review" / "AUTOMATED_TEST_ONLY.LABELS.json"
+    approval = state / "02_label_review" / "AUTOMATED_TEST_ONLY.REVIEW_APPROVED.json"
+    verification = state / "02_label_review" / "REVIEW_VERIFIED.json"
+    ensure_e3_preparation_marker(
+        run_root=root,
+        prepared_dir=prepared,
+        minimum_mean_plddt=50.0,
+        marker_path=preparation,
+    )
+    stage_e3_label_review(
+        preparation_marker=preparation,
+        reviewed_labels=labels,
+        marker_path=review,
+    )
+    _curate_fixture_labels(path=labels)
+    rows = list(iter_tsv(path=labels, required_fields=LABEL_FIELDS))
+    for row in rows:
+        if row["curation_status"] == "REVIEWED_POSITIVE":
+            row["evidence_status"] = AUTOMATED_TEST_EVIDENCE_STATUS
+            row["evidence_source"] = "automated software smoke test"
+            row["evidence_reference"] = "AUTOMATED_TEST_ONLY:fixture"
+            row["curation_reason"] = "Synthetic fixture membership; not biological evidence."
+    write_tsv_atomic(path=labels, fieldnames=LABEL_FIELDS, records=rows)
+    profile = orchestration_module.load_profile(source="e3")
+    test_marker.parent.mkdir(parents=True, exist_ok=True)
+    test_marker.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "AUTOMATED_TEST_ONLY",
+                "action": "AUTOMATED_TEST_LABEL_GENERATION",
+                "scientific_interpretation_allowed": False,
+                "profile_id": profile.profile_id,
+                "profile_version": profile.profile_version,
+                "sequence_fasta": str((prepared / "proteins.faa").resolve()),
+                "sequence_fasta_sha256": sha256_file(path=prepared / "proteins.faa"),
+                "template_labels": str(
+                    (prepared / "label_assignments.REVIEW_REQUIRED.tsv").resolve()
+                ),
+                "template_labels_sha256": sha256_file(
+                    path=prepared / "label_assignments.REVIEW_REQUIRED.tsv"
+                ),
+                "output_labels": str(labels.resolve()),
+                "output_labels_sha256": sha256_file(path=labels),
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InputValidationError, match="cannot receive human-review"):
+        approve_e3_label_review(
+            preparation_marker=preparation,
+            review_marker=review,
+            reviewed_labels=labels,
+            approval_marker=approval,
+            curator="Test Curator",
+        )
+    with pytest.raises(InputValidationError, match="requires --automated-test-marker"):
+        approve_e3_label_review(
+            preparation_marker=preparation,
+            review_marker=review,
+            reviewed_labels=labels,
+            approval_marker=approval,
+            curator=AUTOMATED_TEST_APPROVER,
+            automated_test_mode=True,
+        )
+
+    approve_e3_label_review(
+        preparation_marker=preparation,
+        review_marker=review,
+        reviewed_labels=labels,
+        approval_marker=approval,
+        curator=AUTOMATED_TEST_APPROVER,
+        automated_test_mode=True,
+        automated_test_marker=test_marker,
+    )
+    approval_document = json.loads(approval.read_text(encoding="utf-8"))
+    assert approval_document["approval_mode"] == "AUTOMATED_SMOKE_TEST"
+    assert approval_document["review_status"] == "AUTOMATED_TEST_ONLY"
+    assert approval_document["scientific_interpretation_allowed"] is False
+    verify_e3_label_review(
+        preparation_marker=preparation,
+        review_marker=review,
+        reviewed_labels=labels,
+        approval_marker=approval,
+        marker_path=verification,
+    )
+
+    test_marker.write_bytes(test_marker.read_bytes() + b"\n")
+    with pytest.raises(InputValidationError, match="changed after approval"):
+        verify_e3_label_review(
+            preparation_marker=preparation,
+            review_marker=review,
+            reviewed_labels=labels,
+            approval_marker=approval,
+            marker_path=state / "02_label_review" / "SECOND_VERIFICATION.json",
         )
 
 

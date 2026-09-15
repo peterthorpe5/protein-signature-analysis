@@ -17,6 +17,16 @@ One independent release confirmation is still required after transfer to the Mac
 complete quality gate on the exact patched tree and allow GitHub Actions to repeat it after
 the push.
 
+### Post-QA automated smoke-label extension
+
+The complete-suite and coverage figures below are the retained release baseline from before
+the automated smoke-label extension. At the operator's request, the full suite was not rerun
+in the packaging session. Eighteen focused test cases covering generic/custom-profile
+label generation, structure eligibility, HOG-unit exclusivity, all 73 E3 comparisons,
+checksum-bound test approval, the unchanged human approval path and shell/Snakemake contracts
+passed. A real Snakemake 9 dry-run resolved all nine automated E3 DAG jobs. The exact patched
+tree still requires the independent full Mac/CI gate before tagging.
+
 ## Code-quality and test gates
 
 | Gate | Result |
@@ -142,7 +152,7 @@ Run this from the extracted repository on the Mac before creating the release ta
 cd /Users/PThorpe001/github_repos/protein-signature-analysis
 conda env create --file environment.yml
 conda activate protein_signature_analysis
-python -m pip install --no-deps --editable '.[app,dev]'
+python -m pip install --no-deps --editable '.[app,dev,workflow]'
 ./run_tests.sh | tee release_qa_macos.log
 ```
 
@@ -152,9 +162,10 @@ If the dedicated environment already exists, replace `conda env create` with:
 conda env update --file environment.yml --name protein_signature_analysis --prune
 ```
 
-The expected outcome is 347 passed tests, only the three SHAP/Matplotlib warnings above and
-at least 95.00% total coverage. Do not tag the release if the count, coverage threshold or
-any test differs; retain the log and report the complete output.
+The expected outcome is zero failures, only understood third-party warnings and at least
+95.00% total coverage. Do not tag the release if any test fails or coverage falls below the
+threshold; retain the log and report the complete output. The collected test count will be
+higher than the 347-test baseline because the extension adds focused safety contracts.
 
 ## Scientific and operational boundaries
 

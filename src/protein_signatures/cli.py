@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from . import __version__
+from .automated_test_labels import create_automated_test_labels
 from .catalogue import prepare_catalogue
 from .e3_workflow_bridge import prepare_e3_workflow_inputs
 from .e3_workflow_orchestration import (
@@ -65,6 +66,31 @@ def build_parser() -> argparse.ArgumentParser:
     e3_workflow_parser.add_argument("--output-dir", required=True, type=Path)
     e3_workflow_parser.add_argument("--minimum-mean-plddt", type=float, default=50.0)
     e3_workflow_parser.add_argument("--log-level", default="INFO")
+    automated_labels_parser = subparsers.add_parser(
+        "create-automated-test-labels",
+        help=("Create conspicuously synthetic target/control labels for software testing only."),
+    )
+    automated_labels_parser.add_argument("--sequences-fasta", required=True, type=Path)
+    automated_labels_parser.add_argument("--output-labels", required=True, type=Path)
+    automated_labels_parser.add_argument("--marker", required=True, type=Path)
+    automated_labels_parser.add_argument("--profile", default="e3")
+    automated_labels_parser.add_argument("--target-label", default="ALL")
+    automated_labels_parser.add_argument("--template-labels", type=Path)
+    automated_labels_parser.add_argument("--structures", type=Path)
+    automated_labels_parser.add_argument("--orthofinder-resource", type=Path)
+    automated_labels_parser.add_argument("--orthofinder-results", type=Path)
+    automated_labels_parser.add_argument(
+        "--orthofinder-group-type",
+        choices=("HOG", "LEGACY_ORTHOGROUP"),
+        default="HOG",
+    )
+    automated_labels_parser.add_argument("--orthofinder-hierarchy-node", default="N0")
+    automated_labels_parser.add_argument("--orthofinder-run-id", default="automated_smoke_test")
+    automated_labels_parser.add_argument("--redundancy-clusters", type=Path)
+    automated_labels_parser.add_argument("--samples-per-class", type=int, default=20)
+    automated_labels_parser.add_argument("--random-seed", type=int, default=1729)
+    automated_labels_parser.add_argument("--validation-fraction", type=float, default=0.2)
+    automated_labels_parser.add_argument("--log-level", default="INFO")
     e3_prepare_parser = subparsers.add_parser(
         "workflow-prepare-e3",
         help="Create or verify completed-E3 inputs and publish a workflow marker.",
@@ -93,6 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
     e3_approve_review_parser.add_argument("--curator", required=True)
     e3_approve_review_parser.add_argument("--note", default="")
     e3_approve_review_parser.add_argument("--profile", default="e3")
+    e3_approve_review_parser.add_argument("--automated-test-mode", action="store_true")
+    e3_approve_review_parser.add_argument("--automated-test-marker", type=Path)
     e3_approve_review_parser.add_argument("--log-level", default="INFO")
     e3_verify_review_parser = subparsers.add_parser(
         "workflow-verify-e3-review",
@@ -218,6 +246,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 minimum_mean_plddt=arguments.minimum_mean_plddt,
             )
             print(json.dumps({"status": "COMPLETE", "prepared_dir": str(destination)}))
+        elif arguments.command == "create-automated-test-labels":
+            destination = create_automated_test_labels(
+                sequences_fasta=arguments.sequences_fasta,
+                output_labels=arguments.output_labels,
+                marker_path=arguments.marker,
+                profile=arguments.profile,
+                target_label=arguments.target_label,
+                template_labels=arguments.template_labels,
+                structures=arguments.structures,
+                orthofinder_resource=arguments.orthofinder_resource,
+                orthofinder_results=arguments.orthofinder_results,
+                orthofinder_group_type=arguments.orthofinder_group_type,
+                orthofinder_hierarchy_node=arguments.orthofinder_hierarchy_node,
+                orthofinder_run_id=arguments.orthofinder_run_id,
+                redundancy_clusters=arguments.redundancy_clusters,
+                samples_per_class=arguments.samples_per_class,
+                random_seed=arguments.random_seed,
+                validation_fraction=arguments.validation_fraction,
+            )
+            print(
+                json.dumps(
+                    {"status": "AUTOMATED_TEST_ONLY", "marker": str(destination)},
+                    sort_keys=True,
+                )
+            )
         elif arguments.command == "workflow-prepare-e3":
             destination = ensure_e3_preparation_marker(
                 run_root=arguments.run_root,
@@ -242,10 +295,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 curator=arguments.curator,
                 note=arguments.note,
                 profile=arguments.profile,
+                automated_test_mode=arguments.automated_test_mode,
+                automated_test_marker=arguments.automated_test_marker,
             )
             print(
                 json.dumps(
-                    {"status": "APPROVED", "approval_marker": str(destination)},
+                    {
+                        "status": (
+                            "AUTOMATED_TEST_ONLY" if arguments.automated_test_mode else "APPROVED"
+                        ),
+                        "approval_marker": str(destination),
+                    },
                     sort_keys=True,
                 )
             )
