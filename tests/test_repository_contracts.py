@@ -159,6 +159,7 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
     assert "protein-signatures workflow-prepare-e3" in e3_snakefile
     assert "protein-signatures workflow-stage-e3-review" in e3_snakefile
     assert "protein-signatures create-automated-test-labels" in e3_snakefile
+    assert "--allow-empty-output-dir" in e3_snakefile
     assert "--automated-test-marker" in e3_snakefile
     assert "protein-signatures workflow-verify-e3-review" in e3_snakefile
     assert "protein-signatures workflow-initialise-e3" in e3_snakefile
@@ -168,6 +169,7 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
     assert "rule initialise_campaign:" in evidence_snakefile
     assert "rule run_campaign:" in evidence_snakefile
     assert "rule verify_campaign:" in evidence_snakefile
+    assert "--allow-empty-output-dir" in evidence_snakefile
     assert "--label-definition-features" in evidence_snakefile
     assert "Explicit provisional-evidence acceptance is required" in evidence_snakefile
 

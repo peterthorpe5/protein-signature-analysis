@@ -214,6 +214,7 @@ rule create_evidence_labels:
         protein-signatures create-evidence-labels \
             --sequences-fasta {input.sequences:q} \
             --output-dir {params.output_dir:q} \
+            --allow-empty-output-dir \
             --profile {params.profile:q} \
             --evidence-rules {params.rules:q} \
             {params.protein_metadata} \

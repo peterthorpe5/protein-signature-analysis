@@ -480,6 +480,7 @@ def create_evidence_label_bundle(
     redundancy_clusters: Path | None = None,
     random_seed: int = 1729,
     validation_fraction: float = 0.2,
+    allow_empty_output_dir: bool = False,
 ) -> Path:
     """Create a provisional evidence-led target and matched-control bundle.
 
@@ -513,18 +514,27 @@ def create_evidence_label_bundle(
         redundancy_clusters: Optional near-redundancy membership TSV.
         random_seed: Non-negative deterministic partition seed.
         validation_fraction: Downstream held-out fraction used to freeze blocks.
+        allow_empty_output_dir: Permit removal of an existing empty ordinary
+            directory created by a workflow engine for declared output files.
 
     Returns:
         Absolute path to ``EVIDENCE_LABELS.json`` inside the published bundle.
 
     Raises:
         InputValidationError: If evidence or matching contracts are unsatisfied.
-        PublicationError: If the destination exists or cannot be published safely.
+        PublicationError: If the destination cannot be published safely.
     """
 
-    destination = Path(output_dir).expanduser().resolve()
-    if destination.exists():
-        raise PublicationError(f"Evidence-label bundle already exists: {destination}")
+    requested_destination = Path(output_dir).expanduser()
+    if requested_destination.is_symlink():
+        raise PublicationError(
+            f"Evidence-label output must not be a symbolic link: {requested_destination.absolute()}"
+        )
+    destination = requested_destination.resolve()
+    _prepare_evidence_bundle_destination(
+        destination=destination,
+        allow_empty_output_dir=allow_empty_output_dir,
+    )
     if destination == Path(sequences_fasta).expanduser().resolve():
         raise PublicationError("Evidence-label output cannot replace its sequence authority.")
     if isinstance(random_seed, bool) or not isinstance(random_seed, int) or random_seed < 0:
@@ -846,6 +856,48 @@ def create_evidence_label_bundle(
         destination,
     )
     return published_marker
+
+
+def _prepare_evidence_bundle_destination(
+    *, destination: Path, allow_empty_output_dir: bool
+) -> None:
+    """Validate and, when explicitly allowed, remove an empty destination.
+
+    Snakemake creates parent directories for declared output files immediately
+    before executing a rule. Evidence bundles are published by atomically
+    renaming a sibling staging directory, so that scheduler-created empty
+    directory must first be removed. Existing files, non-directory paths and
+    symbolic links remain protected.
+
+    Args:
+        destination: Absolute evidence-bundle destination.
+        allow_empty_output_dir: Whether an empty ordinary directory may be
+            removed for workflow-engine interoperability.
+
+    Raises:
+        InputValidationError: If the interoperability flag is not Boolean.
+        PublicationError: If the destination exists and cannot be safely
+            treated as an empty workflow-created directory.
+    """
+
+    if not isinstance(allow_empty_output_dir, bool):
+        raise InputValidationError("allow_empty_output_dir must be Boolean.")
+    if not destination.exists() and not destination.is_symlink():
+        return
+    if not allow_empty_output_dir:
+        raise PublicationError(f"Evidence-label bundle already exists: {destination}")
+    if destination.is_symlink() or not destination.is_dir():
+        raise PublicationError(
+            f"Evidence-label output exists but is not an ordinary directory: {destination}"
+        )
+    try:
+        destination.rmdir()
+    except OSError as error:
+        raise PublicationError(
+            "Evidence-label output directory is not empty; refusing to remove "
+            f"existing data: {destination}"
+        ) from error
+    LOGGER.info("Removed empty workflow-created evidence output directory %s", destination)
 
 
 def verify_evidence_label_bundle(*, bundle_dir: Path) -> Mapping[str, Any]:

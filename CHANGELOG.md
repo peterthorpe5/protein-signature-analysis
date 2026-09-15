@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make both evidence-led Snakemake DAGs compatible with atomic bundle
+  publication by explicitly allowing removal of the empty output directory that
+  Snakemake creates before the rule command. Existing files, non-empty
+  directories and symbolic links remain protected.
 - Import the structural precursor's explicit `REFERENCE` diagonal rows as
   assessment-universe membership rather than invalid pairwise comparisons. The
   rows remain checksum-bound, are validated against their group summaries and

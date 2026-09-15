@@ -120,6 +120,14 @@ def build_parser() -> argparse.ArgumentParser:
     evidence_labels_parser.add_argument("--redundancy-clusters", type=Path)
     evidence_labels_parser.add_argument("--random-seed", type=int, default=1729)
     evidence_labels_parser.add_argument("--validation-fraction", type=float, default=0.2)
+    evidence_labels_parser.add_argument(
+        "--allow-empty-output-dir",
+        action="store_true",
+        help=(
+            "Allow an existing empty output directory created by a workflow engine; "
+            "non-empty directories remain protected."
+        ),
+    )
     evidence_labels_parser.add_argument("--log-level", default="INFO")
     verify_evidence_parser = subparsers.add_parser(
         "verify-evidence-labels",
@@ -338,6 +346,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 redundancy_clusters=arguments.redundancy_clusters,
                 random_seed=arguments.random_seed,
                 validation_fraction=arguments.validation_fraction,
+                allow_empty_output_dir=arguments.allow_empty_output_dir,
             )
             print(
                 json.dumps(

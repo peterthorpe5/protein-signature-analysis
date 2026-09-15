@@ -9,8 +9,9 @@ import jsonschema
 import pytest
 import yaml
 
+import protein_signatures.cli as cli_module
 from protein_signatures.cli import build_parser
-from protein_signatures.errors import InputValidationError
+from protein_signatures.errors import InputValidationError, PublicationError
 from protein_signatures.evidence_labels import (
     CLASS_SUMMARY_FIELDS,
     CONTROL_MATCH_FIELDS,
@@ -391,6 +392,94 @@ def test_bundle_verification_detects_a_modified_audit(tmp_path: Path) -> None:
         verify_evidence_label_bundle(bundle_dir=bundle)
 
 
+def test_evidence_bundle_allows_only_explicit_empty_workflow_directory(
+    tmp_path: Path,
+) -> None:
+    """Workflow compatibility may remove an empty directory but never existing data."""
+
+    profile = tmp_path / "profile.yaml"
+    rules = tmp_path / "rules.yaml"
+    annotations = tmp_path / "annotations.tsv"
+    _write_profile(path=profile)
+    _write_rules(path=rules)
+    fasta, metadata, domains = _write_inputs(root=tmp_path)
+    _write_annotations(path=annotations)
+
+    default_destination = tmp_path / "default_existing"
+    default_destination.mkdir()
+    with pytest.raises(PublicationError, match="already exists"):
+        create_evidence_label_bundle(
+            sequences_fasta=fasta,
+            output_dir=default_destination,
+            profile=profile,
+            evidence_rules=rules,
+        )
+
+    workflow_destination = tmp_path / "workflow_created"
+    workflow_destination.mkdir()
+    marker = create_evidence_label_bundle(
+        sequences_fasta=fasta,
+        output_dir=workflow_destination,
+        profile=profile,
+        evidence_rules=rules,
+        protein_metadata=metadata,
+        domains=domains,
+        external_annotations=annotations,
+        allow_empty_output_dir=True,
+    )
+    assert marker == workflow_destination / "EVIDENCE_LABELS.json"
+
+    protected_destination = tmp_path / "protected"
+    protected_destination.mkdir()
+    protected_file = protected_destination / "retain.txt"
+    protected_file.write_text("retain\n", encoding="utf-8")
+    with pytest.raises(PublicationError, match="not empty"):
+        create_evidence_label_bundle(
+            sequences_fasta=fasta,
+            output_dir=protected_destination,
+            profile=profile,
+            evidence_rules=rules,
+            allow_empty_output_dir=True,
+        )
+    assert protected_file.read_text(encoding="utf-8") == "retain\n"
+
+    file_destination = tmp_path / "existing_file"
+    file_destination.write_text("retain\n", encoding="utf-8")
+    with pytest.raises(PublicationError, match="not an ordinary directory"):
+        create_evidence_label_bundle(
+            sequences_fasta=fasta,
+            output_dir=file_destination,
+            profile=profile,
+            evidence_rules=rules,
+            allow_empty_output_dir=True,
+        )
+    assert file_destination.read_text(encoding="utf-8") == "retain\n"
+
+    symlink_target = tmp_path / "symlink_target"
+    symlink_target.mkdir()
+    symlink_destination = tmp_path / "symlink_destination"
+    symlink_destination.symlink_to(symlink_target, target_is_directory=True)
+    with pytest.raises(PublicationError, match="must not be a symbolic link"):
+        create_evidence_label_bundle(
+            sequences_fasta=fasta,
+            output_dir=symlink_destination,
+            profile=profile,
+            evidence_rules=rules,
+            allow_empty_output_dir=True,
+        )
+    assert symlink_destination.is_symlink()
+    assert symlink_target.is_dir()
+
+    with pytest.raises(InputValidationError, match="must be Boolean"):
+        create_evidence_label_bundle(
+            sequences_fasta=fasta,
+            output_dir=tmp_path / "invalid_flag",
+            profile=profile,
+            evidence_rules=rules,
+            allow_empty_output_dir="true",  # type: ignore[arg-type]
+        )
+
+
 def test_built_in_e3_rules_cover_inferable_defaults_and_match_schema() -> None:
     """Every non-catch-all E3 default should have a validated inference rule."""
 
@@ -432,15 +521,53 @@ def test_cli_uses_named_generic_evidence_arguments() -> None:
             "rules.yaml",
             "--protein-metadata",
             "metadata.tsv",
+            "--allow-empty-output-dir",
         )
     )
     assert arguments.command == "create-evidence-labels"
     assert arguments.protein_metadata == Path("metadata.tsv")
     assert arguments.orthofinder_group_type == "HOG"
+    assert arguments.allow_empty_output_dir is True
     verifier = build_parser().parse_args(
         ("verify-evidence-labels", "--bundle-dir", "evidence_bundle")
     )
     assert verifier.command == "verify-evidence-labels"
+
+
+def test_cli_routes_empty_workflow_output_compatibility_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The workflow-only compatibility flag should reach the atomic publisher."""
+
+    captured: dict[str, object] = {}
+    marker = tmp_path / "evidence_bundle" / "EVIDENCE_LABELS.json"
+
+    def fake_create_evidence_label_bundle(**kwargs: object) -> Path:
+        """Capture named CLI arguments without generating a real bundle."""
+
+        captured.update(kwargs)
+        return marker
+
+    monkeypatch.setattr(
+        cli_module,
+        "create_evidence_label_bundle",
+        fake_create_evidence_label_bundle,
+    )
+    exit_code = cli_module.main(
+        [
+            "create-evidence-labels",
+            "--sequences-fasta",
+            str(tmp_path / "proteins.faa"),
+            "--output-dir",
+            str(marker.parent),
+            "--allow-empty-output-dir",
+        ]
+    )
+    assert exit_code == 0
+    assert captured["allow_empty_output_dir"] is True
+    assert json.loads(capsys.readouterr().out)["marker"] == str(marker)
 
 
 def test_generic_metadata_requires_complete_strict_boolean_coverage(tmp_path: Path) -> None:

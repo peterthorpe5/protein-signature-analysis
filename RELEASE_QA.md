@@ -90,6 +90,25 @@ the threshold was not weakened or bypassed. The corrected tree is suitable for t
 cluster smoke-test continuation, but should not be release-tagged until the coverage gate is
 restored.
 
+### Post-push evidence-bundle publication correction
+
+The first all-species evidence-led run completed preparation but exposed an orchestration
+conflict before evidence scoring began. Snakemake 9.27.0 creates parent directories for
+declared output files before executing their rule, while the atomic evidence publisher
+correctly refused any pre-existing destination. A minimal real-Snakemake reproduction
+confirmed that behaviour. Both evidence-led DAGs now pass an explicit compatibility flag
+that permits removal only of an empty ordinary output directory. Default direct CLI use
+still refuses every existing destination; non-empty directories, files and symbolic links
+remain protected. Unit tests cover the permitted empty-directory path, default refusal,
+non-empty data retention, symbolic-link refusal, type validation, CLI routing and both
+workflow contracts.
+
+On the exact corrected tree, all 374 tests passed with the same three understood
+third-party warnings. Both the completed-E3 and generic rules were executed with
+Snakemake 9.27.0 against scheduler-created empty output directories and completed their
+evidence targets. Python compilation, PEP 8, Google-style docstrings, Ruff, Bash syntax
+and `git diff --check` also passed.
+
 ## Code-quality and test gates
 
 | Gate | Result |
