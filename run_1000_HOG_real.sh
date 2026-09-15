@@ -83,3 +83,27 @@ SIGNATURE_TEST_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_prota
   --slurm-memory 128G \
   --slurm-time 2-00:00:00 \
   --threads 24
+
+#######################################
+RUN_ROOT="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/e3_end_to_end_runs/grant_aligned_corrected_expression_structural_all1972_v0_16_0_20260909"
+
+SIGNATURE_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/protein_signature_runs/e3_all1972_v0_1_0_20260914"
+
+REVIEWED_LABELS="${SIGNATURE_WORK}/reviewed_label_assignments.tsv"
+
+./run_completed_e3_workflow.sh \
+  --phase all \
+  --run-root "${RUN_ROOT}" \
+  --work-dir "${SIGNATURE_PRODUCTION_WORK}" \
+  --campaign-id "e3_all1972_evidence_provisional_20260915" \
+  --evidence-led-labels \
+  --accept-provisional-evidence-labels \
+  --evidence-rules e3 \
+  --minimum-mean-plddt 50 \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition barton \
+  --slurm-memory 128G \
+  --slurm-time 2-00:00:00 \
+  --threads 24
+
