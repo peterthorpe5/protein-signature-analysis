@@ -80,13 +80,21 @@ def import_structural_alignment_resource(
     lengths = {sequence.protein_id: sequence.sequence_length for sequence in sequences}
     summaries = _read_group_summaries(path=required_paths[2])
     expected_universe_sizes = {
-        str(row["cluster_id"]): int(row["selected_accession_count"]) for row in summaries
+        str(row["cluster_id"]): int(row["aligned_accession_count"]) for row in summaries
     }
-    comparisons, comparison_universe_members = _read_global_alignments(
+    expected_reference_accessions = {
+        str(row["cluster_id"]): str(row["reference_accession"]) for row in summaries
+    }
+    (
+        comparisons,
+        comparison_universe_members,
+        reference_membership_row_count,
+    ) = _read_global_alignments(
         path=required_paths[0],
         lengths=lengths,
         run_digest=run_digest,
         expected_universe_sizes=expected_universe_sizes,
+        expected_reference_accessions=expected_reference_accessions,
     )
     features = _read_pocket_features(
         path=required_paths[1],
@@ -94,8 +102,10 @@ def import_structural_alignment_resource(
         run_digest=run_digest,
     )
     LOGGER.info(
-        "Imported structural resource comparisons=%d features=%d groups=%d",
+        "Imported structural resource comparisons=%d reference_membership_rows=%d "
+        "features=%d groups=%d",
         len(comparisons),
+        reference_membership_row_count,
         len(features),
         len(summaries),
     )
@@ -107,6 +117,7 @@ def import_structural_alignment_resource(
         package_version=package_version,
         run_digest=run_digest,
         comparison_universe_members=comparison_universe_members,
+        reference_membership_row_count=reference_membership_row_count,
     )
 
 
@@ -528,9 +539,11 @@ def _read_global_alignments(
     lengths: Mapping[str, int],
     run_digest: str,
     expected_universe_sizes: Mapping[str, int],
+    expected_reference_accessions: Mapping[str, str],
 ) -> tuple[
     tuple[PairwiseStructureComparison, ...],
     dict[str, frozenset[str]],
+    int,
 ]:
     """Convert published structural alignments to generic comparisons.
 
@@ -538,10 +551,13 @@ def _read_global_alignments(
         path: Published global-alignment Parquet table.
         lengths: Campaign protein lengths used as coverage denominators.
         run_digest: Verified upstream run identity.
-        expected_universe_sizes: Selected protein count keyed by upstream cluster.
+        expected_universe_sizes: Aligned protein count keyed by upstream cluster.
+        expected_reference_accessions: Declared reference protein keyed by upstream
+            cluster.
 
     Returns:
-        Validated comparisons and proved cluster-local assessment universes.
+        Validated comparisons, proved cluster-local assessment universes and the
+        number of explicit reference-membership rows omitted from comparisons.
     """
 
     required = (
@@ -559,15 +575,14 @@ def _read_global_alignments(
     comparisons: dict[tuple[str, str, str, str], PairwiseStructureComparison] = {}
     universe_members: dict[str, set[str]] = {}
     universe_by_cluster: dict[str, str] = {}
+    reference_membership_rows: set[tuple[str, str, str]] = set()
+    matching_row_count = 0
     for row_number, row in enumerate(rows, start=1):
         reference = str(row["reference_accession"] or "").strip()
         mobile = str(row["mobile_accession"] or "").strip()
         if reference not in lengths or mobile not in lengths:
             continue
-        if reference == mobile:
-            raise InputValidationError(
-                f"Structural alignment row {row_number} compares a protein with itself."
-            )
+        matching_row_count += 1
         tool = str(row["alignment_tool"] or "").strip()
         version = str(row["tool_version"] or "").strip()
         cluster_id = str(row["cluster_id"] or "").strip()
@@ -575,7 +590,56 @@ def _read_global_alignments(
             raise InputValidationError(
                 f"Structural alignment row {row_number} lacks tool or cluster provenance."
             )
-        status = _parse_comparison_status(value=row["status"], row_number=row_number)
+        raw_status = str(row["status"] or "").strip().upper()
+        universe_id = "ES3A_" + sha256_json(value=(run_digest, cluster_id))[:24]
+        previous_universe = universe_by_cluster.setdefault(cluster_id, universe_id)
+        if previous_universe != universe_id:  # pragma: no cover - deterministic hash guard
+            raise InputValidationError(
+                f"Structural cluster {cluster_id!r} resolved to inconsistent universes."
+            )
+        expected_reference = expected_reference_accessions.get(cluster_id)
+        if expected_reference is None:
+            raise InputValidationError(
+                f"Structural alignment cluster {cluster_id!r} lacks a group summary."
+            )
+        if reference != expected_reference:
+            raise InputValidationError(
+                f"Structural alignment row {row_number} names reference {reference!r}, "
+                f"but cluster {cluster_id!r} declares {expected_reference!r}."
+            )
+        if reference == mobile:
+            if raw_status != "REFERENCE":
+                raise InputValidationError(
+                    f"Structural alignment row {row_number} compares a protein with "
+                    "itself without the explicit REFERENCE status."
+                )
+            aligned = _optional_integer(
+                value=row["aligned_length"],
+                field="aligned_length",
+                row_number=row_number,
+            )
+            rmsd = _optional_number(
+                value=row["rmsd_angstrom"], field="rmsd_angstrom", row_number=row_number
+            )
+            score = _optional_number(
+                value=row["minimum_tm_score"],
+                field="minimum_tm_score",
+                row_number=row_number,
+            )
+            if aligned is not None or rmsd != 0.0 or score != 1.0:
+                raise InputValidationError(
+                    f"Structural reference row {row_number} does not contain the "
+                    "expected aligned_length=NULL, RMSD=0 and minimum TM-score=1 sentinels."
+                )
+            reference_key = (cluster_id, tool, reference)
+            if reference_key in reference_membership_rows:
+                raise InputValidationError(
+                    f"Duplicate imported structural reference row: {reference_key!r}"
+                )
+            reference_membership_rows.add(reference_key)
+            universe_members.setdefault(universe_id, set()).add(reference)
+            continue
+        status = _parse_comparison_status(value=raw_status, row_number=row_number)
         aligned = _optional_integer(
             value=row["aligned_length"], field="aligned_length", row_number=row_number
         )
@@ -608,12 +672,6 @@ def _read_global_alignments(
                 f"Unsuccessful structural alignment at row {row_number} carries metrics."
             )
         source_id = "|".join((cluster_id, tool, reference, mobile))
-        universe_id = "ES3A_" + sha256_json(value=(run_digest, cluster_id))[:24]
-        previous_universe = universe_by_cluster.setdefault(cluster_id, universe_id)
-        if previous_universe != universe_id:  # pragma: no cover - deterministic hash guard
-            raise InputValidationError(
-                f"Structural cluster {cluster_id!r} resolved to inconsistent universes."
-            )
         universe_members.setdefault(universe_id, set()).update((reference, mobile))
         key = (cluster_id, tool, reference, mobile)
         if key in comparisons:
@@ -633,7 +691,7 @@ def _read_global_alignments(
             comparison_universe_id=universe_id,
             coverage_scope=StructureCoverageScope.FULL_SEQUENCE,
         )
-    if rows and not comparisons:
+    if rows and matching_row_count == 0:
         raise InputValidationError(
             "No structural-alignment accessions matched the campaign FASTA identifiers."
         )
@@ -653,7 +711,17 @@ def _read_global_alignments(
     frozen_members = {
         universe_id: frozenset(members) for universe_id, members in sorted(universe_members.items())
     }
-    return tuple(comparisons[key] for key in sorted(comparisons)), frozen_members
+    if reference_membership_rows:
+        LOGGER.info(
+            "Accepted %d explicit structural REFERENCE rows as assessment-universe "
+            "membership and omitted them from pairwise comparisons",
+            len(reference_membership_rows),
+        )
+    return (
+        tuple(comparisons[key] for key in sorted(comparisons)),
+        frozen_members,
+        len(reference_membership_rows),
+    )
 
 
 def _read_pocket_features(

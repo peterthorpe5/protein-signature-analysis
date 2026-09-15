@@ -358,9 +358,7 @@ def test_evidence_bundle_is_generic_auditable_and_circularity_safe(
         domains=bundle / "domains.for_signature_analysis.tsv",
     )
     validation = validate_campaign(config_path=config)
-    assert validation["automated_label_evidence"]["status"] == (
-        "PROVISIONAL_EVIDENCE_SUPPORTED"
-    )
+    assert validation["automated_label_evidence"]["status"] == ("PROVISIONAL_EVIDENCE_SUPPORTED")
     metadata.write_text(metadata.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     with pytest.raises(InputValidationError, match="Evidence input size differs"):
         verify_evidence_label_bundle(bundle_dir=bundle)

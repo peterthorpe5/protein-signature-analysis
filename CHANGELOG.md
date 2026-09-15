@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Import the structural precursor's explicit `REFERENCE` diagonal rows as
+  assessment-universe membership rather than invalid pairwise comparisons. The
+  rows remain checksum-bound, are validated against their group summaries and
+  sentinel metrics, are counted in run metadata, and never enter association or
+  structural-clustering evidence.
+- Cross-check imported structural universes against `aligned_accession_count`
+  rather than `selected_accession_count`, because selected proteins without
+  usable coordinates were never members of the structural comparison universe.
 - Reconcile raw OrthoFinder group members with campaign FASTA accessions using
   exact identifiers, controlled UniProt accession/entry aliases and the
   documented single `sample@@identifier` qualifier. Ambiguous mappings fail

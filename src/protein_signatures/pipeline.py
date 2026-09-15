@@ -902,6 +902,9 @@ def _prepare_campaign(
                 "comparison_universe_count": len(
                     imported_structural_evidence.comparison_universe_members
                 ),
+                "reference_membership_row_count": (
+                    imported_structural_evidence.reference_membership_row_count
+                ),
             }
             if imported_structural_evidence
             else {"status": "NOT_SELECTED"}

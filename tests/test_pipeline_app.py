@@ -106,6 +106,10 @@ def test_validate_and_resume_are_deterministic(tmp_path: Path, example_dir: Path
         "orthofinder_version": "",
         "orthofinder_source_mode": "",
         "structural_alignment_resource": "NOT_SELECTED",
+        "automated_label_evidence": {
+            "status": "NOT_SELECTED",
+            "interpretation_scope": "NOT_APPLICABLE",
+        },
         "profile_structural_evidence": {
             "required": True,
             "status": "COMPLETE",
@@ -249,7 +253,7 @@ def test_app_backend_exposes_every_complete_canonical_download(
         assert assets[1].payload.startswith(b"PK")
     inventory_assets = backend.load_report_inventory_assets(database=database)
     assert tuple(asset.file_format for asset in inventory_assets) == ("TSV", "XLSX")
-    assert {asset.row_count for asset in inventory_assets} == {181}
+    assert {asset.row_count for asset in inventory_assets} == {213}
 
 
 @pytest.mark.parametrize(

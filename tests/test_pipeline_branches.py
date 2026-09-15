@@ -329,6 +329,7 @@ def test_prepare_campaign_covers_acquisition_foldseek_and_structural_import(
         package_version="1.0",
         run_digest="a" * 64,
         comparison_universe_members={"upstream": frozenset({"fbox01", "ctrl01"})},
+        reference_membership_row_count=2,
     )
     raw_output = tmp_path / "foldseek.tsv"
     manifest = tmp_path / "foldseek.json"
@@ -363,6 +364,7 @@ def test_prepare_campaign_covers_acquisition_foldseek_and_structural_import(
     assert data["evidence_availability"]["alphafold_acquisition"] == "COMPLETE"
     assert data["evidence_availability"]["foldseek"] == "COMPLETE"
     assert data["evidence_availability"]["imported_structural_alignment"] == "COMPLETE"
+    assert data["imported_structural_alignment"]["reference_membership_row_count"] == 2
     assert raw_output not in data["input_paths"]
     assert coordinate not in data["input_paths"]
     assert data["asset_sources"]["assets/foldseek/key/foldseek_all_vs_all.tsv"] == raw_output

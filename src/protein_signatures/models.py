@@ -353,6 +353,7 @@ class StructuralAlignmentImport:
     package_version: str
     run_digest: str
     comparison_universe_members: Mapping[str, frozenset[str]]
+    reference_membership_row_count: int = 0
 
 
 @dataclass(frozen=True)

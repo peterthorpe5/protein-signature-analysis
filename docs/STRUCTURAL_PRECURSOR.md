@@ -82,9 +82,9 @@ Extra columns are allowed and ignored. Required columns are selected by name.
 |---|---|
 | `cluster_id` | Non-empty upstream group/cluster provenance. |
 | `reference_accession` | Exact campaign FASTA `protein_id`; non-matching rows are not imported. |
-| `mobile_accession` | Exact campaign FASTA `protein_id`; must differ from the reference. |
+| `mobile_accession` | Exact campaign FASTA `protein_id`; pairwise rows must differ from the reference. An explicit upstream `REFERENCE` row may repeat the reference as described below. |
 | `alignment_tool` | Non-empty upstream tool name, normally `US-align` or `TM-align`. |
-| `status` | Case-normalised member of `COMPLETE`, `SUCCESS`, `PASS`, `FAILED`, `NOT_ASSESSED`, `INPUT_UNAVAILABLE`, `EXCLUDED`. |
+| `status` | Case-normalised pairwise state `COMPLETE`, `SUCCESS`, `PASS`, `FAILED`, `NOT_ASSESSED`, `INPUT_UNAVAILABLE` or `EXCLUDED`; the controlled diagonal sentinel is `REFERENCE`. |
 | `tool_version` | Non-empty upstream tool version. |
 | `aligned_length` | Optional positive integer. Required for successful rows because it supplies both coverage numerators. |
 | `rmsd_angstrom` | Optional finite, non-negative number. |
@@ -100,6 +100,14 @@ The source identity is constructed as
 `cluster_id|alignment_tool|reference_accession|mobile_accession`. An exact duplicate of that
 four-part row identity is rejected. If the table contains rows but none match the campaign
 FASTA, import fails.
+
+The precursor deliberately emits one diagonal row per cluster and enabled alignment tool with
+`reference_accession == mobile_accession` and `status=REFERENCE`. This row identifies the
+reference as a member of the assessed structural universe; it is not a pairwise comparison.
+The adapter accepts it only when it agrees with the group summary and carries the precursor's
+`aligned_length=NULL`, `rmsd_angstrom=0` and `minimum_tm_score=1` sentinels. It is counted in
+import metadata and omitted from association and structural-clustering comparisons. Any other
+self-comparison remains invalid.
 
 ### `pocket_comparisons.parquet`
 
@@ -137,11 +145,14 @@ The stable imported subset is:
 are republished, in this stable subset, as `imported_structural_group_summaries` for audit
 and presentation. They are not recomputed by this package.
 
-For each imported alignment cluster, `selected_accession_count` is also a completeness
+For each imported alignment cluster, `aligned_accession_count` is also a completeness
 cross-check: the number of distinct campaign-matching accessions observed as alignment
-endpoints must equal the declared count. A missing summary or unequal count is fatal because
-the package could not justify absence calls for that comparison universe. This check proves
-the membership set; it does not independently prove that every possible pair is present.
+endpoints, including the explicit reference-membership row, must equal the declared count.
+`selected_accession_count` can legitimately be larger because selected proteins without usable
+coordinates were not structurally aligned. A missing summary or unequal aligned count is fatal
+because the package could not justify absence calls for that comparison universe. This check
+proves the assessed membership set; it does not independently prove that every possible pair is
+present.
 
 ## What is reused and what is deliberately local
 

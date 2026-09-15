@@ -882,10 +882,7 @@ def test_evidence_led_approval_is_provisional_checksum_bound_and_verifiable(
         marker_path=preparation,
     )
     rules_source = (
-        Path(orchestration_module.__file__).parent
-        / "data"
-        / "evidence_rules"
-        / "e3.yaml"
+        Path(orchestration_module.__file__).parent / "data" / "evidence_rules" / "e3.yaml"
     )
     rules_document = yaml.safe_load(rules_source.read_text(encoding="utf-8"))
     rules_document["ruleset_id"] = "e3_test_one_control"
@@ -1360,6 +1357,8 @@ def test_existing_campaign_cannot_change_bridge_authorities(
             profile="e3",
             prepared_dir=paths["prepared"],
             reviewed_labels=paths["reviewed"],
+            domains=paths["prepared"] / "domains.tsv",
+            evidence_inputs={},
             structural_resource=Path(prepared_document["structural_alignment_resource"]),
             orthofinder_results=Path(prepared_document["orthofinder_results"]),
             foldseek_maximum_hits=2,

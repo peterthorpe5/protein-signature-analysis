@@ -257,7 +257,7 @@ def test_empty_static_reports_and_duplicate_destinations_fail_closed(tmp_path: P
             assets=assets,
             inventory=inventory,
         )
-        == 8
+        == 10
     )
     table_assets = {"analysis/01_proteins_and_curation/tables/proteins.tsv": tmp_path / "old"}
     with pytest.raises(PublicationError, match="table report path is duplicated"):

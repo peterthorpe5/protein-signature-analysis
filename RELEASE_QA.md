@@ -69,6 +69,27 @@ formatting/lint and focused Python compilation also passed. This correction
 does not weaken HOG identity, completion-authority or checksum validation. The
 complete test suite was not run.
 
+### Post-push Stage 09b reference-row correction
+
+The all-1,972-species automated smoke run reached the checksum-verified Stage 09b
+aggregate and exposed the precursor's intentional diagonal `REFERENCE` rows. One such
+row is emitted per structural group and alignment tool to record the reference protein's
+membership of the assessed universe; it is not a pairwise comparison. The importer now
+accepts only this controlled form, checks it against the group-summary reference and exact
+sentinel metrics, counts it in provenance metadata, and omits it from downstream pairwise
+evidence. Other self-comparisons remain fatal. The completeness cross-check now uses
+`aligned_accession_count`, because `selected_accession_count` legitimately includes selected
+proteins for which no usable structural model was available.
+
+On the exact corrected tree, all 372 tests passed with three understood third-party
+warnings. Python compilation, Ruff formatting and lint, PEP 8, Google-style docstrings,
+Bash syntax and `git diff --check` also passed. Combined statement/branch coverage was
+91.24%, below the configured 95.00% release threshold. This inherited shortfall is
+concentrated in the evidence-led extension added after the retained 95.31% release baseline;
+the threshold was not weakened or bypassed. The corrected tree is suitable for the requested
+cluster smoke-test continuation, but should not be release-tagged until the coverage gate is
+restored.
+
 ## Code-quality and test gates
 
 | Gate | Result |

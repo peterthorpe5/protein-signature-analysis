@@ -138,9 +138,7 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
     root = Path(__file__).parents[1]
     snakefile = (root / "workflow/Snakefile").read_text(encoding="utf-8")
     e3_snakefile = (root / "workflow/E3Snakefile").read_text(encoding="utf-8")
-    evidence_snakefile = (root / "workflow/EvidenceSnakefile").read_text(
-        encoding="utf-8"
-    )
+    evidence_snakefile = (root / "workflow/EvidenceSnakefile").read_text(encoding="utf-8")
     assert "rule validate_campaign:" in snakefile
     assert "rule run_campaign:" in snakefile
     assert "rule verify_campaign:" in snakefile

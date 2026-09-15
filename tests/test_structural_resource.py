@@ -18,12 +18,31 @@ from protein_signatures.structural_resource import (
     _optional_integer,
     _optional_number,
     _parse_comparison_status,
+    _read_global_alignments,
     _read_parquet,
     _safe_path,
     import_structural_alignment_resource,
     resolve_structural_resource_root,
     verify_structural_resource_outputs,
 )
+
+
+def _alignment_row(**changes: object) -> dict[str, object]:
+    """Return one valid explicit structural-reference sentinel row."""
+
+    row: dict[str, object] = {
+        "cluster_id": "cluster_1",
+        "reference_accession": "p1",
+        "mobile_accession": "p1",
+        "alignment_tool": "TM-align",
+        "status": "REFERENCE",
+        "tool_version": "20240303",
+        "aligned_length": None,
+        "rmsd_angstrom": 0.0,
+        "minimum_tm_score": 1.0,
+    }
+    row.update(changes)
+    return row
 
 
 def test_import_structural_resource_converts_global_and_pocket_evidence(
@@ -35,6 +54,7 @@ def test_import_structural_resource_converts_global_and_pocket_evidence(
     imported = import_structural_alignment_resource(resource_dir=root, sequences=_sequences())
     assert imported.package_version == "0.6.0"
     assert imported.run_digest == "a" * 64
+    assert imported.reference_membership_row_count == 2
     assert len(imported.comparisons) == 2
     usalign = imported.comparisons[0]
     assert usalign.tm_score == pytest.approx(0.8)
@@ -267,6 +287,123 @@ def test_structural_import_rejects_incompatible_content(tmp_path: Path) -> None:
         )
 
 
+def test_structural_import_rejects_uncontrolled_self_alignment(tmp_path: Path) -> None:
+    """Only the precursor's explicit reference sentinel may be a diagonal row."""
+
+    root = _structural_resource(
+        root=tmp_path / "structural",
+        reference_status="COMPLETE",
+    )
+    with pytest.raises(InputValidationError, match="without the explicit REFERENCE status"):
+        import_structural_alignment_resource(resource_dir=root, sequences=_sequences())
+
+
+def test_structural_import_rejects_reference_summary_disagreement(tmp_path: Path) -> None:
+    """Reference membership must agree with the checksum-bound group summary."""
+
+    root = _structural_resource(
+        root=tmp_path / "structural",
+        summary_reference_accession="p2",
+    )
+    with pytest.raises(InputValidationError, match="declares 'p2'"):
+        import_structural_alignment_resource(resource_dir=root, sequences=_sequences())
+
+
+def test_global_alignment_reader_supports_reference_only_and_pair_only_tables(
+    tmp_path: Path,
+) -> None:
+    """Reference sentinels and older pair-only resources should remain executable."""
+
+    path = tmp_path / "alignments.parquet"
+    reference = _alignment_row()
+    pq.write_table(pa.Table.from_pylist([reference]), path)
+    comparisons, universes, reference_count = _read_global_alignments(
+        path=path,
+        lengths={"p1": 100},
+        run_digest="a" * 64,
+        expected_universe_sizes={"cluster_1": 1},
+        expected_reference_accessions={"cluster_1": "p1"},
+    )
+    assert comparisons == ()
+    assert tuple(universes.values()) == (frozenset({"p1"}),)
+    assert reference_count == 1
+
+    pair = _alignment_row(
+        mobile_accession="p2",
+        status="COMPLETE",
+        aligned_length=80,
+        rmsd_angstrom=1.5,
+        minimum_tm_score=0.8,
+    )
+    pq.write_table(pa.Table.from_pylist([pair]), path)
+    comparisons, universes, reference_count = _read_global_alignments(
+        path=path,
+        lengths={"p1": 100, "p2": 160},
+        run_digest="a" * 64,
+        expected_universe_sizes={"cluster_1": 2},
+        expected_reference_accessions={"cluster_1": "p1"},
+    )
+    assert len(comparisons) == 1
+    assert tuple(universes.values()) == (frozenset({"p1", "p2"}),)
+    assert reference_count == 0
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected_sizes", "expected_references", "message"),
+    (
+        (
+            (_alignment_row(alignment_tool=""),),
+            {"cluster_1": 1},
+            {"cluster_1": "p1"},
+            "lacks tool or cluster provenance",
+        ),
+        (
+            (_alignment_row(),),
+            {"cluster_1": 1},
+            {},
+            "lacks a group summary",
+        ),
+        (
+            (_alignment_row(aligned_length=100),),
+            {"cluster_1": 1},
+            {"cluster_1": "p1"},
+            "does not contain the expected",
+        ),
+        (
+            (_alignment_row(), _alignment_row()),
+            {"cluster_1": 1},
+            {"cluster_1": "p1"},
+            "Duplicate imported structural reference row",
+        ),
+        (
+            (_alignment_row(),),
+            {"cluster_1": 2},
+            {"cluster_1": "p1"},
+            "contains 1 campaign proteins",
+        ),
+    ),
+)
+def test_global_alignment_reference_rows_fail_closed(
+    tmp_path: Path,
+    rows: tuple[dict[str, object], ...],
+    expected_sizes: dict[str, int],
+    expected_references: dict[str, str],
+    message: str,
+) -> None:
+    """Malformed reference sentinels must not weaken imported evidence."""
+
+    path = tmp_path / "alignments.parquet"
+    pq.write_table(pa.Table.from_pylist(list(rows)), path)
+    with pytest.raises(InputValidationError, match=message):
+        _read_global_alignments(
+            path=path,
+            lengths={"p1": 100},
+            run_digest="a" * 64,
+            expected_universe_sizes=expected_sizes,
+            expected_reference_accessions=expected_references,
+        )
+
+
 def test_structural_value_helpers_cover_valid_and_invalid_states(tmp_path: Path) -> None:
     """Scalar and Parquet helpers should preserve blanks and reject malformed values."""
 
@@ -310,15 +447,43 @@ def _sequences() -> tuple[SequenceRecord, ...]:
     return (
         SequenceRecord("p1", "", "A" * 100, 100, sha256_text(text="A" * 100)),
         SequenceRecord("p2", "", "C" * 160, 160, sha256_text(text="C" * 160)),
+        SequenceRecord("p3", "", "D" * 120, 120, sha256_text(text="D" * 120)),
     )
 
 
-def _structural_resource(*, root: Path) -> Path:
+def _structural_resource(
+    *,
+    root: Path,
+    reference_status: str = "REFERENCE",
+    summary_reference_accession: str = "p1",
+) -> Path:
     """Create a checksum-manifested structural-alignment result fixture."""
 
     tables = root / "tables"
     tables.mkdir(parents=True)
     alignments = [
+        {
+            "cluster_id": "cluster_1",
+            "reference_accession": "p1",
+            "mobile_accession": "p1",
+            "alignment_tool": "TM-align",
+            "status": reference_status,
+            "tool_version": "20240303",
+            "aligned_length": None,
+            "rmsd_angstrom": 0.0,
+            "minimum_tm_score": 1.0,
+        },
+        {
+            "cluster_id": "cluster_1",
+            "reference_accession": "p1",
+            "mobile_accession": "p1",
+            "alignment_tool": "US-align",
+            "status": "REFERENCE",
+            "tool_version": "20241201",
+            "aligned_length": None,
+            "rmsd_angstrom": 0.0,
+            "minimum_tm_score": 1.0,
+        },
         {
             "cluster_id": "cluster_1",
             "reference_accession": "p1",
@@ -367,10 +532,10 @@ def _structural_resource(*, root: Path) -> Path:
             "cluster_id": "cluster_1",
             "primary_group_type": "HOG",
             "primary_group_id": "N0.HOG1",
-            "reference_accession": "p1",
+            "reference_accession": summary_reference_accession,
             "alignment_tools": "TM-align;US-align",
             "alignment_tool_count": 2,
-            "selected_accession_count": 2,
+            "selected_accession_count": 3,
             "model_available_accession_count": 2,
             "aligned_accession_count": 2,
             "supported_accession_count": 2,
