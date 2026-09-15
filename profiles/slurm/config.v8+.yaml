@@ -10,6 +10,6 @@ keep-going: false
 latency-wait: 120
 default-resources:
   - slurm_account=barton
-  - slurm_partition=general
+  - slurm_partition=barton
   - mem_mb=8000
   - runtime=60

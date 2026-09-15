@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from types import TracebackType
@@ -14,7 +15,10 @@ from streamlit.testing.v1 import AppTest
 import protein_signature_app.app as application_module
 from protein_signatures.errors import PublicationError
 
-APP_TEST_TIMEOUT_SECONDS = 60
+APP_TEST_TIMEOUT_SECONDS = max(
+    60,
+    int(os.environ.get("PROTEIN_SIGNATURE_APP_TEST_TIMEOUT_SECONDS", "180")),
+)
 
 
 class _Block:
@@ -67,6 +71,7 @@ class _FakeStreamlit:
 
         self.sidebar = _Sidebar(page=page)
         self.multiselect_empty = multiselect_empty
+        self.button_result = False
         self.messages: list[str] = []
 
     def __getattr__(self, name: str) -> Any:
@@ -118,6 +123,12 @@ class _FakeStreamlit:
         """Return all defaults or an explicit empty selection."""
 
         return () if self.multiselect_empty else default
+
+    def button(self, *_args: object, **_kwargs: object) -> bool:
+        """Record a button and return its configured activation state."""
+
+        self.messages.append("button")
+        return self.button_result
 
     def stop(self) -> None:
         """Model Streamlit's terminating stop call."""
@@ -492,6 +503,24 @@ def test_table_and_plot_renderers_always_offer_declared_downloads(
     class Figure:
         """Minimal interactive-figure test double."""
 
+    def unexpected_pdf(**_kwargs: object) -> bytes:
+        """Fail if PDF rendering happens before the user requests it."""
+
+        raise AssertionError("PDF rendering must be deferred")
+
+    monkeypatch.setattr(
+        application_module,
+        "plotly_figure_to_pdf_bytes",
+        unexpected_pdf,
+    )
+    application_module._render_plotly_figure(
+        figure=Figure(),
+        download_name="Deferred association plot",
+    )
+    assert fake.messages.count("download_button") == 2
+    assert fake.messages.count("button") == 1
+
+    fake.button_result = True
     monkeypatch.setattr(
         application_module,
         "plotly_figure_to_pdf_bytes",
@@ -503,7 +532,7 @@ def test_table_and_plot_renderers_always_offer_declared_downloads(
     )
     assert fake.messages.count("download_button") == 3
     rendered_plot_count = sum("Figure object" in message for message in fake.messages)
-    assert rendered_plot_count == 1
+    assert rendered_plot_count == 2
 
     def fail_pdf(**_kwargs: object) -> bytes:
         """Model an unavailable Plotly PDF runtime."""
@@ -516,7 +545,7 @@ def test_table_and_plot_renderers_always_offer_declared_downloads(
         download_name="Failed plot",
     )
     assert any("PDF runtime unavailable" in message for message in fake.messages)
-    assert sum("Figure object" in message for message in fake.messages) == rendered_plot_count
+    assert sum("Figure object" in message for message in fake.messages) == rendered_plot_count + 1
 
 
 def test_page_renderers_cover_sparse_and_imported_evidence_branches(

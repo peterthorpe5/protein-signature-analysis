@@ -8,8 +8,10 @@ supported protein FASTA, label profile, Pfam/domain ledger, external feature tab
 inventory, AlphaFold request table, structural comparison resource and OrthoFinder 2.5.5 or
 3.x result. The workflow consumes OrthoFinder output and never runs OrthoFinder.
 
-`run_completed_e3_workflow.sh --phase prepare` is an optional adapter for one predecessor
-layout. It creates the same generic inputs but is not a dependency of the Snakemake DAG.
+`workflow/Snakefile` is the generic three-boundary DAG. The optional
+`workflow/E3Snakefile` extends it for one completed-predecessor layout with preparation,
+human-review staging, checksum-bound approval verification and campaign initialisation. It
+still produces the same generic `campaign.yaml` and never runs OrthoFinder.
 
 ## Why the analysis rule is transactional
 
@@ -75,7 +77,7 @@ or Slurm allocation remains the actual resource limit.
 
 ## Durable Slurm controller
 
-The Dundee E3 production convention uses account `barton`, partition `general`, Snakemake 9
+The Dundee E3 production convention uses account `barton`, partition `barton`, Snakemake 9
 and the Slurm executor plugin. The generic submitter adopts those defaults but exposes them
 as flags:
 
@@ -84,7 +86,7 @@ as flags:
   --config /data/campaign_001/campaign.yaml \
   --work-dir /data/campaign_001 \
   --account barton \
-  --partition general \
+  --partition barton \
   --threads 24 \
   --memory-mb 64000 \
   --runtime-minutes 1440 \
@@ -111,35 +113,67 @@ logs before resubmission. Correct the external cause, then repeat the submit com
 `--resume`. A valid completed result is verified and reused; an incomplete directory still
 fails closed and must be investigated rather than deleted automatically.
 
-## Completed-E3 preparation job
+## Completed-E3 start-to-finish DAG
 
-The predecessor adapter can require more memory than a login or small interactive session.
-Submit preparation directly:
+The predecessor adapter has one deliberate human checkpoint. First submit through the
+`review_ready` target:
 
 ```bash
 ./run_completed_e3_workflow.sh \
   --phase prepare \
   --run-root /absolute/path/completed_e3_run \
   --work-dir /absolute/path/signature_campaign \
+  --campaign-id e3_signatures_20260914 \
   --minimum-mean-plddt 50 \
   --submit-slurm \
   --slurm-account barton \
-  --slurm-partition general \
-  --slurm-memory 64G \
+  --slurm-partition barton \
+  --slurm-memory 32G \
   --slurm-time 04:00:00 \
-  --threads 4 \
+  --threads 18 \
   --slurm-dry-run
 ```
 
 Remove only `--slurm-dry-run` to submit. The worker command omits `--submit-slurm`, preventing
-recursive submission, and confirms that `SLURM_CPUS_PER_TASK` equals the requested thread
-count. Standard output and error are retained under `WORK_DIR/slurm_logs/` using the Slurm
-job identifier.
+recursive submission, and confirms that the allocation contains at least the requested
+thread count. Standard output and error are retained under `WORK_DIR/slurm_logs/` using the
+Slurm job identifier. The DAG creates or verifies `prepared_inputs/`, then safely creates or
+adopts `reviewed_label_assignments.tsv`; it never overwrites that human-owned file.
 
 Preparation streams projected Parquet columns in bounded batches and streams FASTA output;
 it no longer materialises every full upstream Parquet row twice. It still retains one exact
-deduplicated sequence and its merged context per protein. For the all-1972 predecessor, use
-64 GiB as the initial request and increase to 128 GiB if `sacct` reports `OUT_OF_MEMORY`.
+deduplicated sequence and its merged context per protein. The observed all-1972 job used
+about 4 GiB peak RSS, so the documented 32 GiB request includes substantial headroom.
+
+After curating that TSV, issue a checksum-bound approval from the login node:
+
+```bash
+./run_completed_e3_workflow.sh \
+  --phase approve \
+  --work-dir /absolute/path/signature_campaign \
+  --curator "Curator name"
+```
+
+Then submit the same campaign through the full DAG:
+
+```bash
+./run_completed_e3_workflow.sh \
+  --phase all \
+  --run-root /absolute/path/completed_e3_run \
+  --work-dir /absolute/path/signature_campaign \
+  --campaign-id e3_signatures_20260914 \
+  --submit-slurm \
+  --slurm-account barton \
+  --slurm-partition barton \
+  --slurm-memory 128G \
+  --slurm-time 2-00:00:00 \
+  --threads 24
+```
+
+The full target verifies the approval checksum, creates or adopts and validates
+`campaign.yaml`, revalidates it immediately before compute, atomically publishes the result
+and independently verifies result plus original-input checksums. If `--phase all` is called
+without approval it runs only through `review_ready`, reports the pause and exits cleanly.
 
 ## Recovery and safety rules
 

@@ -12,6 +12,13 @@ from pathlib import Path
 from . import __version__
 from .catalogue import prepare_catalogue
 from .e3_workflow_bridge import prepare_e3_workflow_inputs
+from .e3_workflow_orchestration import (
+    approve_e3_label_review,
+    ensure_e3_campaign_marker,
+    ensure_e3_preparation_marker,
+    stage_e3_label_review,
+    verify_e3_label_review,
+)
 from .errors import ProteinSignatureError
 from .logging_config import configure_logging
 from .pipeline import run_campaign, validate_campaign
@@ -58,6 +65,57 @@ def build_parser() -> argparse.ArgumentParser:
     e3_workflow_parser.add_argument("--output-dir", required=True, type=Path)
     e3_workflow_parser.add_argument("--minimum-mean-plddt", type=float, default=50.0)
     e3_workflow_parser.add_argument("--log-level", default="INFO")
+    e3_prepare_parser = subparsers.add_parser(
+        "workflow-prepare-e3",
+        help="Create or verify completed-E3 inputs and publish a workflow marker.",
+    )
+    e3_prepare_parser.add_argument("--run-root", required=True, type=Path)
+    e3_prepare_parser.add_argument("--prepared-dir", required=True, type=Path)
+    e3_prepare_parser.add_argument("--minimum-mean-plddt", type=float, default=50.0)
+    e3_prepare_parser.add_argument("--marker", required=True, type=Path)
+    e3_prepare_parser.add_argument("--log-level", default="INFO")
+    e3_stage_review_parser = subparsers.add_parser(
+        "workflow-stage-e3-review",
+        help="Safely create or adopt the editable E3 label-review authority.",
+    )
+    e3_stage_review_parser.add_argument("--preparation-marker", required=True, type=Path)
+    e3_stage_review_parser.add_argument("--reviewed-labels", required=True, type=Path)
+    e3_stage_review_parser.add_argument("--marker", required=True, type=Path)
+    e3_stage_review_parser.add_argument("--log-level", default="INFO")
+    e3_approve_review_parser = subparsers.add_parser(
+        "approve-e3-review",
+        help="Validate reviewed labels and bind curator approval to their checksum.",
+    )
+    e3_approve_review_parser.add_argument("--preparation-marker", required=True, type=Path)
+    e3_approve_review_parser.add_argument("--review-marker", required=True, type=Path)
+    e3_approve_review_parser.add_argument("--reviewed-labels", required=True, type=Path)
+    e3_approve_review_parser.add_argument("--approval-marker", required=True, type=Path)
+    e3_approve_review_parser.add_argument("--curator", required=True)
+    e3_approve_review_parser.add_argument("--note", default="")
+    e3_approve_review_parser.add_argument("--profile", default="e3")
+    e3_approve_review_parser.add_argument("--log-level", default="INFO")
+    e3_verify_review_parser = subparsers.add_parser(
+        "workflow-verify-e3-review",
+        help="Verify reviewed labels against their checksum-bound approval.",
+    )
+    e3_verify_review_parser.add_argument("--preparation-marker", required=True, type=Path)
+    e3_verify_review_parser.add_argument("--review-marker", required=True, type=Path)
+    e3_verify_review_parser.add_argument("--reviewed-labels", required=True, type=Path)
+    e3_verify_review_parser.add_argument("--approval-marker", required=True, type=Path)
+    e3_verify_review_parser.add_argument("--marker", required=True, type=Path)
+    e3_verify_review_parser.add_argument("--profile", default="e3")
+    e3_verify_review_parser.add_argument("--log-level", default="INFO")
+    e3_initialise_parser = subparsers.add_parser(
+        "workflow-initialise-e3",
+        help="Create or adopt a reviewed completed-E3 campaign and validate it.",
+    )
+    e3_initialise_parser.add_argument("--preparation-marker", required=True, type=Path)
+    e3_initialise_parser.add_argument("--review-verification-marker", required=True, type=Path)
+    e3_initialise_parser.add_argument("--campaign-config", required=True, type=Path)
+    e3_initialise_parser.add_argument("--campaign-id", required=True)
+    e3_initialise_parser.add_argument("--profile", default="e3")
+    e3_initialise_parser.add_argument("--marker", required=True, type=Path)
+    e3_initialise_parser.add_argument("--log-level", default="INFO")
     initialise_parser = subparsers.add_parser(
         "initialise",
         help="Create a validated campaign YAML from explicit input authorities.",
@@ -160,6 +218,57 @@ def main(argv: Sequence[str] | None = None) -> int:
                 minimum_mean_plddt=arguments.minimum_mean_plddt,
             )
             print(json.dumps({"status": "COMPLETE", "prepared_dir": str(destination)}))
+        elif arguments.command == "workflow-prepare-e3":
+            destination = ensure_e3_preparation_marker(
+                run_root=arguments.run_root,
+                prepared_dir=arguments.prepared_dir,
+                minimum_mean_plddt=arguments.minimum_mean_plddt,
+                marker_path=arguments.marker,
+            )
+            print(json.dumps({"status": "VALID", "marker": str(destination)}, sort_keys=True))
+        elif arguments.command == "workflow-stage-e3-review":
+            destination = stage_e3_label_review(
+                preparation_marker=arguments.preparation_marker,
+                reviewed_labels=arguments.reviewed_labels,
+                marker_path=arguments.marker,
+            )
+            print(json.dumps({"status": "VALID", "marker": str(destination)}, sort_keys=True))
+        elif arguments.command == "approve-e3-review":
+            destination = approve_e3_label_review(
+                preparation_marker=arguments.preparation_marker,
+                review_marker=arguments.review_marker,
+                reviewed_labels=arguments.reviewed_labels,
+                approval_marker=arguments.approval_marker,
+                curator=arguments.curator,
+                note=arguments.note,
+                profile=arguments.profile,
+            )
+            print(
+                json.dumps(
+                    {"status": "APPROVED", "approval_marker": str(destination)},
+                    sort_keys=True,
+                )
+            )
+        elif arguments.command == "workflow-verify-e3-review":
+            destination = verify_e3_label_review(
+                preparation_marker=arguments.preparation_marker,
+                review_marker=arguments.review_marker,
+                reviewed_labels=arguments.reviewed_labels,
+                approval_marker=arguments.approval_marker,
+                marker_path=arguments.marker,
+                profile=arguments.profile,
+            )
+            print(json.dumps({"status": "VALID", "marker": str(destination)}, sort_keys=True))
+        elif arguments.command == "workflow-initialise-e3":
+            destination = ensure_e3_campaign_marker(
+                preparation_marker=arguments.preparation_marker,
+                review_verification_marker=arguments.review_verification_marker,
+                campaign_config=arguments.campaign_config,
+                campaign_id=arguments.campaign_id,
+                profile=arguments.profile,
+                marker_path=arguments.marker,
+            )
+            print(json.dumps({"status": "VALID", "marker": str(destination)}, sort_keys=True))
         elif arguments.command == "initialise":
             destination = initialise_campaign(
                 config_path=arguments.config,

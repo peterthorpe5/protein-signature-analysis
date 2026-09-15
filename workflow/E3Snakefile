@@ -1,0 +1,282 @@
+"""Completed-E3 adapter workflow with an explicit human-curation checkpoint.
+
+This DAG consumes, but never modifies, the completed predecessor.  It stages an
+editable review authority outside the immutable preparation bundle, then stops
+until a separately issued checksum-bound curator approval exists.  Once that
+approval is present, the remaining campaign can run unattended to independent
+post-publication verification.
+"""
+
+from pathlib import Path
+
+
+def required_path(name):
+    """Resolve one required absolute path supplied through Snakemake config."""
+
+    value = str(config.get(name, "")).strip()
+    if not value:
+        raise ValueError(f"{name} must be supplied through --config.")
+    source = Path(value).expanduser()
+    if not source.is_absolute():
+        raise ValueError(f"{name} must be absolute: {value}")
+    return source.resolve()
+
+
+def positive_integer(name, default):
+    """Return one positive integer workflow setting."""
+
+    value = int(config.get(name, default))
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer.")
+    return value
+
+
+RUN_ROOT = required_path("e3_run_root")
+WORK_DIR = required_path("e3_work_dir")
+PREPARED_DIR = WORK_DIR / "prepared_inputs"
+REVIEWED_LABELS = Path(
+    str(config.get("e3_reviewed_labels", WORK_DIR / "reviewed_label_assignments.tsv"))
+).expanduser().resolve()
+STATE_DIR = WORK_DIR / "workflow_state" / "e3"
+APPROVAL_MARKER = Path(
+    str(
+        config.get(
+            "e3_review_approval",
+            STATE_DIR / "02_label_review" / "REVIEW_APPROVED.json",
+        )
+    )
+).expanduser().resolve()
+CAMPAIGN_CONFIG = WORK_DIR / "campaign.yaml"
+RESULT_DIR = WORK_DIR / "result"
+CAMPAIGN_ID = str(config.get("e3_campaign_id", "")).strip()
+PROFILE = str(config.get("e3_profile", "e3")).strip()
+MINIMUM_MEAN_PLDDT = float(config.get("e3_minimum_mean_plddt", 50.0))
+ANALYSIS_THREADS = positive_integer("e3_threads", 24)
+ANALYSIS_MEMORY_MB = positive_integer("e3_memory_mb", 128_000)
+ANALYSIS_RUNTIME_MINUTES = positive_integer("e3_runtime_minutes", 2_880)
+LOG_LEVEL = str(config.get("e3_log_level", "INFO"))
+
+if not CAMPAIGN_ID:
+    raise ValueError("e3_campaign_id must be supplied through --config.")
+if not PROFILE:
+    raise ValueError("e3_profile must not be empty.")
+if not 0.0 <= MINIMUM_MEAN_PLDDT <= 100.0:
+    raise ValueError("e3_minimum_mean_plddt must be between 0 and 100.")
+if WORK_DIR in (Path("/"), Path.home().resolve()):
+    raise ValueError(f"Unsafe e3_work_dir: {WORK_DIR}")
+if PREPARED_DIR in REVIEWED_LABELS.parents or REVIEWED_LABELS == PREPARED_DIR:
+    raise ValueError("Reviewed labels must be outside the immutable prepared-input bundle.")
+
+PREPARATION_MARKER = STATE_DIR / "01_preparation" / "PREPARED_VERIFIED.json"
+REVIEW_MARKER = STATE_DIR / "02_label_review" / "REVIEW_READY.json"
+REVIEW_VERIFICATION_MARKER = STATE_DIR / "02_label_review" / "REVIEW_VERIFIED.json"
+CAMPAIGN_MARKER = STATE_DIR / "03_initialisation" / "CAMPAIGN_VALIDATED.json"
+CAMPAIGN_REVALIDATION_MARKER = STATE_DIR / "04_analysis" / "CAMPAIGN_REVALIDATED.json"
+ANALYSIS_MARKER = STATE_DIR / "04_analysis" / "RESULT_VERIFIED.json"
+FINAL_MARKER = STATE_DIR / "05_verification" / "VERIFIED.json"
+LOG_DIR = STATE_DIR / "logs"
+
+shell.executable("/bin/bash")
+
+
+rule all:
+    input:
+        str(FINAL_MARKER)
+
+
+rule review_ready:
+    input:
+        str(REVIEW_MARKER)
+
+
+rule campaign_ready:
+    input:
+        str(CAMPAIGN_MARKER)
+
+
+rule ensure_e3_preparation:
+    output:
+        marker=str(PREPARATION_MARKER)
+    params:
+        run_root=str(RUN_ROOT),
+        prepared_dir=str(PREPARED_DIR),
+        threshold=MINIMUM_MEAN_PLDDT,
+    threads:
+        1
+    resources:
+        mem_mb=16_000,
+        runtime=240
+    log:
+        str(LOG_DIR / "01_ensure_e3_preparation.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures workflow-prepare-e3 \
+            --run-root {params.run_root:q} \
+            --prepared-dir {params.prepared_dir:q} \
+            --minimum-mean-plddt {params.threshold} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+rule stage_e3_label_review:
+    input:
+        preparation=str(PREPARATION_MARKER)
+    output:
+        marker=str(REVIEW_MARKER)
+    params:
+        reviewed_labels=str(REVIEWED_LABELS)
+    threads:
+        1
+    resources:
+        mem_mb=4_000,
+        runtime=60
+    log:
+        str(LOG_DIR / "02_stage_e3_label_review.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures workflow-stage-e3-review \
+            --preparation-marker {input.preparation:q} \
+            --reviewed-labels {params.reviewed_labels:q} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+rule verify_e3_label_review:
+    input:
+        preparation=str(PREPARATION_MARKER),
+        review=str(REVIEW_MARKER),
+        reviewed_labels=str(REVIEWED_LABELS),
+        approval=str(APPROVAL_MARKER),
+    output:
+        marker=str(REVIEW_VERIFICATION_MARKER)
+    params:
+        profile=PROFILE
+    threads:
+        1
+    resources:
+        mem_mb=16_000,
+        runtime=120
+    log:
+        str(LOG_DIR / "02_verify_e3_label_review.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures workflow-verify-e3-review \
+            --preparation-marker {input.preparation:q} \
+            --review-marker {input.review:q} \
+            --reviewed-labels {input.reviewed_labels:q} \
+            --approval-marker {input.approval:q} \
+            --marker {output.marker:q} \
+            --profile {params.profile:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+rule initialise_e3_campaign:
+    input:
+        preparation=str(PREPARATION_MARKER),
+        review=str(REVIEW_VERIFICATION_MARKER),
+    output:
+        marker=str(CAMPAIGN_MARKER)
+    params:
+        campaign_config=str(CAMPAIGN_CONFIG),
+        campaign_id=CAMPAIGN_ID,
+        profile=PROFILE,
+    threads:
+        1
+    resources:
+        mem_mb=32_000,
+        runtime=240
+    log:
+        str(LOG_DIR / "03_initialise_e3_campaign.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures workflow-initialise-e3 \
+            --preparation-marker {input.preparation:q} \
+            --review-verification-marker {input.review:q} \
+            --campaign-config {params.campaign_config:q} \
+            --campaign-id {params.campaign_id:q} \
+            --profile {params.profile:q} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """
+
+
+rule run_e3_campaign:
+    input:
+        preparation=str(PREPARATION_MARKER),
+        review=str(REVIEW_VERIFICATION_MARKER),
+        campaign=str(CAMPAIGN_MARKER),
+    output:
+        campaign_revalidation=str(CAMPAIGN_REVALIDATION_MARKER),
+        result_verification=str(ANALYSIS_MARKER),
+    params:
+        campaign_config=str(CAMPAIGN_CONFIG),
+        campaign_id=CAMPAIGN_ID,
+        profile=PROFILE,
+        result_dir=str(RESULT_DIR),
+    threads:
+        ANALYSIS_THREADS
+    resources:
+        mem_mb=ANALYSIS_MEMORY_MB,
+        runtime=ANALYSIS_RUNTIME_MINUTES
+    log:
+        str(LOG_DIR / "04_run_e3_campaign.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures workflow-initialise-e3 \
+            --preparation-marker {input.preparation:q} \
+            --review-verification-marker {input.review:q} \
+            --campaign-config {params.campaign_config:q} \
+            --campaign-id {params.campaign_id:q} \
+            --profile {params.profile:q} \
+            --marker {output.campaign_revalidation:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        protein-signatures run-all \
+            --config {params.campaign_config:q} \
+            --output-dir {params.result_dir:q} \
+            --threads {threads} \
+            --resume \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee -a {log:q}
+        protein-signatures workflow-verify \
+            --resource {params.result_dir:q} \
+            --marker {output.result_verification:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee -a {log:q}
+        """
+
+
+rule verify_e3_campaign:
+    input:
+        campaign_revalidation=str(CAMPAIGN_REVALIDATION_MARKER),
+        result_verification=str(ANALYSIS_MARKER),
+    output:
+        marker=str(FINAL_MARKER)
+    params:
+        result_dir=str(RESULT_DIR)
+    threads:
+        1
+    resources:
+        mem_mb=16_000,
+        runtime=240
+    log:
+        str(LOG_DIR / "05_verify_e3_campaign.log")
+    shell:
+        """
+        set -o pipefail
+        mkdir -p -- {LOG_DIR:q}
+        protein-signatures workflow-verify \
+            --resource {params.result_dir:q} \
+            --marker {output.marker:q} \
+            --log-level {LOG_LEVEL:q} 2>&1 | tee {log:q}
+        """

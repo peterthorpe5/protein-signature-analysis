@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import textwrap
@@ -123,7 +124,7 @@ def test_source_distribution_manifest_excludes_generated_and_sensitive_files() -
     manifest = (root / "MANIFEST.in").read_text(encoding="utf-8")
     assert "prune examples/minimal_e3/.protein_signature_cache" in manifest
     assert "global-exclude .env .env.* *.pem *.key *.p12 *.pfx" in manifest
-    assert "recursive-include workflow Snakefile" in manifest
+    assert "recursive-include workflow Snakefile E3Snakefile" in manifest
     assert "recursive-include profiles *.yaml" in manifest
     assert "recursive-include slurm *.sbatch" in manifest
 
@@ -133,6 +134,7 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
 
     root = Path(__file__).parents[1]
     snakefile = (root / "workflow/Snakefile").read_text(encoding="utf-8")
+    e3_snakefile = (root / "workflow/E3Snakefile").read_text(encoding="utf-8")
     assert "rule validate_campaign:" in snakefile
     assert "rule run_campaign:" in snakefile
     assert "rule verify_campaign:" in snakefile
@@ -142,6 +144,18 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
     assert "mem_mb=ANALYSIS_MEMORY_MB" in snakefile
     assert "ANALYSIS_MARKER" in snakefile
     assert "RESULT_COMPLETION" not in snakefile
+    assert "rule ensure_e3_preparation:" in e3_snakefile
+    assert "rule stage_e3_label_review:" in e3_snakefile
+    assert "rule verify_e3_label_review:" in e3_snakefile
+    assert "rule initialise_e3_campaign:" in e3_snakefile
+    assert "rule run_e3_campaign:" in e3_snakefile
+    assert "rule verify_e3_campaign:" in e3_snakefile
+    assert "protein-signatures workflow-prepare-e3" in e3_snakefile
+    assert "protein-signatures workflow-stage-e3-review" in e3_snakefile
+    assert "protein-signatures workflow-verify-e3-review" in e3_snakefile
+    assert "protein-signatures workflow-initialise-e3" in e3_snakefile
+    assert "PREPARED_DIR in REVIEWED_LABELS.parents" in e3_snakefile
+    assert "--resume" in e3_snakefile
 
     local_profile = yaml.safe_load(
         (root / "profiles/local/config.v8+.yaml").read_text(encoding="utf-8")
@@ -154,7 +168,7 @@ def test_snakemake_workflow_profiles_and_environment_are_consistent() -> None:
     assert slurm_profile["executor"] == "slurm"
     assert slurm_profile["default-resources"][:2] == [
         "slurm_account=barton",
-        "slurm_partition=general",
+        "slurm_partition=barton",
     ]
     dependencies = environment["dependencies"]
     assert "gawk" in dependencies
@@ -264,7 +278,7 @@ def test_completed_e3_launcher_enforces_phases_and_review_gate(tmp_path: Path) -
         check=False,
     )
     assert invalid_phase.returncode == 2
-    assert "prepare, initialise, run or verify" in invalid_phase.stderr
+    assert "prepare, approve, initialise, all, run or verify" in invalid_phase.stderr
 
     invalid_confidence = subprocess.run(
         (
@@ -312,7 +326,7 @@ def test_completed_e3_launcher_enforces_phases_and_review_gate(tmp_path: Path) -
         check=False,
     )
     assert rejected.returncode == 2
-    assert "generated UNMAPPED template" in rejected.stderr
+    assert "Checksum-bound label approval is missing" in rejected.stderr
 
 
 def test_completed_e3_launcher_submits_bounded_slurm_worker(tmp_path: Path) -> None:
@@ -356,7 +370,7 @@ def test_completed_e3_launcher_submits_bounded_slurm_worker(tmp_path: Path) -> N
             "--slurm-account",
             "barton",
             "--slurm-partition",
-            "general",
+            "barton",
             "--slurm-memory",
             "64G",
             "--slurm-time",
@@ -377,11 +391,66 @@ def test_completed_e3_launcher_submits_bounded_slurm_worker(tmp_path: Path) -> N
     assert "--time=04:00:00" in arguments
     assert "--cpus-per-task=4" in arguments
     assert "--account=barton" in arguments
-    assert "--partition=general" in arguments
+    assert "--partition=barton" in arguments
     assert str(root / "slurm/run_completed_e3_workflow.sbatch") in arguments
     assert "--submit-slurm" not in arguments
     assert environment_capture.read_text(encoding="utf-8").strip() == "unset"
     assert (work_dir / "slurm_logs").is_dir()
+
+
+def test_completed_e3_prepare_is_owned_by_snakemake_and_stages_review(
+    tmp_path: Path,
+) -> None:
+    """The adapter launcher should express preparation and review as one DAG target."""
+
+    root = Path(__file__).parents[1]
+    launcher = root / "run_completed_e3_workflow.sh"
+    run_root = tmp_path / "completed_run"
+    run_root.mkdir()
+    work_dir = tmp_path / "campaign"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    conda_log = tmp_path / "conda.log"
+    conda = fake_bin / "conda"
+    conda.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "${FAKE_CONDA_LOG}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    conda.chmod(conda.stat().st_mode | stat.S_IXUSR)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+    environment["FAKE_CONDA_LOG"] = str(conda_log)
+    environment["BASH_COMPAT"] = "3.2"
+
+    result = subprocess.run(
+        (
+            "bash",
+            str(launcher),
+            "--phase",
+            "prepare",
+            "--run-root",
+            str(run_root),
+            "--work-dir",
+            str(work_dir),
+            "--campaign-id",
+            "fixture_campaign",
+            "--threads",
+            "6",
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    commands = conda_log.read_text(encoding="utf-8")
+    assert f"--snakefile {root / 'workflow/E3Snakefile'}" in commands
+    assert "review_ready --config" in commands
+    assert f"e3_run_root={run_root}" in commands
+    assert f"e3_work_dir={work_dir}" in commands
+    assert f"e3_reviewed_labels={work_dir / 'reviewed_label_assignments.tsv'}" in commands
+    assert "e3_threads=6" in commands
+    assert "Curate that file" in result.stdout
 
 
 def test_completed_e3_launcher_validates_slurm_options_and_dry_run(tmp_path: Path) -> None:
@@ -467,7 +536,7 @@ def test_completed_e3_launcher_validates_slurm_options_and_dry_run(tmp_path: Pat
     )
     assert dry_run.returncode == 0, dry_run.stderr
     assert "nothing was submitted" in dry_run.stdout
-    assert "--mem=64G" in dry_run.stdout
+    assert "--mem=128G" in dry_run.stdout
     assert not work_dir.exists()
 
 
@@ -500,7 +569,16 @@ def test_completed_e3_slurm_worker_checks_allocation_and_executes(tmp_path: Path
         env=environment,
     )
     assert mismatch.returncode == 2
-    assert "differ from requested" in mismatch.stderr
+    assert "fewer than requested" in mismatch.stderr
+    environment["SLURM_CPUS_PER_TASK"] = "5"
+    extra_allocation = subprocess.run(
+        ("bash", str(worker), str(runner), "--phase", "prepare"),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+    assert extra_allocation.returncode == 0, extra_allocation.stderr
     environment["SLURM_CPUS_PER_TASK"] = "4"
     success = subprocess.run(
         ("bash", str(worker), str(runner), "--phase", "prepare"),
@@ -723,8 +801,10 @@ def test_generic_controller_dry_run_and_worker_contract(tmp_path: Path) -> None:
     assert not work_dir.exists()
 
     worker = root / "slurm/protein_signature_workflow_controller.sbatch"
+    true_executable = shutil.which("true")
+    assert true_executable is not None
     outside_slurm = subprocess.run(
-        ("bash", str(worker), "--state-dir", str(work_dir), "--", "/bin/true"),
+        ("bash", str(worker), "--state-dir", str(work_dir), "--", true_executable),
         capture_output=True,
         text=True,
         check=False,
@@ -734,7 +814,7 @@ def test_generic_controller_dry_run_and_worker_contract(tmp_path: Path) -> None:
     worker_environment = os.environ.copy()
     worker_environment["SLURM_JOB_ID"] = "24680"
     inside_slurm = subprocess.run(
-        ("bash", str(worker), "--state-dir", str(work_dir), "--", "/bin/true"),
+        ("bash", str(worker), "--state-dir", str(work_dir), "--", true_executable),
         capture_output=True,
         text=True,
         check=False,
@@ -798,7 +878,7 @@ def test_generic_controller_submitter_syncs_environment_and_submits(tmp_path: Pa
     arguments = sbatch_log.read_text(encoding="utf-8").splitlines()
     assert "--job-name=protein_signature_controller" in arguments
     assert "--account=barton" in arguments
-    assert "--partition=general" in arguments
+    assert "--partition=barton" in arguments
     assert str(root / "slurm/protein_signature_workflow_controller.sbatch") in arguments
     assert "--profile" in arguments
     assert "slurm" in arguments

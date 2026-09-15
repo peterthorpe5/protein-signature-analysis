@@ -151,7 +151,7 @@ For logout-safe cluster execution from a login node, submit the durable Snakemak
   --config /data/signature_campaigns/e3_1000/campaign.yaml \
   --work-dir /data/signature_campaigns/e3_1000 \
   --account barton \
-  --partition general \
+  --partition barton \
   --threads 24 \
   --memory-mb 64000 \
   --runtime-minutes 1440 \
@@ -206,68 +206,66 @@ SIGNATURE_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/ana
   --phase prepare \
   --run-root "${RUN_ROOT}" \
   --work-dir "${SIGNATURE_WORK}" \
+  --campaign-id "e3_all1972_signatures_20260914" \
   --minimum-mean-plddt 50 \
   --submit-slurm \
   --slurm-account barton \
-  --slurm-partition general \
-  --slurm-memory 64G \
+  --slurm-partition barton \
+  --slurm-memory 32G \
   --slurm-time 04:00:00 \
-  --threads 4 \
+  --threads 18 \
   --slurm-dry-run
 ```
 
-Inspect the printed `sbatch` command, then repeat without `--slurm-dry-run`. Preparation now
-projects only the required Parquet columns and consumes rows in bounded batches, but it must
-still retain the deduplicated sequence/context index; 8 GiB is not a supported allocation for
-the all-1972 dataset. Start with 64 GiB and increase to 128 GiB if site accounting reports an
-out-of-memory termination. Scheduler logs are written to `${SIGNATURE_WORK}/slurm_logs/`.
+Inspect the printed `sbatch` command, then repeat without `--slurm-dry-run`. This runs the
+completed-E3 Snakemake DAG through its `review_ready` target. An existing checksum-valid
+`prepared_inputs/` bundle is verified and reused. The rule safely creates
+`reviewed_label_assignments.tsv` when absent or adopts an existing copy without replacing it.
+The observed all-1972 preparation used about 4 GiB peak RSS; 32 GiB retains ample headroom.
+Scheduler logs are written to `${SIGNATURE_WORK}/slurm_logs/`.
 
 This produces exact FASTA, Pfam assessment, structure and curation-review authorities under
 `prepared_inputs/`. All generated label assignments are deliberately `UNMAPPED`; upstream
-E3-family fields are hints only. Copy the template to a separately named file and curate
-E3 subclass/component-role positives and the appropriate matched controls before continuing:
+E3-family fields are hints only. Snakemake, rather than a manual `cp`, stages this editable
+authority:
 
 ```bash
-cp \
-  "${SIGNATURE_WORK}/prepared_inputs/label_assignments.REVIEW_REQUIRED.tsv" \
-  "${SIGNATURE_WORK}/reviewed_label_assignments.tsv"
-
-# Review and edit reviewed_label_assignments.tsv here.
+REVIEWED_LABELS="${SIGNATURE_WORK}/reviewed_label_assignments.tsv"
+# Review and edit ${REVIEWED_LABELS}. The DAG never overwrites it.
 
 ./run_completed_e3_workflow.sh \
-  --phase initialise \
+  --phase approve \
+  --work-dir "${SIGNATURE_WORK}" \
+  --curator "Peter Thorpe" \
+  --review-note "Reviewed E3 subclasses, component roles and controls"
+```
+
+Approval first validates complete protein coverage, the controlled E3 profile, at least one
+reviewed-positive analysis target, the profile-resolved matched background for every populated
+target, and label/component-role compatibility. It then records the curator, UTC time and
+exact reviewed-file SHA-256 in an immutable marker. Any subsequent edit invalidates the gate.
+
+After approval, one command runs review verification, campaign initialisation, campaign
+revalidation, the atomic analysis and independent result verification through Snakemake:
+
+```bash
+./run_completed_e3_workflow.sh \
+  --phase all \
   --run-root "${RUN_ROOT}" \
   --work-dir "${SIGNATURE_WORK}" \
   --campaign-id "e3_all1972_signatures_20260914" \
-  --label-assignments "${SIGNATURE_WORK}/reviewed_label_assignments.tsv" \
-  --threads 24
-```
-
-Initialisation validates every configured authority and then stops. It imports checksum-bound
-Stage 09b US-align/TM-align and pocket results from either the standalone component contract or
-the end-to-end aggregate `datasets` contract, joins the Stage 09 AlphaFold model inventory
-to its checksum-verified model-quality table, uses only confidence-eligible coordinates for a
-campaign-wide Foldseek search, verifies and consumes the checksum-bound Stage 04 OrthoFinder
-results without copying or linking them, and sets
-`foldseek.maximum_hits` to the number of eligible models. Review and freeze
-`campaign.yaml`, especially the target/background comparisons and structural thresholds,
-before the compute run:
-
-```bash
-./run_completed_e3_workflow.sh \
-  --phase run \
-  --work-dir "${SIGNATURE_WORK}" \
   --threads 24 \
   --submit-slurm \
   --slurm-account barton \
-  --slurm-partition general \
+  --slurm-partition barton \
   --slurm-memory 128G \
   --slurm-time 2-00:00:00
-
-./run_completed_e3_workflow.sh \
-  --phase verify \
-  --work-dir "${SIGNATURE_WORK}"
 ```
+
+`--phase initialise` is available when a deliberate stop after validated `campaign.yaml` is
+preferred. `--phase all` is idempotent: it reuses only an unchanged, checksum-valid completed
+result. If invoked before approval it runs only through `review_ready`, reports the human
+checkpoint and exits successfully; resubmit the same command after approval.
 
 See [the completed-workflow hand-off guide](docs/E3_WORKFLOW_HANDOFF.md) for the source map,
 review gate, scheduler pattern and interpretation boundaries.

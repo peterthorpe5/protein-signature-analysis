@@ -1,6 +1,6 @@
 # Release QA: version 0.1.0
 
-QA date: 14 September 2026
+QA date: 15 September 2026
 Candidate: `protein-signature-analysis` 0.1.0  
 Local platform: Linux x86_64, Python 3.12.14
 
@@ -8,9 +8,10 @@ Local platform: Linux x86_64, Python 3.12.14
 
 The candidate is ready for Mac/HPC handover. Functional, numerical, file-format,
 application, workflow-orchestration, build and installation checks passed. The full
-top-1,000 structural campaign has completed on the Dundee cluster, but its files were not
-mounted in this QA environment. Running the adapter against that scientific authority
-therefore remains an explicit cluster confirmation rather than a claimed local result.
+top-1,000 structural campaign and its completed-E3 preparation have now completed on the
+Dundee cluster. Their files were not mounted in this QA environment, so the empirical
+confirmation below is based on the retained Slurm accounting and application logs supplied
+from that cluster; synthetic authorities independently exercise the same contracts locally.
 
 One independent release confirmation is still required after transfer to the Mac: run the
 complete quality gate on the exact patched tree and allow GitHub Actions to repeat it after
@@ -25,11 +26,11 @@ the push.
 | PEP 8 (`pycodestyle`, 100-character line limit) | PASS |
 | Google-style docstrings (`pydocstyle`) | PASS |
 | Bash syntax, including the macOS Bash 3.2 compatibility path | PASS |
-| Complete release suite | 306 passed, 3 third-party warnings, 460.65 seconds |
-| Statement/branch coverage | 95.11% (threshold 95.00%) |
-| Completed-E3 bridge suite | 9 passed |
+| Complete release suite | 347 passed, 3 third-party warnings, 380.33 seconds |
+| Statement/branch coverage | 95.31% (threshold 95.00%) |
+| Completed-E3 bridge/orchestration suite | 49 passed |
 | Workflow-marker suite | 4 passed |
-| Shell/repository contract suite | 17 passed |
+| Shell/repository contract suite | 18 passed |
 | Canonical app browser and pagination regression cases | 6 passed |
 | External-file DuckDB view rejection | PASS for app and OrthoFinder resource adapters |
 
@@ -104,7 +105,8 @@ result.
 | Check | Result |
 |---|---|
 | Generic local-profile DAG dry run | PASS; all three rules scheduled |
-| Generic Slurm-profile DAG dry run | PASS; `barton`/`general` resources resolved |
+| Generic Slurm-profile DAG dry run | PASS; `barton`/`barton` resources resolved |
+| Completed-E3 full DAG dry run | PASS; all seven ordered jobs resolved |
 | Fresh local Snakemake execution | PASS |
 | Completed-result resume | PASS |
 | Non-resume rerun against existing result | Refused before expensive input preparation |
@@ -120,8 +122,8 @@ that a job was submitted to the Dundee scheduler from this isolated environment.
 The source distribution and universal wheel built offline with setuptools 84.0.0 and wheel
 0.48.0. Archive paths were traversal-safe; no links, devices, caches, Git internals, virtual
 environment files or common secret/key filenames were present. All six shell launchers and
-both Slurm workers retained executable mode. The packaged Snakefile and both Snakemake
-profiles were present. Every wheel `RECORD` size and SHA-256 entry verified.
+both Slurm workers retained executable mode. The generic and completed-E3 Snakefiles and both
+Snakemake profiles were present. Every wheel `RECORD` size and SHA-256 entry verified.
 
 The wheel and source distribution were installed separately into clean virtual environments
 without resolving dependencies. In both installations:
@@ -150,15 +152,18 @@ If the dedicated environment already exists, replace `conda env create` with:
 conda env update --file environment.yml --name protein_signature_analysis --prune
 ```
 
-The expected outcome is 306 passed tests, only the three SHAP/Matplotlib warnings above and
+The expected outcome is 347 passed tests, only the three SHAP/Matplotlib warnings above and
 at least 95.00% total coverage. Do not tag the release if the count, coverage threshold or
 any test differs; retain the log and report the complete output.
 
 ## Scientific and operational boundaries
 
-- The user reports that the full top-1,000 structural run completed successfully. Its files
-  were not available in this QA container, so adapter contracts are tested but empirical
-  preparation and scientific reproduction must be confirmed on the cluster.
+- The full top-1,000 structural predecessor completed successfully. Slurm job `386714`
+  subsequently prepared 121,635 proteins, 192,474 Pfam rows, 11,404 checksum-verified
+  structures and 10,827 mean-pLDDT-eligible Foldseek structures in 18 minutes 4 seconds with
+  about 4 GiB peak RSS. The preparation marker and 292 MiB review bundle were present. This
+  confirms the bridge on the cluster but not the downstream signature result, which remains
+  gated on reviewed E3 subclass/component labels and profile-matched controls.
 - Native sequence discovery in 0.1.0 is exact overlapping amino-acid k-mers. MEME, STREME,
   FIMO, HMMER, conservation and disorder evidence can be imported but are not invoked.
 - A formally named fold association requires supplied/imported SCOP, CATH, ECOD or another
@@ -192,5 +197,5 @@ any test differs; retain the log and report the complete output.
 ## Persistence checkpoint
 
 The earlier `protein-signature-analysis-QA-checkpoint-20260912.tar.gz` remains an historical
-checkpoint only. The newer checksum-paired Snakemake/Slurm patch produced after this QA is
+checkpoint only. The checksum-paired 15 September full-DAG handoff produced after this QA is
 the authoritative update for the existing Mac repository.

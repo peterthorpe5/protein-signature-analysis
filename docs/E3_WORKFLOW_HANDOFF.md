@@ -55,14 +55,20 @@ that every HOG member is a particular E3 subclass, and it does not create matche
 controls. Automatically propagating a seed category to every orthologue would make the
 signature analysis circular.
 
-The launcher therefore enforces this order:
+The completed-E3 Snakemake DAG therefore enforces this order:
 
-1. `prepare` verifies the predecessor and publishes a review bundle.
-2. a curator assigns exact E3 class/component labels and matched-control labels;
-3. `initialise` builds and validates `campaign.yaml`, then stops;
-4. a scientist freezes thresholds and comparisons before any expensive search;
-5. `run` executes the complete analysis; and
-6. `verify` checks every published output checksum.
+1. `ensure_e3_preparation` creates or verifies the immutable review bundle;
+2. `stage_e3_label_review` safely creates or adopts the separate editable label authority;
+3. a curator assigns exact E3 class/component labels and matched-control labels;
+4. `approve` validates those assignments and binds curator approval to their exact SHA-256;
+5. `verify_e3_label_review` fails if either the approval chain or reviewed file changed;
+6. `initialise_e3_campaign` creates or adopts and validates `campaign.yaml`;
+7. `run_e3_campaign` revalidates the campaign and executes the atomic analysis; and
+8. `verify_e3_campaign` independently checks every result and input checksum.
+
+Only step 3 is manual. Once the checksum-bound approval exists, `--phase all` executes steps
+5–8 unattended. Calling `--phase all` before approval stops cleanly at step 2 rather than
+guessing labels.
 
 ## Phase 1: prepare inputs
 
@@ -74,22 +80,22 @@ SIGNATURE_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/ana
   --phase prepare \
   --run-root "${RUN_ROOT}" \
   --work-dir "${SIGNATURE_WORK}" \
+  --campaign-id "e3_all1972_signatures_20260914" \
   --minimum-mean-plddt 50 \
   --log-level INFO \
   --submit-slurm \
   --slurm-account barton \
-  --slurm-partition general \
-  --slurm-memory 64G \
+  --slurm-partition barton \
+  --slurm-memory 32G \
   --slurm-time 04:00:00 \
-  --threads 4 \
+  --threads 18 \
   --slurm-dry-run
 ```
 
-Repeat without `--slurm-dry-run` after inspecting the exact `sbatch` command. This phase is
-not suitable for the earlier 8 GiB interactive allocation. The reader now projects only
-needed columns and uses bounded DuckDB batches, while the deduplicated sequence/context index
-still requires substantial memory. Start with 64 GiB; request 128 GiB if `sacct` records an
-out-of-memory exit. Follow the returned job identifier and retained logs:
+Repeat without `--slurm-dry-run` after inspecting the exact `sbatch` command. This phase runs
+the E3 DAG through `review_ready`. The real all-1972 run recorded about 4 GiB maximum RSS;
+32 GiB leaves conservative headroom. An existing prepared bundle is checksum-verified and
+reused rather than rebuilt. Follow the returned job identifier and retained logs:
 
 ```bash
 squeue --job JOB_ID
@@ -121,27 +127,48 @@ in the audit table but receive an explicit ineligible state and never enter Fold
 requires at least two eligible models and records both the available and eligible counts in
 `PREPARED.json`.
 
+Snakemake state is kept separately under `workflow_state/e3/`. At this checkpoint the key
+markers are `01_preparation/PREPARED_VERIFIED.json` and
+`02_label_review/REVIEW_READY.json`. The editable
+`reviewed_label_assignments.tsv` is deliberately not a Snakemake output: failed-job cleanup
+can never remove curator work.
+
 ## Phase 2: curate and initialise
 
-Make a separately named copy of the template. Add or duplicate rows when a protein has more
-than one reviewed hierarchical label. Only `REVIEWED_POSITIVE` assignments enter analysis
-membership. A control protein must be reviewed positively into the relevant `control:...`
-label; marking it `REVIEWED_NEGATIVE` against a target does not create background membership.
+The `stage_e3_label_review` rule makes the separate copy on a new campaign. If, as in the
+current all-1972 run, it was already copied manually, the rule adopts it and records that
+decision without changing a byte. Add or duplicate rows when a protein has more than one
+reviewed hierarchical label. Only `REVIEWED_POSITIVE` assignments enter analysis membership.
+A control protein must be reviewed positively into the relevant `control:...` label; marking
+it `REVIEWED_NEGATIVE` against a target does not create background membership.
 
 ```bash
-cp \
-  "${SIGNATURE_WORK}/prepared_inputs/label_assignments.REVIEW_REQUIRED.tsv" \
-  "${SIGNATURE_WORK}/reviewed_label_assignments.tsv"
-
 # Curate ${SIGNATURE_WORK}/reviewed_label_assignments.tsv.
 
+./run_completed_e3_workflow.sh \
+  --phase approve \
+  --work-dir "${SIGNATURE_WORK}" \
+  --curator "Peter Thorpe" \
+  --review-note "Reviewed E3 subclasses, component roles and controls"
+```
+
+Approval refuses the byte-identical all-`UNMAPPED` template, incomplete FASTA coverage,
+unknown labels, incompatible component roles, unreviewed evidence states, assignments without
+at least one reviewed-positive analysis target, and any populated target lacking its
+profile-resolved matched background. The marker
+`workflow_state/e3/02_label_review/REVIEW_APPROVED.json` is immutable. To change approved
+labels, use a new versioned work directory and issue a new approval; do not edit an existing
+approval marker.
+
+To stop after campaign creation for a deliberate configuration review:
+
+```bash
 ./run_completed_e3_workflow.sh \
   --phase initialise \
   --run-root "${RUN_ROOT}" \
   --work-dir "${SIGNATURE_WORK}" \
   --campaign-id "e3_all1972_signatures_20260914" \
-  --label-assignments "${SIGNATURE_WORK}/reviewed_label_assignments.tsv" \
-  --threads 24
+  --threads 18
 ```
 
 The generated `campaign.yaml` is now the sole configuration authority. Initialisation does
@@ -160,33 +187,36 @@ within-predecessor-group global alignment and pocket evidence. Foldseek searches
 eligible prepared model against the entire prepared model collection, which is the route
 that can discover folds shared across different HOGs or E3 classes.
 
-## Phase 3: run through Snakemake and Slurm
+## Phase 3: run start-to-finish through Snakemake and Slurm
 
-The completed-E3 adapter is now finished: `campaign.yaml` is a normal generic campaign. A
-single submitted allocation can run the packaged Snakemake validation/analysis/verification
-DAG with its local executor:
+After approval, a single submitted allocation can run the completed-E3 Snakemake DAG from
+review verification through final result verification. It creates `campaign.yaml` if absent,
+or adopts it only if all critical input authorities are unchanged:
 
 ```bash
 ./run_completed_e3_workflow.sh \
-  --phase run \
+  --phase all \
+  --run-root "${RUN_ROOT}" \
   --work-dir "${SIGNATURE_WORK}" \
+  --campaign-id "e3_all1972_signatures_20260914" \
   --threads 24 \
   --log-level INFO \
   --submit-slurm \
   --slurm-account barton \
-  --slurm-partition general \
+  --slurm-partition barton \
   --slurm-memory 128G \
   --slurm-time 2-00:00:00
 ```
 
-Alternatively, use the generic logout-safe Snakemake controller and Slurm executor:
+After `--phase initialise`, the resulting YAML is also a normal generic campaign and can be
+run with the generic logout-safe Snakemake controller and Slurm executor:
 
 ```bash
 ./submit_protein_signature_workflow_slurm.sh \
   --config "${SIGNATURE_WORK}/campaign.yaml" \
   --work-dir "${SIGNATURE_WORK}" \
   --account barton \
-  --partition general \
+  --partition barton \
   --threads 24 \
   --memory-mb 128000 \
   --runtime-minutes 2880 \
@@ -195,8 +225,8 @@ Alternatively, use the generic logout-safe Snakemake controller and Slurm execut
 ```
 
 Remove `--dry-run` after review. The first command uses one Slurm allocation for the complete
-transaction. The second submits a small durable controller and lets Snakemake request each
-rule allocation. Do not launch both for the same campaign.
+E3 adapter DAG. The second submits a small durable controller and lets the generic DAG request
+each rule allocation. Do not launch both for the same campaign.
 
 Run into a new result directory. A pre-existing partial directory is not overwritten. The
 `--resume` option only verifies and reuses a complete immutable result with the same run

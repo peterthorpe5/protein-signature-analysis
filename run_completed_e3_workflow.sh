@@ -4,59 +4,52 @@ set -Eeuo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  # Phase 1: verify the completed predecessor and prepare review-gated inputs.
+  # Phase 1: Snakemake verifies/prepares inputs and safely stages the review file.
   ./run_completed_e3_workflow.sh \
     --phase prepare \
-    --run-root /absolute/path/completed_e3_end_to_end_run \
-    --work-dir /persistent/path/signature_campaign \
-    [--minimum-mean-plddt 50]
-
-  # Submit the memory-intensive prepare phase from a Slurm login node.
-  ./run_completed_e3_workflow.sh \
-    --phase prepare \
-    --run-root /absolute/path/completed_e3_end_to_end_run \
-    --work-dir /persistent/path/signature_campaign \
-    --submit-slurm \
-    --slurm-account ACCOUNT \
-    --slurm-partition PARTITION \
-    --slurm-memory 64G \
-    --slurm-time 04:00:00 \
-    --threads 4
-
-  # Phase 2: after copying and curating the generated label template.
-  ./run_completed_e3_workflow.sh \
-    --phase initialise \
     --run-root /absolute/path/completed_e3_end_to_end_run \
     --work-dir /persistent/path/signature_campaign \
     --campaign-id e3_all1972_signatures_20260914 \
-    --label-assignments /persistent/path/reviewed_label_assignments.tsv \
-    [--threads 24]
+    [--minimum-mean-plddt 50]
 
-  # Phase 3: run the reviewed campaign, normally inside a scheduler allocation.
+  # After editing reviewed_label_assignments.tsv, issue checksum-bound approval.
   ./run_completed_e3_workflow.sh \
-    --phase run \
+    --phase approve \
     --work-dir /persistent/path/signature_campaign \
-    [--threads 24] [--resume]
+    --curator "Curator name" \
+    [--review-note "Reviewed against named evidence authorities"]
 
-  # Phase 4: independently verify every published result checksum.
+  # Start-to-finish Snakemake execution after approval, submitted to Slurm.
   ./run_completed_e3_workflow.sh \
-    --phase verify \
-    --work-dir /persistent/path/signature_campaign
+    --phase all \
+    --run-root /absolute/path/completed_e3_end_to_end_run \
+    --work-dir /persistent/path/signature_campaign \
+    --campaign-id e3_all1972_signatures_20260914 \
+    --submit-slurm \
+    --slurm-account barton \
+    --slurm-partition barton \
+    --slurm-memory 128G \
+    --slurm-time 2-00:00:00 \
+    --threads 24
 
-The predecessor is never modified and OrthoFinder is never run. Phase prepare
-creates proteins.faa, an explicit Pfam assessment ledger, a checksum-verified
-structure inventory and a label curation worksheet. Its generated assignments
-are all UNMAPPED. Phase initialise therefore requires a separate reviewed label
-authority, imports Stage 09b US-align/TM-align and pocket evidence, reuses Stage
-09 AlphaFold coordinate assets, enables campaign-wide Foldseek and consumes the
-completed raw OrthoFinder 2.5.5/3 results from Stage 04.
+  # Optional checkpoints and backward-compatible operations.
+  ./run_completed_e3_workflow.sh \
+    --phase initialise|run|verify \
+    --work-dir /persistent/path/signature_campaign [...]
+
+The predecessor is never modified and OrthoFinder is never run. The E3
+Snakemake DAG owns preparation, review staging, approval verification,
+initialisation, atomic analysis and independent final verification. It never
+overwrites reviewed_label_assignments.tsv. Generated assignments begin as
+UNMAPPED, so the one intentional pause is human curation plus explicit approval.
+After approval, --phase all is unattended and safely resumable.
 
 Slurm options:
-  --submit-slurm          Submit prepare or run instead of executing locally.
-  --slurm-account NAME   Account; omitted by default so the site default applies.
-  --slurm-partition NAME Partition; omitted by default so the site default applies.
-  --slurm-memory SIZE    Memory request (default: 64G).
-  --slurm-time TIME      Wall time as HH:MM:SS or D-HH:MM:SS (default: 04:00:00).
+  --submit-slurm          Submit prepare, initialise, all or run.
+  --slurm-account NAME   Account (default: barton).
+  --slurm-partition NAME Partition (default: barton).
+  --slurm-memory SIZE    Memory request (default: 128G).
+  --slurm-time TIME      Wall time as HH:MM:SS or D-HH:MM:SS (default: 2-00:00:00).
   --slurm-job-name NAME  Job name (default: protein_signature_PHASE).
   --slurm-log-dir PATH   Absolute log directory (default: WORK_DIR/slurm_logs).
   --slurm-dry-run        Print the exact validated sbatch command without submitting.
@@ -75,16 +68,20 @@ RUN_ROOT=""
 WORK_DIR=""
 CAMPAIGN_ID=""
 LABEL_ASSIGNMENTS=""
+REVIEW_APPROVAL=""
+CURATOR=""
+REVIEW_NOTE=""
+PROFILE="e3"
 MINIMUM_MEAN_PLDDT="50"
 CONDA_ENVIRONMENT="protein_signature_analysis"
 THREADS="1"
 LOG_LEVEL="INFO"
 RESUME="false"
 SUBMIT_SLURM="false"
-SLURM_ACCOUNT=""
-SLURM_PARTITION=""
-SLURM_MEMORY="64G"
-SLURM_TIME="04:00:00"
+SLURM_ACCOUNT="barton"
+SLURM_PARTITION="barton"
+SLURM_MEMORY="128G"
+SLURM_TIME="2-00:00:00"
 SLURM_JOB_NAME=""
 SLURM_LOG_DIR=""
 SLURM_DRY_RUN="false"
@@ -115,6 +112,26 @@ while [[ $# -gt 0 ]]; do
         --label-assignments)
             require_option_value "$@"
             LABEL_ASSIGNMENTS="${2:-}"
+            shift 2
+            ;;
+        --review-approval)
+            require_option_value "$@"
+            REVIEW_APPROVAL="${2:-}"
+            shift 2
+            ;;
+        --curator)
+            require_option_value "$@"
+            CURATOR="${2:-}"
+            shift 2
+            ;;
+        --review-note)
+            require_option_value "$@"
+            REVIEW_NOTE="${2:-}"
+            shift 2
+            ;;
+        --profile)
+            require_option_value "$@"
+            PROFILE="${2:-}"
             shift 2
             ;;
         --minimum-mean-plddt)
@@ -203,9 +220,10 @@ if [[ -z "${PHASE}" || -z "${WORK_DIR}" ]]; then
     usage >&2
     exit 2
 fi
-if [[ "${PHASE}" != "prepare" && "${PHASE}" != "initialise" && \
+if [[ "${PHASE}" != "prepare" && "${PHASE}" != "approve" && \
+        "${PHASE}" != "initialise" && "${PHASE}" != "all" && \
         "${PHASE}" != "run" && "${PHASE}" != "verify" ]]; then
-    echo "--phase must be prepare, initialise, run or verify: ${PHASE}" >&2
+    echo "--phase must be prepare, approve, initialise, all, run or verify: ${PHASE}" >&2
     exit 2
 fi
 if [[ "${WORK_DIR}" == -* ]]; then
@@ -240,6 +258,12 @@ fi
 readonly PREPARED_DIR="${WORK_DIR}/prepared_inputs"
 readonly CONFIG_PATH="${WORK_DIR}/campaign.yaml"
 readonly RESULT_DIR="${WORK_DIR}/result"
+readonly E3_STATE_DIR="${WORK_DIR}/workflow_state/e3"
+readonly PREPARATION_MARKER="${E3_STATE_DIR}/01_preparation/PREPARED_VERIFIED.json"
+readonly REVIEW_MARKER="${E3_STATE_DIR}/02_label_review/REVIEW_READY.json"
+LABEL_ASSIGNMENTS="${LABEL_ASSIGNMENTS:-${WORK_DIR}/reviewed_label_assignments.tsv}"
+REVIEW_APPROVAL="${REVIEW_APPROVAL:-${E3_STATE_DIR}/02_label_review/REVIEW_APPROVED.json}"
+CAMPAIGN_ID="${CAMPAIGN_ID:-$(basename "${WORK_DIR}")}"
 readonly SLURM_WORKER="${SCRIPT_DIR}/slurm/run_completed_e3_workflow.sbatch"
 
 validate_slurm_time() {
@@ -269,6 +293,10 @@ submit_slurm_phase() {
         --conda-environment "${CONDA_ENVIRONMENT}"
         --threads "${THREADS}"
         --log-level "${LOG_LEVEL}"
+        --campaign-id "${CAMPAIGN_ID}"
+        --label-assignments "${LABEL_ASSIGNMENTS}"
+        --review-approval "${REVIEW_APPROVAL}"
+        --profile "${PROFILE}"
     )
     local -a sbatch_arguments=(
         --parsable
@@ -282,7 +310,8 @@ submit_slurm_phase() {
         "--error=${log_dir}/%x_%j.err"
     )
 
-    if [[ "${PHASE}" == "prepare" ]]; then
+    if [[ "${PHASE}" == "prepare" || "${PHASE}" == "initialise" || \
+            "${PHASE}" == "all" ]]; then
         worker_arguments+=(
             --run-root "${RUN_ROOT}"
             --minimum-mean-plddt "${MINIMUM_MEAN_PLDDT}"
@@ -333,16 +362,17 @@ submit_slurm_phase() {
 }
 
 if [[ "${SUBMIT_SLURM}" == "true" ]]; then
-    if [[ "${PHASE}" != "prepare" && "${PHASE}" != "run" ]]; then
-        echo "--submit-slurm currently supports prepare and run phases only." >&2
+    if [[ "${PHASE}" != "prepare" && "${PHASE}" != "initialise" && \
+            "${PHASE}" != "all" && "${PHASE}" != "run" ]]; then
+        echo "--submit-slurm supports prepare, initialise, all and run phases." >&2
         exit 2
     fi
     if [[ "${WORK_DIR}" != /* ]]; then
         echo "Slurm submission requires an absolute --work-dir." >&2
         exit 2
     fi
-    if [[ "${PHASE}" == "prepare" && ("${RUN_ROOT}" != /* || ! -d "${RUN_ROOT}") ]]; then
-        echo "Slurm prepare requires an existing absolute --run-root: ${RUN_ROOT}" >&2
+    if [[ "${PHASE}" != "run" && ("${RUN_ROOT}" != /* || ! -d "${RUN_ROOT}") ]]; then
+        echo "Slurm ${PHASE} requires an existing absolute --run-root: ${RUN_ROOT}" >&2
         exit 2
     fi
     if [[ "${PHASE}" == "run" && ! -s "${CONFIG_PATH}" ]]; then
@@ -399,93 +429,109 @@ ensure_environment() {
         python -m pip install --no-deps --force-reinstall --editable "${SCRIPT_DIR}"
 }
 
-if [[ "${PHASE}" == "prepare" ]]; then
-    if [[ -z "${RUN_ROOT}" || ! -d "${RUN_ROOT}" ]]; then
-        echo "prepare requires an existing --run-root directory: ${RUN_ROOT}" >&2
-        exit 2
-    fi
-    mkdir -p -- "${WORK_DIR}"
-    ensure_environment
-    conda run --no-capture-output --name "${CONDA_ENVIRONMENT}" \
-        protein-signatures prepare-e3-workflow \
-        --run-root "${RUN_ROOT}" \
-        --output-dir "${PREPARED_DIR}" \
-        --minimum-mean-plddt "${MINIMUM_MEAN_PLDDT}" \
-        --log-level "${LOG_LEVEL}"
-    echo "Prepared inputs require label and control curation before initialisation:"
-    echo "  ${PREPARED_DIR}/e3_label_curation_review.tsv"
-    echo "  ${PREPARED_DIR}/label_assignments.REVIEW_REQUIRED.tsv"
-    exit 0
-fi
+run_e3_snakemake() {
+    local target="$1"
+    local -a command=(
+        conda run --no-capture-output --name "${CONDA_ENVIRONMENT}"
+        snakemake
+        --snakefile "${SCRIPT_DIR}/workflow/E3Snakefile"
+        --directory "${E3_STATE_DIR}"
+        --profile "${SCRIPT_DIR}/profiles/local"
+        --cores "${THREADS}"
+        --jobs 1
+        --rerun-incomplete
+        --printshellcmds
+        "${target}"
+        --config
+        "e3_run_root=${RUN_ROOT}"
+        "e3_work_dir=${WORK_DIR}"
+        "e3_campaign_id=${CAMPAIGN_ID}"
+        "e3_profile=${PROFILE}"
+        "e3_minimum_mean_plddt=${MINIMUM_MEAN_PLDDT}"
+        "e3_reviewed_labels=${LABEL_ASSIGNMENTS}"
+        "e3_review_approval=${REVIEW_APPROVAL}"
+        "e3_threads=${THREADS}"
+        "e3_memory_mb=128000"
+        "e3_runtime_minutes=2880"
+        "e3_log_level=${LOG_LEVEL}"
+    )
 
-if [[ "${PHASE}" == "initialise" ]]; then
     if [[ -z "${RUN_ROOT}" || ! -d "${RUN_ROOT}" ]]; then
-        echo "initialise requires an existing --run-root directory: ${RUN_ROOT}" >&2
+        echo "${PHASE} requires an existing --run-root directory: ${RUN_ROOT}" >&2
         exit 2
     fi
-    if [[ -z "${CAMPAIGN_ID}" || -z "${LABEL_ASSIGNMENTS}" ]]; then
-        echo "initialise requires --campaign-id and --label-assignments." >&2
+    mkdir -p -- "${WORK_DIR}" "${E3_STATE_DIR}"
+    ensure_environment
+    if ! conda run --name "${CONDA_ENVIRONMENT}" snakemake --version >/dev/null 2>&1; then
+        echo "Snakemake is unavailable in Conda environment ${CONDA_ENVIRONMENT}." >&2
         exit 2
     fi
-    if [[ ! -s "${PREPARED_DIR}/PREPARED.json" ]]; then
-        echo "Prepared input marker is missing; complete the prepare phase first." >&2
+    "${command[@]}"
+}
+
+if [[ "${PHASE}" == "approve" ]]; then
+    if [[ -z "${CURATOR}" ]]; then
+        echo "approve requires --curator with the responsible person's name." >&2
+        exit 2
+    fi
+    if [[ ! -s "${PREPARATION_MARKER}" || ! -s "${REVIEW_MARKER}" ]]; then
+        echo "Review staging markers are missing; complete --phase prepare first." >&2
         exit 2
     fi
     if [[ ! -s "${LABEL_ASSIGNMENTS}" ]]; then
         echo "Reviewed label authority is missing or empty: ${LABEL_ASSIGNMENTS}" >&2
         exit 2
     fi
-    if [[ "$(basename "${LABEL_ASSIGNMENTS}")" == \
-            "label_assignments.REVIEW_REQUIRED.tsv" ]]; then
-        echo "Refusing the generated UNMAPPED template; supply a reviewed copy." >&2
+    ensure_environment
+    conda run --no-capture-output --name "${CONDA_ENVIRONMENT}" \
+        protein-signatures approve-e3-review \
+        --preparation-marker "${PREPARATION_MARKER}" \
+        --review-marker "${REVIEW_MARKER}" \
+        --reviewed-labels "${LABEL_ASSIGNMENTS}" \
+        --approval-marker "${REVIEW_APPROVAL}" \
+        --curator "${CURATOR}" \
+        --note "${REVIEW_NOTE}" \
+        --profile "${PROFILE}" \
+        --log-level "${LOG_LEVEL}"
+    echo "Approved current reviewed-label checksum: ${REVIEW_APPROVAL}"
+    echo "The campaign can now continue with --phase all."
+    exit 0
+fi
+
+if [[ "${PHASE}" == "prepare" ]]; then
+    run_e3_snakemake review_ready
+    echo "Snakemake prepared and staged the editable review authority:"
+    echo "  ${LABEL_ASSIGNMENTS}"
+    echo "Curate that file, then run --phase approve with --curator."
+    exit 0
+fi
+
+if [[ "${PHASE}" == "initialise" ]]; then
+    if [[ ! -s "${REVIEW_APPROVAL}" ]]; then
+        echo "Checksum-bound label approval is missing: ${REVIEW_APPROVAL}" >&2
+        echo "Complete --phase approve before initialisation." >&2
         exit 2
     fi
-    readonly STRUCTURE_COUNT="$(
-        awk -F '\t' '
-            NR == 1 {
-                for (column = 1; column <= NF; column++) {
-                    if ($column == "analysis_eligibility_status") {
-                        eligibility_column = column
-                    }
-                }
-                if (!eligibility_column) {
-                    exit 2
-                }
-                next
-            }
-            $eligibility_column == "ELIGIBLE" { count++ }
-            END {
-                if (!eligibility_column) {
-                    exit 2
-                }
-                print count + 0
-            }
-        ' "${PREPARED_DIR}/structures.tsv"
-    )"
-    if [[ ! "${STRUCTURE_COUNT}" =~ ^[0-9]+$ ]] || (( STRUCTURE_COUNT < 2 )); then
-        echo "At least two Foldseek-eligible prepared structures are required: ${STRUCTURE_COUNT}" >&2
+    run_e3_snakemake campaign_ready
+    echo "Snakemake created or adopted and validated ${CONFIG_PATH}."
+    echo "The expensive analysis has not started."
+    exit 0
+fi
+
+if [[ "${PHASE}" == "all" ]]; then
+    if [[ ! -s "${REVIEW_APPROVAL}" ]]; then
+        run_e3_snakemake review_ready
+        echo "Workflow paused cleanly at the required human-curation checkpoint."
+        echo "Edit ${LABEL_ASSIGNMENTS}, then run --phase approve with --curator."
+        echo "After approval, resubmit this same --phase all command."
+        exit 0
+    fi
+    if [[ ! -s "${LABEL_ASSIGNMENTS}" ]]; then
+        echo "Approved label authority is missing or empty: ${LABEL_ASSIGNMENTS}" >&2
         exit 2
     fi
-    readonly ORTHOFINDER_RESULTS="${RUN_ROOT}/04_orthofinder/Results"
-    "${SCRIPT_DIR}/start_from_inputs.sh" \
-        --work-dir "${WORK_DIR}" \
-        --campaign-id "${CAMPAIGN_ID}" \
-        --profile e3 \
-        --sequences-fasta "${PREPARED_DIR}/proteins.faa" \
-        --label-assignments "${LABEL_ASSIGNMENTS}" \
-        --domains "${PREPARED_DIR}/domains.tsv" \
-        --structures "${PREPARED_DIR}/structures.tsv" \
-        --structural-alignment-resource "${RUN_ROOT}" \
-        --orthofinder-results "${ORTHOFINDER_RESULTS}" \
-        --orthofinder-group-type HOG \
-        --orthofinder-hierarchy-node N0 \
-        --enable-foldseek \
-        --foldseek-maximum-hits "${STRUCTURE_COUNT}" \
-        --conda-environment "${CONDA_ENVIRONMENT}" \
-        --threads "${THREADS}" \
-        --log-level "${LOG_LEVEL}" \
-        --initialise-only
-    echo "Review and freeze ${CONFIG_PATH}; the expensive analysis has not started."
+    run_e3_snakemake all
+    echo "Completed and independently verified E3 signature result: ${RESULT_DIR}"
     exit 0
 fi
 

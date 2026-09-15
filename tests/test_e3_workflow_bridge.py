@@ -9,8 +9,10 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import yaml
 
 import protein_signatures.e3_workflow_bridge as bridge_module
+import protein_signatures.e3_workflow_orchestration as orchestration_module
 from protein_signatures.checksums import sha256_file
 from protein_signatures.e3_workflow_bridge import (
     _iter_parquet_records,
@@ -27,10 +29,25 @@ from protein_signatures.e3_workflow_bridge import (
     prepare_e3_workflow_inputs,
     resolve_e3_workflow_paths,
 )
+from protein_signatures.e3_workflow_orchestration import (
+    _copy_file_atomic,
+    _normalise_profile_source,
+    _require_nonnegative_integer,
+    _require_sha256,
+    _review_context,
+    _validate_existing_e3_campaign,
+    _verify_source_inventory,
+    approve_e3_label_review,
+    ensure_e3_campaign_marker,
+    ensure_e3_preparation_marker,
+    stage_e3_label_review,
+    verify_e3_label_review,
+    verify_prepared_e3_bundle,
+)
 from protein_signatures.errors import InputValidationError, PublicationError
 from protein_signatures.fasta import read_protein_fasta
-from protein_signatures.io_utils import iter_tsv
-from protein_signatures.tables import read_domains, read_structures
+from protein_signatures.io_utils import iter_tsv, write_tsv_atomic
+from protein_signatures.tables import LABEL_FIELDS, read_domains, read_structures
 
 
 def _write_parquet(*, path: Path, rows: list[dict[str, object]], schema: pa.Schema) -> None:
@@ -319,6 +336,79 @@ def _completed_workflow(tmp_path: Path) -> Path:
     return root
 
 
+def _curate_fixture_labels(*, path: Path, include_control: bool = True) -> None:
+    """Replace fixture placeholders with one target and optional control assignment."""
+
+    records = list(iter_tsv(path=path, required_fields=LABEL_FIELDS))
+    records[0].update(
+        {
+            "label_id": "e3:ubiquitin:crl:crl1_scf:f_box",
+            "curation_status": "REVIEWED_POSITIVE",
+            "evidence_status": "REVIEWED",
+            "component_role": "SUBSTRATE_RECEPTOR",
+            "curation_reason": "Fixture target reviewed against source evidence.",
+        }
+    )
+    if include_control:
+        records[1].update(
+            {
+                "label_id": "control:matched_substrate_receptor_reference",
+                "curation_status": "REVIEWED_POSITIVE",
+                "evidence_status": "REVIEWED",
+                "component_role": "CONTROL",
+                "curation_reason": "Fixture control reviewed against source evidence.",
+            }
+        )
+    write_tsv_atomic(path=path, fieldnames=LABEL_FIELDS, records=records)
+
+
+def _approved_workflow(tmp_path: Path) -> dict[str, Path]:
+    """Create a fully linked preparation, review and approval fixture."""
+
+    root = _completed_workflow(tmp_path)
+    work = tmp_path / "campaign"
+    state = work / "workflow_state" / "e3"
+    paths = {
+        "root": root,
+        "work": work,
+        "prepared": work / "prepared_inputs",
+        "preparation": state / "01_preparation" / "PREPARED_VERIFIED.json",
+        "review": state / "02_label_review" / "REVIEW_READY.json",
+        "approval": state / "02_label_review" / "REVIEW_APPROVED.json",
+        "verification": state / "02_label_review" / "REVIEW_VERIFIED.json",
+        "reviewed": work / "reviewed_label_assignments.tsv",
+        "config": work / "campaign.yaml",
+        "campaign_marker": state / "03_initialisation" / "CAMPAIGN_VALIDATED.json",
+    }
+    ensure_e3_preparation_marker(
+        run_root=paths["root"],
+        prepared_dir=paths["prepared"],
+        minimum_mean_plddt=50,
+        marker_path=paths["preparation"],
+    )
+    stage_e3_label_review(
+        preparation_marker=paths["preparation"],
+        reviewed_labels=paths["reviewed"],
+        marker_path=paths["review"],
+    )
+    _curate_fixture_labels(path=paths["reviewed"])
+    approve_e3_label_review(
+        preparation_marker=paths["preparation"],
+        review_marker=paths["review"],
+        reviewed_labels=paths["reviewed"],
+        approval_marker=paths["approval"],
+        curator="Test Curator",
+    )
+    verify_e3_label_review(
+        preparation_marker=paths["preparation"],
+        review_marker=paths["review"],
+        reviewed_labels=paths["reviewed"],
+        approval_marker=paths["approval"],
+        marker_path=paths["verification"],
+    )
+    return paths
+
+
 def test_completed_workflow_preparation_is_conservative_and_executable(
     tmp_path: Path,
 ) -> None:
@@ -403,6 +493,699 @@ def test_completed_workflow_preparation_is_conservative_and_executable(
     }
     with pytest.raises(PublicationError, match="already exists"):
         prepare_e3_workflow_inputs(run_root=root, output_dir=destination)
+
+
+def test_e3_orchestration_happy_path_is_review_gated_and_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every automated boundary should bind the authorities it consumes."""
+
+    root = _completed_workflow(tmp_path)
+    work = tmp_path / "campaign"
+    prepared = work / "prepared_inputs"
+    state = work / "workflow_state" / "e3"
+    preparation_marker = state / "01_preparation" / "PREPARED_VERIFIED.json"
+    review_marker = state / "02_label_review" / "REVIEW_READY.json"
+    approval_marker = state / "02_label_review" / "REVIEW_APPROVED.json"
+    verification_marker = state / "02_label_review" / "REVIEW_VERIFIED.json"
+    campaign_marker = state / "03_initialisation" / "CAMPAIGN_VALIDATED.json"
+    reviewed = work / "reviewed_label_assignments.tsv"
+
+    assert (
+        ensure_e3_preparation_marker(
+            run_root=root,
+            prepared_dir=prepared,
+            minimum_mean_plddt=50.0,
+            marker_path=preparation_marker,
+        )
+        == preparation_marker
+    )
+    preparation = json.loads(preparation_marker.read_text(encoding="utf-8"))
+    assert preparation["preparation_action"] == "CREATED"
+    ensure_e3_preparation_marker(
+        run_root=root,
+        prepared_dir=prepared,
+        minimum_mean_plddt=50.0,
+        marker_path=preparation_marker,
+    )
+    assert (
+        json.loads(preparation_marker.read_text(encoding="utf-8"))["preparation_action"]
+        == "REUSED_VERIFIED"
+    )
+
+    assert (
+        stage_e3_label_review(
+            preparation_marker=preparation_marker,
+            reviewed_labels=reviewed,
+            marker_path=review_marker,
+        )
+        == review_marker
+    )
+    assert (
+        reviewed.read_bytes() == (prepared / "label_assignments.REVIEW_REQUIRED.tsv").read_bytes()
+    )
+    assert json.loads(review_marker.read_text(encoding="utf-8"))["staging_action"] == (
+        "CREATED_FROM_TEMPLATE"
+    )
+    _curate_fixture_labels(path=reviewed)
+
+    assert (
+        approve_e3_label_review(
+            preparation_marker=preparation_marker,
+            review_marker=review_marker,
+            reviewed_labels=reviewed,
+            approval_marker=approval_marker,
+            curator="Test Curator",
+            note="Fixture approval",
+        )
+        == approval_marker
+    )
+    approval = json.loads(approval_marker.read_text(encoding="utf-8"))
+    assert approval["review_status"] == "APPROVED"
+    assert approval["target_reviewed_positive_count"] == 1
+    assert approval["control_reviewed_positive_count"] == 1
+    assert approval["reviewed_labels_sha256"] == sha256_file(path=reviewed)
+    assert (
+        verify_e3_label_review(
+            preparation_marker=preparation_marker,
+            review_marker=review_marker,
+            reviewed_labels=reviewed,
+            approval_marker=approval_marker,
+            marker_path=verification_marker,
+        )
+        == verification_marker
+    )
+
+    monkeypatch.setattr(
+        orchestration_module,
+        "validate_campaign",
+        lambda **_kwargs: {"status": "VALID", "protein_count": 2},
+    )
+    campaign_config = work / "campaign.yaml"
+    assert (
+        ensure_e3_campaign_marker(
+            preparation_marker=preparation_marker,
+            review_verification_marker=verification_marker,
+            campaign_config=campaign_config,
+            campaign_id="fixture_e3_campaign",
+            profile="e3",
+            marker_path=campaign_marker,
+        )
+        == campaign_marker
+    )
+    campaign = json.loads(campaign_marker.read_text(encoding="utf-8"))
+    assert campaign["campaign_action"] == "CREATED"
+    assert campaign["validation_summary"]["protein_count"] == 2
+    assert "maximum_hits: 2" in campaign_config.read_text(encoding="utf-8")
+
+    ensure_e3_campaign_marker(
+        preparation_marker=preparation_marker,
+        review_verification_marker=verification_marker,
+        campaign_config=campaign_config,
+        campaign_id="fixture_e3_campaign",
+        profile="e3",
+        marker_path=campaign_marker,
+    )
+    assert json.loads(campaign_marker.read_text(encoding="utf-8"))["campaign_action"] == (
+        "ADOPTED_EXISTING"
+    )
+
+
+def test_e3_review_staging_adopts_but_never_overwrites_existing_work(
+    tmp_path: Path,
+) -> None:
+    """A manually copied or partly curated review file must remain untouched."""
+
+    root = _completed_workflow(tmp_path)
+    prepared = tmp_path / "work" / "prepared_inputs"
+    preparation_marker = tmp_path / "state" / "PREPARED_VERIFIED.json"
+    ensure_e3_preparation_marker(
+        run_root=root,
+        prepared_dir=prepared,
+        minimum_mean_plddt=50.0,
+        marker_path=preparation_marker,
+    )
+    reviewed = tmp_path / "work" / "reviewed.tsv"
+    reviewed.parent.mkdir(parents=True, exist_ok=True)
+    reviewed.write_text("curator work must survive\n", encoding="utf-8")
+    before = reviewed.read_bytes()
+    marker = tmp_path / "state" / "REVIEW_READY.json"
+    with pytest.raises(InputValidationError, match="required fields"):
+        stage_e3_label_review(
+            preparation_marker=preparation_marker,
+            reviewed_labels=reviewed,
+            marker_path=marker,
+        )
+    assert reviewed.read_bytes() == before
+
+    reviewed.write_bytes((prepared / "label_assignments.REVIEW_REQUIRED.tsv").read_bytes())
+    _curate_fixture_labels(path=reviewed)
+    before = reviewed.read_bytes()
+    stage_e3_label_review(
+        preparation_marker=preparation_marker,
+        reviewed_labels=reviewed,
+        marker_path=marker,
+    )
+    assert reviewed.read_bytes() == before
+    assert json.loads(marker.read_text(encoding="utf-8"))["staging_action"] == ("ADOPTED_EXISTING")
+
+
+def test_e3_review_approval_rejects_placeholder_incomplete_and_changed_labels(
+    tmp_path: Path,
+) -> None:
+    """Approval must require curated classes and remain invalid after any edit."""
+
+    root = _completed_workflow(tmp_path)
+    prepared = tmp_path / "work" / "prepared_inputs"
+    preparation_marker = tmp_path / "state" / "PREPARED_VERIFIED.json"
+    review_marker = tmp_path / "state" / "REVIEW_READY.json"
+    approval_marker = tmp_path / "state" / "REVIEW_APPROVED.json"
+    reviewed = tmp_path / "work" / "reviewed.tsv"
+    ensure_e3_preparation_marker(
+        run_root=root,
+        prepared_dir=prepared,
+        minimum_mean_plddt=50.0,
+        marker_path=preparation_marker,
+    )
+    stage_e3_label_review(
+        preparation_marker=preparation_marker,
+        reviewed_labels=reviewed,
+        marker_path=review_marker,
+    )
+    with pytest.raises(InputValidationError, match="byte-identical"):
+        approve_e3_label_review(
+            preparation_marker=preparation_marker,
+            review_marker=review_marker,
+            reviewed_labels=reviewed,
+            approval_marker=approval_marker,
+            curator="Test Curator",
+        )
+
+    _curate_fixture_labels(path=reviewed, include_control=False)
+    with pytest.raises(InputValidationError, match="reviewed-positive control"):
+        approve_e3_label_review(
+            preparation_marker=preparation_marker,
+            review_marker=review_marker,
+            reviewed_labels=reviewed,
+            approval_marker=approval_marker,
+            curator="Test Curator",
+        )
+
+    records = list(iter_tsv(path=reviewed, required_fields=LABEL_FIELDS))
+    records[1].update(
+        {
+            "label_id": "control:prespecified_non_e3_reference",
+            "curation_status": "REVIEWED_POSITIVE",
+            "evidence_status": "REVIEWED",
+            "component_role": "CONTROL",
+            "curation_reason": "Reviewed but not target-matched fixture control.",
+        }
+    )
+    write_tsv_atomic(path=reviewed, fieldnames=LABEL_FIELDS, records=records)
+    with pytest.raises(InputValidationError, match="profile-resolved matched background"):
+        approve_e3_label_review(
+            preparation_marker=preparation_marker,
+            review_marker=review_marker,
+            reviewed_labels=reviewed,
+            approval_marker=approval_marker,
+            curator="Test Curator",
+        )
+
+    _curate_fixture_labels(path=reviewed)
+    approve_e3_label_review(
+        preparation_marker=preparation_marker,
+        review_marker=review_marker,
+        reviewed_labels=reviewed,
+        approval_marker=approval_marker,
+        curator="Test Curator",
+    )
+    with pytest.raises(PublicationError, match="already exists"):
+        approve_e3_label_review(
+            preparation_marker=preparation_marker,
+            review_marker=review_marker,
+            reviewed_labels=reviewed,
+            approval_marker=approval_marker,
+            curator="Test Curator",
+        )
+    reviewed.write_bytes(reviewed.read_bytes() + b"\n")
+    with pytest.raises(InputValidationError, match="no longer matches"):
+        verify_e3_label_review(
+            preparation_marker=preparation_marker,
+            review_marker=review_marker,
+            reviewed_labels=reviewed,
+            approval_marker=approval_marker,
+            marker_path=tmp_path / "state" / "REVIEW_VERIFIED.json",
+        )
+
+
+def test_e3_prepared_bundle_and_scalar_helpers_reject_tampering(
+    tmp_path: Path,
+) -> None:
+    """Prepared outputs and marker scalars should fail closed on mutation."""
+
+    root = _completed_workflow(tmp_path)
+    prepared = prepare_e3_workflow_inputs(run_root=root, output_dir=tmp_path / "prepared")
+    assert (
+        verify_prepared_e3_bundle(
+            prepared_dir=prepared,
+            run_root=root,
+            minimum_mean_plddt=50.0,
+        )["protein_count"]
+        == 2
+    )
+    (prepared / "domains.tsv").write_bytes((prepared / "domains.tsv").read_bytes() + b"changed")
+    with pytest.raises(InputValidationError, match="size differs"):
+        verify_prepared_e3_bundle(
+            prepared_dir=prepared,
+            run_root=root,
+            minimum_mean_plddt=50.0,
+        )
+
+    assert _require_nonnegative_integer(value="0", field_name="count") == 0
+    assert _require_sha256(value="a" * 64, field_name="digest") == "a" * 64
+    for value in (True, -1, "1.5", None):
+        with pytest.raises(InputValidationError, match="non-negative integer"):
+            _require_nonnegative_integer(value=value, field_name="count")
+    with pytest.raises(InputValidationError, match="lower-case SHA-256"):
+        _require_sha256(value="A" * 64, field_name="digest")
+    assert _normalise_profile_source(profile="e3") == "e3"
+    custom_profile = tmp_path / "custom.yaml"
+    custom_profile.write_text("profile_id: custom\n", encoding="utf-8")
+    assert _normalise_profile_source(profile=custom_profile) == str(custom_profile.resolve())
+    with pytest.raises(InputValidationError, match="missing or empty"):
+        _normalise_profile_source(profile=tmp_path / "missing.yaml")
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    (
+        ("not_object", "contain an object"),
+        ("incomplete", "not complete"),
+        ("wrong_root", "source root differs"),
+        ("nonnumeric_threshold", "not numeric"),
+        ("different_threshold", "threshold differs"),
+        ("bad_outputs", "must be a list"),
+        ("malformed_output", "Malformed prepared output"),
+        ("unsafe_output", "Unsafe prepared output"),
+        ("duplicate_output", "Duplicate prepared output"),
+        ("wrong_checksum", "checksum differs"),
+        ("wrong_inventory", "inventory differs"),
+    ),
+)
+def test_prepared_bundle_rejects_malformed_manifest_contracts(
+    tmp_path: Path,
+    case: str,
+    message: str,
+) -> None:
+    """Each preparation-manifest boundary should fail with exact context."""
+
+    root = _completed_workflow(tmp_path)
+    prepared = prepare_e3_workflow_inputs(run_root=root, output_dir=tmp_path / "prepared")
+    marker_path = prepared / "PREPARED.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    if case == "not_object":
+        marker = []
+    elif case == "incomplete":
+        marker["status"] = "RUNNING"
+    elif case == "wrong_root":
+        marker["source_run_root"] = str(tmp_path / "different")
+    elif case == "nonnumeric_threshold":
+        marker["minimum_mean_plddt"] = "bad"
+    elif case == "different_threshold":
+        marker["minimum_mean_plddt"] = 51
+    elif case == "bad_outputs":
+        marker["outputs"] = {}
+    elif case == "malformed_output":
+        marker["outputs"][0] = "bad"
+    elif case == "unsafe_output":
+        marker["outputs"][0]["relative_path"] = "../outside.tsv"
+    elif case == "duplicate_output":
+        marker["outputs"].append(dict(marker["outputs"][0]))
+    elif case == "wrong_checksum":
+        marker["outputs"][0]["sha256"] = "0" * 64
+    else:
+        marker["outputs"].pop()
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    with pytest.raises(InputValidationError, match=message):
+        verify_prepared_e3_bundle(
+            prepared_dir=prepared,
+            run_root=root,
+            minimum_mean_plddt=50,
+            verify_source_authorities=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    (
+        ("duplicate", "Duplicate prepared source"),
+        ("outside", "outside run root"),
+        ("size", "size differs"),
+        ("checksum", "checksum differs"),
+        ("incomplete", "unexpectedly incomplete"),
+    ),
+)
+def test_prepared_source_inventory_fails_closed(
+    tmp_path: Path,
+    case: str,
+    message: str,
+) -> None:
+    """Predecessor authorities must remain unique, contained and checksum exact."""
+
+    root = _completed_workflow(tmp_path)
+    prepared = prepare_e3_workflow_inputs(run_root=root, output_dir=tmp_path / "prepared")
+    inventory = prepared / "source_inventory.tsv"
+    fields = ("authority", "path", "size_bytes", "sha256")
+    records = list(iter_tsv(path=inventory, required_fields=fields))
+    if case == "duplicate":
+        records.append(dict(records[0]))
+    elif case == "outside":
+        outside = tmp_path / "outside.tsv"
+        outside.write_text("outside\n", encoding="utf-8")
+        records[0].update(
+            {
+                "path": str(outside),
+                "size_bytes": str(outside.stat().st_size),
+                "sha256": sha256_file(path=outside),
+            }
+        )
+    elif case == "size":
+        records[0]["size_bytes"] = str(int(records[0]["size_bytes"]) + 1)
+    elif case == "checksum":
+        records[0]["sha256"] = "0" * 64
+    else:
+        records = records[:5]
+    write_tsv_atomic(path=inventory, fieldnames=fields, records=records)
+    with pytest.raises(InputValidationError, match=message):
+        _verify_source_inventory(inventory_path=inventory, run_root=root.resolve())
+
+
+def test_review_staging_rejects_unsafe_destinations_and_changed_preparation(
+    tmp_path: Path,
+) -> None:
+    """Review staging should protect both immutable inputs and curator destinations."""
+
+    root = _completed_workflow(tmp_path)
+    prepared = tmp_path / "work" / "prepared_inputs"
+    with pytest.raises(PublicationError, match="outside prepared inputs"):
+        ensure_e3_preparation_marker(
+            run_root=root,
+            prepared_dir=prepared,
+            minimum_mean_plddt=50,
+            marker_path=prepared / "marker.json",
+        )
+    preparation_marker = tmp_path / "state" / "prepared.json"
+    ensure_e3_preparation_marker(
+        run_root=root,
+        prepared_dir=prepared,
+        minimum_mean_plddt=50,
+        marker_path=preparation_marker,
+    )
+    with pytest.raises(PublicationError, match="outside the immutable"):
+        stage_e3_label_review(
+            preparation_marker=preparation_marker,
+            reviewed_labels=prepared / "reviewed.tsv",
+            marker_path=tmp_path / "state" / "review.json",
+        )
+    same = tmp_path / "work" / "same.json"
+    with pytest.raises(PublicationError, match="must not replace"):
+        stage_e3_label_review(
+            preparation_marker=preparation_marker,
+            reviewed_labels=same,
+            marker_path=same,
+        )
+    destination_directory = tmp_path / "work" / "directory"
+    destination_directory.mkdir()
+    with pytest.raises(PublicationError, match="not a regular file"):
+        stage_e3_label_review(
+            preparation_marker=preparation_marker,
+            reviewed_labels=destination_directory,
+            marker_path=tmp_path / "state" / "review.json",
+        )
+    (prepared / "PREPARED.json").write_bytes((prepared / "PREPARED.json").read_bytes() + b"\n")
+    with pytest.raises(InputValidationError, match="changed after workflow"):
+        stage_e3_label_review(
+            preparation_marker=preparation_marker,
+            reviewed_labels=tmp_path / "work" / "reviewed.tsv",
+            marker_path=tmp_path / "state" / "review.json",
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    (
+        ("prepared_dir", "different prepared bundle"),
+        ("preparation_path", "different preparation marker"),
+        ("preparation_digest", "changed after review staging"),
+        ("reviewed_path", "different reviewed-label file"),
+        ("template_digest", "template changed after staging"),
+        ("missing_review", "missing or empty"),
+    ),
+)
+def test_review_context_rejects_broken_provenance_links(
+    tmp_path: Path,
+    case: str,
+    message: str,
+) -> None:
+    """Review markers must retain the complete preparation and file-identity chain."""
+
+    root = _completed_workflow(tmp_path)
+    prepared = tmp_path / "work" / "prepared_inputs"
+    preparation_marker = tmp_path / "state" / "prepared.json"
+    review_marker = tmp_path / "state" / "review.json"
+    reviewed = tmp_path / "work" / "reviewed.tsv"
+    ensure_e3_preparation_marker(
+        run_root=root,
+        prepared_dir=prepared,
+        minimum_mean_plddt=50,
+        marker_path=preparation_marker,
+    )
+    stage_e3_label_review(
+        preparation_marker=preparation_marker,
+        reviewed_labels=reviewed,
+        marker_path=review_marker,
+    )
+    review = json.loads(review_marker.read_text(encoding="utf-8"))
+    if case == "prepared_dir":
+        review["prepared_dir"] = str(tmp_path / "other")
+    elif case == "preparation_path":
+        review["preparation_marker"] = str(tmp_path / "other.json")
+    elif case == "preparation_digest":
+        preparation_marker.write_bytes(preparation_marker.read_bytes() + b"\n")
+    elif case == "reviewed_path":
+        review["reviewed_labels"] = str(tmp_path / "other.tsv")
+    elif case == "template_digest":
+        review["template_sha256"] = "0" * 64
+    else:
+        reviewed.unlink()
+    review_marker.write_text(json.dumps(review), encoding="utf-8")
+    with pytest.raises(InputValidationError, match=message):
+        _review_context(
+            preparation_marker=preparation_marker,
+            review_marker=review_marker,
+            reviewed_labels=reviewed,
+        )
+
+
+def test_atomic_review_copy_rejects_races_and_io_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The no-clobber copy should translate race and I/O failures safely."""
+
+    source = tmp_path / "source.tsv"
+    source.write_text("header\n", encoding="utf-8")
+    destination = tmp_path / "reviewed.tsv"
+    monkeypatch.setattr(
+        orchestration_module.os,
+        "link",
+        lambda *_args: (_ for _ in ()).throw(FileExistsError("race")),
+    )
+    with pytest.raises(PublicationError, match="appeared concurrently"):
+        _copy_file_atomic(source=source, destination=destination)
+    assert not destination.exists()
+
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        orchestration_module.shutil,
+        "copyfile",
+        lambda *_args: (_ for _ in ()).throw(OSError("copy failed")),
+    )
+    with pytest.raises(PublicationError, match="copy failed"):
+        _copy_file_atomic(source=source, destination=destination)
+
+
+def test_review_approval_rejects_incomplete_coverage_and_changed_summary(
+    tmp_path: Path,
+) -> None:
+    """Coverage and recorded summary counts are mandatory approval invariants."""
+
+    paths = _approved_workflow(tmp_path)
+    approval = json.loads(paths["approval"].read_text(encoding="utf-8"))
+    approval["reviewed_assignment_count"] = 999
+    paths["approval"].write_text(json.dumps(approval), encoding="utf-8")
+    with pytest.raises(InputValidationError, match="summary"):
+        verify_e3_label_review(
+            preparation_marker=paths["preparation"],
+            review_marker=paths["review"],
+            reviewed_labels=paths["reviewed"],
+            approval_marker=paths["approval"],
+            marker_path=tmp_path / "summary_verification.json",
+        )
+
+    second = _approved_workflow(tmp_path / "second")
+    records = list(iter_tsv(path=second["reviewed"], required_fields=LABEL_FIELDS))
+    write_tsv_atomic(
+        path=second["reviewed"],
+        fieldnames=LABEL_FIELDS,
+        records=records[:1],
+    )
+    second["approval"].unlink()
+    with pytest.raises(InputValidationError, match="explicit row for every"):
+        approve_e3_label_review(
+            preparation_marker=second["preparation"],
+            review_marker=second["review"],
+            reviewed_labels=second["reviewed"],
+            approval_marker=second["approval"],
+            curator="Test Curator",
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    (
+        ("prepared", "Prepared marker changed"),
+        ("labels", "Reviewed labels changed"),
+        ("approval", "approval changed"),
+        ("malformed_prepared", "must contain an object"),
+        ("too_few_structures", "At least two Foldseek-eligible"),
+    ),
+)
+def test_campaign_boundary_rejects_changed_approved_authorities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    message: str,
+) -> None:
+    """Campaign creation should recheck every approved upstream identity."""
+
+    paths = _approved_workflow(tmp_path)
+    if case == "prepared":
+        marker = paths["prepared"] / "PREPARED.json"
+        marker.write_bytes(marker.read_bytes() + b"\n")
+    elif case == "labels":
+        paths["reviewed"].write_bytes(paths["reviewed"].read_bytes() + b"\n")
+    elif case == "approval":
+        paths["approval"].write_bytes(paths["approval"].read_bytes() + b"\n")
+    elif case == "malformed_prepared":
+        monkeypatch.setattr(orchestration_module, "read_json", lambda **_kwargs: [])
+    else:
+        prepared = json.loads((paths["prepared"] / "PREPARED.json").read_text(encoding="utf-8"))
+        prepared["foldseek_eligible_structure_count"] = 1
+        monkeypatch.setattr(orchestration_module, "read_json", lambda **_kwargs: prepared)
+    with pytest.raises(InputValidationError, match=message):
+        ensure_e3_campaign_marker(
+            preparation_marker=paths["preparation"],
+            review_verification_marker=paths["verification"],
+            campaign_config=paths["config"],
+            campaign_id="fixture_campaign",
+            profile="e3",
+            marker_path=paths["campaign_marker"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    (
+        ("campaign_id", "changed orchestration field"),
+        ("foldseek", "keep Foldseek enabled"),
+        ("alphafold", "reuse prepared AlphaFold"),
+        ("orthofinder_resource", "raw OrthoFinder results"),
+    ),
+)
+def test_existing_campaign_cannot_change_bridge_authorities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    message: str,
+) -> None:
+    """Adopted campaign YAML may tune analyses but not replace input authorities."""
+
+    paths = _approved_workflow(tmp_path)
+    monkeypatch.setattr(
+        orchestration_module,
+        "validate_campaign",
+        lambda **_kwargs: {"status": "VALID"},
+    )
+    ensure_e3_campaign_marker(
+        preparation_marker=paths["preparation"],
+        review_verification_marker=paths["verification"],
+        campaign_config=paths["config"],
+        campaign_id="fixture_campaign",
+        profile="e3",
+        marker_path=paths["campaign_marker"],
+    )
+    document = yaml.safe_load(paths["config"].read_text(encoding="utf-8"))
+    if case == "foldseek":
+        document["foldseek"]["enabled"] = False
+    elif case == "alphafold":
+        document["alphafold"]["enabled"] = True
+    elif case == "orthofinder_resource":
+        document["inputs"]["orthofinder"]["resource_dir"] = str(paths["root"])
+        document["inputs"]["orthofinder"]["results_dir"] = None
+    paths["config"].write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    prepared_document = json.loads(
+        (paths["prepared"] / "PREPARED.json").read_text(encoding="utf-8")
+    )
+    with pytest.raises(InputValidationError, match=message):
+        _validate_existing_e3_campaign(
+            config_path=paths["config"],
+            campaign_id=("different_campaign" if case == "campaign_id" else "fixture_campaign"),
+            profile="e3",
+            prepared_dir=paths["prepared"],
+            reviewed_labels=paths["reviewed"],
+            structural_resource=Path(prepared_document["structural_alignment_resource"]),
+            orthofinder_results=Path(prepared_document["orthofinder_results"]),
+            foldseek_maximum_hits=2,
+        )
+
+
+def test_campaign_validation_rejects_in_flight_configuration_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The campaign checksum should remain stable throughout expensive validation."""
+
+    paths = _approved_workflow(tmp_path)
+
+    def mutate_campaign(*, config_path: Path) -> dict[str, str]:
+        """Change the validated file to simulate a concurrent editor."""
+
+        config_path.write_bytes(config_path.read_bytes() + b"\n# concurrent edit\n")
+        return {"status": "VALID"}
+
+    monkeypatch.setattr(orchestration_module, "validate_campaign", mutate_campaign)
+    with pytest.raises(InputValidationError, match="changed during"):
+        ensure_e3_campaign_marker(
+            preparation_marker=paths["preparation"],
+            review_verification_marker=paths["verification"],
+            campaign_config=paths["config"],
+            campaign_id="fixture_campaign",
+            profile="e3",
+            marker_path=paths["campaign_marker"],
+        )
+
+
+def test_prepared_verification_rejects_missing_directory(tmp_path: Path) -> None:
+    """A missing prepared directory should fail before marker access."""
+
+    with pytest.raises(InputValidationError, match="not a directory"):
+        verify_prepared_e3_bundle(
+            prepared_dir=tmp_path / "missing",
+            run_root=tmp_path / "run",
+            minimum_mean_plddt=50,
+        )
 
 
 def test_workflow_resolution_rejects_incomplete_and_changed_sources(tmp_path: Path) -> None:

@@ -11,7 +11,7 @@ Usage:
     [--profile local|slurm|/absolute/custom/profile] \
     [--conda-environment protein_signature_analysis] \
     [--threads 8] [--memory-mb 64000] [--runtime-minutes 240] \
-    [--max-jobs 10] [--account barton] [--partition general] \
+    [--max-jobs 10] [--account barton] [--partition barton] \
     [--resume] [--dry-run] [--unlock] [--log-level INFO]
 
 This is the generic input-driven Snakemake launcher. It consumes campaign.yaml
@@ -43,7 +43,7 @@ MEMORY_MB="64000"
 RUNTIME_MINUTES="240"
 MAX_JOBS="10"
 ACCOUNT="barton"
-PARTITION="general"
+PARTITION="barton"
 LOG_LEVEL="INFO"
 RESUME="false"
 DRY_RUN="false"

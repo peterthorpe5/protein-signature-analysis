@@ -139,7 +139,7 @@ PERSISTENT_RUN=/persistent/path/protein_signatures/e3_1000_2026_09
   --config "${PERSISTENT_RUN}/campaign.yaml" \
   --work-dir "${PERSISTENT_RUN}" \
   --account barton \
-  --partition general \
+  --partition barton \
   --threads 24 \
   --memory-mb 128000 \
   --runtime-minutes 2880 \

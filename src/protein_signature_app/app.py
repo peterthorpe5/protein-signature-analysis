@@ -642,7 +642,7 @@ def _render_downloadable_table(
 
 
 def _render_plotly_figure(*, figure: object, download_name: str) -> None:
-    """Render an interactive Plotly figure with a vector PDF download.
+    """Render an interactive Plotly figure with an on-demand PDF download.
 
     Args:
         figure: Plotly-compatible figure.
@@ -650,18 +650,25 @@ def _render_plotly_figure(*, figure: object, download_name: str) -> None:
     """
 
     stem = safe_download_stem(value=download_name)
+    st.plotly_chart(figure, width="stretch")
+    if not st.button(
+        "Prepare plot PDF download",
+        key=f"plot-pdf-prepare-{stem}",
+        help="Generate the vector PDF only when needed.",
+    ):
+        return
     try:
         pdf = plotly_figure_to_pdf_bytes(figure=figure)
     except PublicationError as error:
         st.warning(str(error))
         return
-    st.plotly_chart(figure, width="stretch")
     st.download_button(
         label="Download plot as PDF",
         data=pdf,
         file_name=f"{stem}.pdf",
         mime="application/pdf",
         key=f"plot-pdf-{stem}",
+        on_click="ignore",
     )
 
 

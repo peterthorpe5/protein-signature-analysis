@@ -57,10 +57,15 @@
 - Stream only projected predecessor Parquet columns in bounded DuckDB batches and publish the
   prepared FASTA incrementally, avoiding the former whole-table and whole-FASTA duplicate
   allocations during completed-E3 preparation.
-- Add validated direct Slurm submission for completed-E3 prepare/run phases, non-recursive
-  workers, dry-run output and persistent job-specific stdout/stderr paths.
+- Add validated direct Slurm submission for completed-E3 prepare, initialise, full-DAG and
+  run phases, non-recursive workers, dry-run output and persistent job-specific stdout/stderr
+  paths; accept scheduler allocations that safely exceed the requested CPU count.
 - Add a generic Snakemake 9 workflow with explicit validation, atomic analysis and independent
   result/input verification rules; provide local and Slurm-executor profiles plus a durable,
   lock-protected Slurm controller patterned after the E3 production workflow.
+- Add a completed-E3 Snakemake DAG spanning preparation, no-clobber review staging,
+  checksum-bound curator approval verification, campaign initialisation, atomic analysis and
+  independent final verification. The all-`UNMAPPED` template cannot be approved, and every
+  populated analysis target must have its profile-resolved matched background.
 - Add `gawk`, the strict `nodefaults` channel, Snakemake and its Slurm executor plugin to the
   Conda environment; retain Kaleido as a pip-installed dependency for channel compatibility.

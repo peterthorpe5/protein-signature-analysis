@@ -8,7 +8,7 @@ Usage:
     --config /absolute/path/campaign.yaml \
     --work-dir /persistent/path/signature_campaign \
     [--threads 24] [--memory-mb 64000] [--runtime-minutes 1440] \
-    [--max-jobs 10] [--account barton] [--partition general] \
+    [--max-jobs 10] [--account barton] [--partition barton] \
     [--controller-memory 4G] [--controller-time 3-00:00:00] \
     [--conda-environment protein_signature_analysis] [--resume] [--dry-run]
 
@@ -51,7 +51,7 @@ MEMORY_MB="64000"
 RUNTIME_MINUTES="1440"
 MAX_JOBS="10"
 ACCOUNT="barton"
-PARTITION="general"
+PARTITION="barton"
 CONTROLLER_MEMORY="4G"
 CONTROLLER_TIME="3-00:00:00"
 CONDA_ENVIRONMENT="protein_signature_analysis"

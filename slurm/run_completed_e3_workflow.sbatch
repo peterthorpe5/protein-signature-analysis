@@ -19,8 +19,8 @@ if [[ ! "${SLURM_CPUS_PER_TASK:-}" =~ ^[1-9][0-9]*$ ]]; then
     echo "SLURM_CPUS_PER_TASK is missing or invalid." >&2
     exit 2
 fi
-if [[ "${SLURM_CPUS_PER_TASK}" != "${REQUESTED_CPUS}" ]]; then
-    echo "Allocated CPUs (${SLURM_CPUS_PER_TASK}) differ from requested CPUs " \
+if (( SLURM_CPUS_PER_TASK < REQUESTED_CPUS )); then
+    echo "Allocated CPUs (${SLURM_CPUS_PER_TASK}) are fewer than requested CPUs " \
         "(${REQUESTED_CPUS})." >&2
     exit 2
 fi

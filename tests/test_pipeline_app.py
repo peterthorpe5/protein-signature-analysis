@@ -558,6 +558,135 @@ def test_cli_routes_catalogue_initialisation_and_interrupts(
     )
     assert json.loads(capsys.readouterr().out)["prepared_dir"] == str(workflow_starter)
     assert workflow_arguments["minimum_mean_plddt"] == 65.0
+    orchestration_marker = tmp_path / "workflow_marker.json"
+    approval_marker = tmp_path / "approval_marker.json"
+    routed: dict[str, dict[str, object]] = {}
+
+    def route(name: str, destination: Path):
+        """Return a fake CLI dependency that records keyword arguments."""
+
+        def capture(**kwargs: object) -> Path:
+            """Capture one orchestration call."""
+
+            routed[name] = kwargs
+            return destination
+
+        return capture
+
+    monkeypatch.setattr(
+        cli_module,
+        "ensure_e3_preparation_marker",
+        route("prepare", orchestration_marker),
+    )
+    assert (
+        cli_module.main(
+            [
+                "workflow-prepare-e3",
+                "--run-root",
+                str(tmp_path / "e3_run"),
+                "--prepared-dir",
+                str(workflow_starter),
+                "--marker",
+                str(orchestration_marker),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "VALID"
+    monkeypatch.setattr(
+        cli_module,
+        "stage_e3_label_review",
+        route("stage", orchestration_marker),
+    )
+    assert (
+        cli_module.main(
+            [
+                "workflow-stage-e3-review",
+                "--preparation-marker",
+                str(orchestration_marker),
+                "--reviewed-labels",
+                str(tmp_path / "reviewed.tsv"),
+                "--marker",
+                str(orchestration_marker),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    monkeypatch.setattr(
+        cli_module,
+        "approve_e3_label_review",
+        route("approve", approval_marker),
+    )
+    assert (
+        cli_module.main(
+            [
+                "approve-e3-review",
+                "--preparation-marker",
+                str(orchestration_marker),
+                "--review-marker",
+                str(orchestration_marker),
+                "--reviewed-labels",
+                str(tmp_path / "reviewed.tsv"),
+                "--approval-marker",
+                str(approval_marker),
+                "--curator",
+                "Test Curator",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "APPROVED"
+    monkeypatch.setattr(
+        cli_module,
+        "verify_e3_label_review",
+        route("verify_review", orchestration_marker),
+    )
+    assert (
+        cli_module.main(
+            [
+                "workflow-verify-e3-review",
+                "--preparation-marker",
+                str(orchestration_marker),
+                "--review-marker",
+                str(orchestration_marker),
+                "--reviewed-labels",
+                str(tmp_path / "reviewed.tsv"),
+                "--approval-marker",
+                str(approval_marker),
+                "--marker",
+                str(orchestration_marker),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    monkeypatch.setattr(
+        cli_module,
+        "ensure_e3_campaign_marker",
+        route("initialise", orchestration_marker),
+    )
+    assert (
+        cli_module.main(
+            [
+                "workflow-initialise-e3",
+                "--preparation-marker",
+                str(orchestration_marker),
+                "--review-verification-marker",
+                str(orchestration_marker),
+                "--campaign-config",
+                str(config),
+                "--campaign-id",
+                "campaign",
+                "--marker",
+                str(orchestration_marker),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert routed["approve"]["curator"] == "Test Curator"
+    assert routed["initialise"]["campaign_id"] == "campaign"
     monkeypatch.setattr(cli_module, "initialise_campaign", lambda **_kwargs: config)
     assert (
         cli_module.main(
