@@ -667,6 +667,11 @@ def _prepare_campaign(
         sequences=sequences,
         discovery_protein_ids=discovery_protein_ids,
     )
+    LOGGER.info(
+        "Deriving structural features from %d structures and %d pairwise comparisons",
+        len(structures),
+        len(structure_comparisons),
+    )
     structure_features, structure_clusters = derive_structure_features(
         structures=structures,
         comparisons=structure_comparisons,
@@ -677,6 +682,11 @@ def _prepare_campaign(
             sequences=sequences,
             protein_ids=discovery_protein_ids,
         ),
+    )
+    LOGGER.info(
+        "Completed structural feature derivation features=%d cluster_memberships=%d",
+        len(structure_features),
+        len(structure_clusters),
     )
     kmer_features = build_kmer_features(
         sequences=sequences,

@@ -152,10 +152,14 @@ def test_run_foldseek_creates_and_reuses_checksum_cache(
     settings = _settings(cache=tmp_path / "cache")
     monkeypatch.setattr(fs, "_resolve_executable", lambda **_kwargs: "/bin/foldseek")
     monkeypatch.setattr(fs, "foldseek_version", lambda **_kwargs: "foldseek-v1")
+    temporary_base = tmp_path / "scheduler_tmp"
+    monkeypatch.setenv("TMPDIR", str(temporary_base))
     calls = {"easy": 0}
+    temporary_directories: list[Path] = []
 
     def fake_run(command: tuple[str, ...], **_kwargs: object) -> SimpleNamespace:
         calls["easy"] += 1
+        temporary_directories.append(Path(command[5]))
         query_ids = sorted(path.stem for path in Path(command[2]).iterdir())
         Path(command[4]).write_text(
             _line(query_ids[0], query_ids[1], aligned=4, qlen=4, tlen=4),
@@ -171,6 +175,9 @@ def test_run_foldseek_creates_and_reuses_checksum_cache(
     marker = json.loads(first.completion_manifest_path.read_text(encoding="utf-8"))
     assert marker["raw_output_sha256"] == sha256_file(path=first.raw_output_path)
     assert marker["comparison_universe_id"].startswith("FOLDSEEK_")
+    (foldseek_temporary_dir,) = temporary_directories
+    assert foldseek_temporary_dir.parent == temporary_base
+    assert not foldseek_temporary_dir.exists()
     second = fs.run_foldseek_all_vs_all(structures=structures, settings=settings, threads=2)
     assert second.reused is True
     assert second.cache_key == first.cache_key

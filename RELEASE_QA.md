@@ -109,6 +109,36 @@ Snakemake 9.27.0 against scheduler-created empty output directories and complete
 evidence targets. Python compilation, PEP 8, Google-style docstrings, Ruff, Bash syntax
 and `git diff --check` also passed.
 
+### Post-push structural-scaling and Slurm-scratch correction
+
+The first all-species evidence-led analysis completed its 10,827-model Foldseek search and
+then spent hours without a new log line after generic-feature preparation. Inspection showed
+that the next structural-cluster step rescanned approximately 2.5 million comparisons for
+each reference member and again for every validation protein/component. The implementation
+was scientifically correct on small inputs but computationally non-scalable for 121,635
+partition assignments. Structural support is now indexed with bounded passes per comparison
+universe. Discovery-only component construction, held-out projection, duplicate support
+counts, best scores, unique graph-edge counts, universe/tool isolation, deterministic cluster
+digests and row ordering are unchanged. One hundred deterministic randomized graph cases
+matched the former reference algorithm exactly, and explicit regression coverage includes
+10,000 irrelevant validation proteins.
+
+The completed-E3 Slurm worker now selects scratch inside the allocation using an explicit
+override, `SLURM_TMPDIR`, `TMPDIR`, node `/tmp` and persistent-work-directory fallback order.
+It validates physical paths, real writability and configurable free capacity, exports the
+selected directory through `TMPDIR`/`TMP`/`TEMP`, records a job-specific TSV, removes only
+safe completed-job scratch and retains failed-job scratch where the scheduler permits.
+Tests cover launcher propagation, option validation, precedence, unavailable scheduler
+scratch, successful cleanup, failed-job retention, provenance and Foldseek use of `TMPDIR`.
+
+On the exact corrected tree, all 376 tests passed with the same three understood third-party
+warnings. The complete branch-aware coverage measurement is 91.33%, still below the
+configured 95.00% release threshold because of the inherited evidence-led extension gap; the
+threshold was not changed. Python compilation, Ruff formatting/lint, PEP 8, Google-style
+docstrings, Bash syntax, `git diff --check`, source-distribution construction and universal
+wheel construction/inspection passed. The hotfix is suitable for the cluster rerun but the
+repository should still not be release-tagged until the global coverage gate is restored.
+
 ## Code-quality and test gates
 
 | Gate | Result |

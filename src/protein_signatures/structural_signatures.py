@@ -6,6 +6,7 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from .checksums import sha256_json
 from .errors import InputValidationError
@@ -23,6 +24,15 @@ from .models import (
 
 LOGGER = logging.getLogger(__name__)
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass(frozen=True)
+class _IndexedStructuralComponent:
+    """One reference component with pre-indexed membership support."""
+
+    reference_members: tuple[str, ...]
+    edge_count: int
+    members: tuple[tuple[str, str, int, float | None], ...]
 
 
 def derive_structure_features(
@@ -172,24 +182,32 @@ def derive_structure_features(
             comparison.comparison_tool_version,
         )
         comparisons_by_universe[key].append(comparison)
+    LOGGER.info(
+        "Indexing %d passing structural comparisons across %d comparison universes",
+        len(passing),
+        len(comparisons_by_universe),
+    )
     cluster_rows: list[dict[str, object]] = []
     for universe_key in sorted(comparisons_by_universe):
         universe_comparisons = tuple(comparisons_by_universe[universe_key])
-        adjacency: dict[str, set[str]] = defaultdict(set)
-        for comparison in universe_comparisons:
-            if partitions and not (
-                partition_by_protein.get(comparison.protein_a_id) == "DISCOVERY"
-                and partition_by_protein.get(comparison.protein_b_id) == "DISCOVERY"
-            ):
-                continue
-            adjacency[comparison.protein_a_id].add(comparison.protein_b_id)
-            adjacency[comparison.protein_b_id].add(comparison.protein_a_id)
-        components = _connected_components(adjacency=adjacency)
+        indexed_components = _index_structural_components(
+            comparisons=universe_comparisons,
+            partition_by_protein=partition_by_protein if partitions else None,
+        )
         universe_id, coverage_scope, comparison_tool, comparison_tool_version = universe_key
         evidence_reference = "|".join(universe_key)
-        for component in components:
-            if len(component) < 2:
-                continue
+        LOGGER.info(
+            "Indexed structural universe %s tool=%s %s comparisons=%d "
+            "reference_components=%d memberships=%d",
+            universe_id,
+            comparison_tool,
+            comparison_tool_version,
+            len(universe_comparisons),
+            len(indexed_components),
+            sum(len(component.members) for component in indexed_components),
+        )
+        for indexed_component in indexed_components:
+            component = indexed_component.reference_members
             definition_digest = sha256_json(
                 value={
                     "feature_type": "STRUCTURE_CLUSTER",
@@ -205,48 +223,13 @@ def derive_structure_features(
                 }
             )
             cluster_id = f"SC_{definition_digest[:16]}"
-            member_set = set(component)
-            number_of_edges = sum(
-                1
-                for source in component
-                for target in adjacency[source]
-                if target in member_set and source < target
-            )
-            members: dict[str, tuple[str, int, float | None]] = {}
-            for protein_id in component:
-                incident = [
-                    item.tm_score
-                    for item in universe_comparisons
-                    if item.tm_score is not None
-                    and {item.protein_a_id, item.protein_b_id} <= member_set
-                    and protein_id in {item.protein_a_id, item.protein_b_id}
-                ]
-                method = "DISCOVERY_COMPONENT" if partitions else "ALL_DATA_COMPONENT"
-                members[protein_id] = (method, len(incident), max(incident) if incident else None)
-            if partitions:
-                for protein_id, partition in sorted(partition_by_protein.items()):
-                    if partition != "VALIDATION":
-                        continue
-                    incident = [
-                        item.tm_score
-                        for item in universe_comparisons
-                        if item.tm_score is not None
-                        and (
-                            item.protein_a_id == protein_id
-                            and item.protein_b_id in member_set
-                            or item.protein_b_id == protein_id
-                            and item.protein_a_id in member_set
-                        )
-                    ]
-                    if incident:
-                        members[protein_id] = (
-                            "VALIDATION_PROJECTION",
-                            len(incident),
-                            max(incident),
-                        )
-            for protein_id, (membership_method, support_count, best_score) in sorted(
-                members.items()
-            ):
+            member_count = len(indexed_component.members)
+            for (
+                protein_id,
+                membership_method,
+                support_count,
+                best_score,
+            ) in indexed_component.members:
                 features.append(
                     _feature(
                         protein_id=protein_id,
@@ -263,9 +246,9 @@ def derive_structure_features(
                     {
                         "cluster_id": cluster_id,
                         "protein_id": protein_id,
-                        "member_count": len(members),
+                        "member_count": member_count,
                         "reference_member_count": len(component),
-                        "edge_count": number_of_edges,
+                        "edge_count": indexed_component.edge_count,
                         "reference_partition": reference_partition,
                         "membership_method": membership_method,
                         "supporting_edge_count": support_count,
@@ -279,6 +262,11 @@ def derive_structure_features(
                         "comparison_tool_version": comparison_tool_version,
                     }
                 )
+    LOGGER.info(
+        "Derived %d structural-cluster membership rows and %d total structural features",
+        len(cluster_rows),
+        len(features),
+    )
     unique_features = {
         (item.protein_id, item.feature_type, item.feature_id, item.evidence_reference): item
         for item in features
@@ -291,6 +279,132 @@ def derive_structure_features(
         sorted(cluster_rows, key=lambda item: (str(item["cluster_id"]), str(item["protein_id"])))
     )
     return ordered_features, ordered_clusters
+
+
+def _index_structural_components(
+    *,
+    comparisons: tuple[PairwiseStructureComparison, ...],
+    partition_by_protein: Mapping[str, str] | None,
+) -> tuple[_IndexedStructuralComponent, ...]:
+    """Index cluster support in passes linear in comparison and output counts.
+
+    Reference components are formed from every passing edge when no partition
+    mapping is supplied. With a mapping, only discovery-to-discovery edges form
+    components and validation proteins are projected onto those frozen
+    components. Each comparison is inspected a constant number of times; the
+    implementation never rescans the complete comparison universe per protein.
+
+    Args:
+        comparisons: Passing comparisons from one structural evidence universe.
+        partition_by_protein: Optional protein-to-partition mapping.
+
+    Returns:
+        Deterministically ordered components with reference and projection
+        membership support.
+    """
+
+    discovery_only = partition_by_protein is not None
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    for comparison in comparisons:
+        if discovery_only and not (
+            partition_by_protein.get(comparison.protein_a_id) == "DISCOVERY"
+            and partition_by_protein.get(comparison.protein_b_id) == "DISCOVERY"
+        ):
+            continue
+        adjacency[comparison.protein_a_id].add(comparison.protein_b_id)
+        adjacency[comparison.protein_b_id].add(comparison.protein_a_id)
+
+    reference_components = tuple(
+        component for component in _connected_components(adjacency=adjacency) if len(component) >= 2
+    )
+    component_by_protein = {
+        protein_id: component_index
+        for component_index, component in enumerate(reference_components)
+        for protein_id in component
+    }
+    reference_support: list[dict[str, tuple[int, float]]] = [{} for _ in reference_components]
+    projection_support: list[dict[str, tuple[int, float]]] = [{} for _ in reference_components]
+
+    for comparison in comparisons:
+        score = comparison.tm_score
+        if score is None:
+            continue
+        protein_a = comparison.protein_a_id
+        protein_b = comparison.protein_b_id
+        component_a = component_by_protein.get(protein_a)
+        component_b = component_by_protein.get(protein_b)
+        if component_a is not None and component_a == component_b:
+            _record_structural_support(
+                support=reference_support[component_a],
+                protein_id=protein_a,
+                score=score,
+            )
+            if protein_b != protein_a:
+                _record_structural_support(
+                    support=reference_support[component_a],
+                    protein_id=protein_b,
+                    score=score,
+                )
+        if not discovery_only:
+            continue
+        if partition_by_protein.get(protein_a) == "VALIDATION" and component_b is not None:
+            _record_structural_support(
+                support=projection_support[component_b],
+                protein_id=protein_a,
+                score=score,
+            )
+        if partition_by_protein.get(protein_b) == "VALIDATION" and component_a is not None:
+            _record_structural_support(
+                support=projection_support[component_a],
+                protein_id=protein_b,
+                score=score,
+            )
+
+    indexed: list[_IndexedStructuralComponent] = []
+    reference_method = "DISCOVERY_COMPONENT" if discovery_only else "ALL_DATA_COMPONENT"
+    for component_index, component in enumerate(reference_components):
+        member_rows = [
+            (protein_id, reference_method, *reference_support[component_index][protein_id])
+            for protein_id in component
+        ]
+        member_rows.extend(
+            (protein_id, "VALIDATION_PROJECTION", *support)
+            for protein_id, support in projection_support[component_index].items()
+        )
+        component_set = set(component)
+        edge_count = sum(
+            1
+            for source in component
+            for target in adjacency[source]
+            if target in component_set and source < target
+        )
+        indexed.append(
+            _IndexedStructuralComponent(
+                reference_members=component,
+                edge_count=edge_count,
+                members=tuple(sorted(member_rows, key=lambda item: item[0])),
+            )
+        )
+    return tuple(indexed)
+
+
+def _record_structural_support(
+    *, support: dict[str, tuple[int, float]], protein_id: str, score: float
+) -> None:
+    """Accumulate an incident-edge count and best score for one protein.
+
+    Args:
+        support: Mutable per-protein support index.
+        protein_id: Protein receiving support from the current edge.
+        score: Complete comparison TM-score.
+    """
+
+    previous = support.get(protein_id)
+    if previous is None:
+        support[protein_id] = (1, score)
+        return
+    count, best_score = previous
+    support[protein_id] = (count + 1, max(best_score, score))
 
 
 def _comparison_passes(

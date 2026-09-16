@@ -275,6 +275,8 @@ def test_launchers_reject_missing_option_values() -> None:
         ("run_completed_e3_workflow.sh", "--run-root"),
         ("run_completed_e3_workflow.sh", "--minimum-mean-plddt"),
         ("run_completed_e3_workflow.sh", "--slurm-memory"),
+        ("run_completed_e3_workflow.sh", "--slurm-scratch-base"),
+        ("run_completed_e3_workflow.sh", "--slurm-min-scratch-free-gib"),
         ("run_protein_signature_analysis.sh", "--memory-mb"),
         ("submit_protein_signature_workflow_slurm.sh", "--controller-memory"),
     )
@@ -425,10 +427,15 @@ def test_completed_e3_launcher_submits_bounded_slurm_worker(tmp_path: Path) -> N
     fake_bin.mkdir()
     capture = tmp_path / "sbatch_arguments.txt"
     environment_capture = tmp_path / "sbatch_environment.txt"
+    scratch_environment_capture = tmp_path / "sbatch_scratch_environment.txt"
     sbatch = fake_bin / "sbatch"
     sbatch.write_text(
         '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "${FAKE_SBATCH_LOG}"\n'
         'printf \'%s\\n\' "${SLURM_CPUS_PER_TASK-unset}" > "${FAKE_SBATCH_ENV}"\n'
+        "printf '%s\\n' \"${PROTEIN_SIGNATURE_SCRATCH_BASE-unset}\" "
+        '"${PROTEIN_SIGNATURE_WORK_DIR-unset}" '
+        '"${PROTEIN_SIGNATURE_MIN_SCRATCH_FREE_GIB-unset}" '
+        '> "${FAKE_SBATCH_SCRATCH_ENV}"\n'
         "printf '98765;cluster\\n'\n",
         encoding="utf-8",
     )
@@ -437,6 +444,7 @@ def test_completed_e3_launcher_submits_bounded_slurm_worker(tmp_path: Path) -> N
     environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
     environment["FAKE_SBATCH_LOG"] = str(capture)
     environment["FAKE_SBATCH_ENV"] = str(environment_capture)
+    environment["FAKE_SBATCH_SCRATCH_ENV"] = str(scratch_environment_capture)
     environment["SLURM_CPUS_PER_TASK"] = "99"
     environment["BASH_COMPAT"] = "3.2"
 
@@ -459,6 +467,10 @@ def test_completed_e3_launcher_submits_bounded_slurm_worker(tmp_path: Path) -> N
             "64G",
             "--slurm-time",
             "04:00:00",
+            "--slurm-scratch-base",
+            str(tmp_path / "preferred_scratch"),
+            "--slurm-min-scratch-free-gib",
+            "7",
             "--threads",
             "4",
         ),
@@ -479,6 +491,11 @@ def test_completed_e3_launcher_submits_bounded_slurm_worker(tmp_path: Path) -> N
     assert str(root / "slurm/run_completed_e3_workflow.sbatch") in arguments
     assert "--submit-slurm" not in arguments
     assert environment_capture.read_text(encoding="utf-8").strip() == "unset"
+    assert scratch_environment_capture.read_text(encoding="utf-8").splitlines() == [
+        str(tmp_path / "preferred_scratch"),
+        str(work_dir),
+        "7",
+    ]
     assert (work_dir / "slurm_logs").is_dir()
 
 
@@ -601,6 +618,46 @@ def test_completed_e3_launcher_validates_slurm_options_and_dry_run(tmp_path: Pat
     )
     assert invalid_time.returncode == 2
     assert "HH:MM:SS" in invalid_time.stderr
+    invalid_scratch = subprocess.run(
+        (
+            "bash",
+            str(launcher),
+            "--phase",
+            "prepare",
+            "--run-root",
+            str(run_root),
+            "--work-dir",
+            str(work_dir),
+            "--submit-slurm",
+            "--slurm-scratch-base",
+            "relative/scratch",
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert invalid_scratch.returncode == 2
+    assert "--slurm-scratch-base must be absolute" in invalid_scratch.stderr
+    invalid_scratch_space = subprocess.run(
+        (
+            "bash",
+            str(launcher),
+            "--phase",
+            "prepare",
+            "--run-root",
+            str(run_root),
+            "--work-dir",
+            str(work_dir),
+            "--submit-slurm",
+            "--slurm-min-scratch-free-gib",
+            "0",
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert invalid_scratch_space.returncode == 2
+    assert "must be a positive integer" in invalid_scratch_space.stderr
     dry_run = subprocess.run(
         (
             "bash",
@@ -625,14 +682,17 @@ def test_completed_e3_launcher_validates_slurm_options_and_dry_run(tmp_path: Pat
 
 
 def test_completed_e3_slurm_worker_checks_allocation_and_executes(tmp_path: Path) -> None:
-    """The direct worker should reject mismatched CPUs and exec the exact launcher argv."""
+    """The direct worker should validate CPUs, scratch and exact launcher arguments."""
 
     root = Path(__file__).parents[1]
     worker = root / "slurm/run_completed_e3_workflow.sbatch"
     runner_log = tmp_path / "runner.log"
+    temporary_environment_log = tmp_path / "temporary_environment.log"
     runner = tmp_path / "runner.sh"
     runner.write_text(
-        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "${FAKE_RUNNER_LOG}"\n',
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "${FAKE_RUNNER_LOG}"\n'
+        'printf \'%s\\n\' "${TMPDIR}" "${TMP}" "${TEMP}" '
+        '> "${FAKE_TEMPORARY_ENVIRONMENT_LOG}"\n',
         encoding="utf-8",
     )
     runner.chmod(runner.stat().st_mode | stat.S_IXUSR)
@@ -642,7 +702,11 @@ def test_completed_e3_slurm_worker_checks_allocation_and_executes(tmp_path: Path
             "SLURM_JOB_ID": "1122",
             "SLURM_CPUS_PER_TASK": "3",
             "PROTEIN_SIGNATURE_REQUESTED_CPUS": "4",
+            "PROTEIN_SIGNATURE_SCRATCH_BASE": str(tmp_path / "scratch"),
+            "PROTEIN_SIGNATURE_WORK_DIR": str(tmp_path / "work"),
+            "PROTEIN_SIGNATURE_MIN_SCRATCH_FREE_GIB": "1",
             "FAKE_RUNNER_LOG": str(runner_log),
+            "FAKE_TEMPORARY_ENVIRONMENT_LOG": str(temporary_environment_log),
         }
     )
     mismatch = subprocess.run(
@@ -673,7 +737,67 @@ def test_completed_e3_slurm_worker_checks_allocation_and_executes(tmp_path: Path
     )
     assert success.returncode == 0, success.stderr
     assert "Job ID: 1122" in success.stdout
+    assert "Scratch source: PROTEIN_SIGNATURE_SCRATCH_BASE" in success.stdout
     assert runner_log.read_text(encoding="utf-8").splitlines() == ["--phase", "prepare"]
+    temporary_paths = temporary_environment_log.read_text(encoding="utf-8").splitlines()
+    assert len(set(temporary_paths)) == 1
+    assert temporary_paths[0].endswith("/scratch/protein_signature_1122/generic_tmp")
+    assert not (tmp_path / "scratch/protein_signature_1122").exists()
+    provenance = tmp_path / "work/slurm_logs/protein_signature_scratch_1122.tsv"
+    assert "source\tPROTEIN_SIGNATURE_SCRATCH_BASE" in provenance.read_text(encoding="utf-8")
+
+
+def test_completed_e3_slurm_worker_falls_back_and_retains_failed_scratch(
+    tmp_path: Path,
+) -> None:
+    """Invalid scheduler scratch should fall back, and failed-job evidence should remain."""
+
+    root = Path(__file__).parents[1]
+    worker = root / "slurm/run_completed_e3_workflow.sbatch"
+    unavailable_slurm_tmp = tmp_path / "not_a_directory"
+    unavailable_slurm_tmp.write_text("occupied\n", encoding="utf-8")
+    fallback_tmp = tmp_path / "fallback_tmp"
+    temporary_environment_log = tmp_path / "failed_temporary_environment.log"
+    runner = tmp_path / "failing_runner.sh"
+    runner.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'%s\\n\' "${TMPDIR}" > "${FAKE_TEMPORARY_ENVIRONMENT_LOG}"\n'
+        "exit 7\n",
+        encoding="utf-8",
+    )
+    runner.chmod(runner.stat().st_mode | stat.S_IXUSR)
+    environment = os.environ.copy()
+    environment.pop("PROTEIN_SIGNATURE_SCRATCH_BASE", None)
+    environment.update(
+        {
+            "SLURM_JOB_ID": "2233",
+            "SLURM_CPUS_PER_TASK": "2",
+            "PROTEIN_SIGNATURE_REQUESTED_CPUS": "2",
+            "PROTEIN_SIGNATURE_WORK_DIR": str(tmp_path / "work"),
+            "PROTEIN_SIGNATURE_MIN_SCRATCH_FREE_GIB": "1",
+            "SLURM_TMPDIR": str(unavailable_slurm_tmp),
+            "TMPDIR": str(fallback_tmp),
+            "FAKE_TEMPORARY_ENVIRONMENT_LOG": str(temporary_environment_log),
+        }
+    )
+
+    result = subprocess.run(
+        ("bash", str(worker), str(runner)),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+
+    expected_scratch = fallback_tmp / "protein_signature_2233"
+    assert result.returncode == 7
+    assert "Skipping unavailable SLURM_TMPDIR" in result.stderr
+    assert "Job scratch retained after exit 7" in result.stderr
+    assert "Scratch source: TMPDIR" in result.stdout
+    assert temporary_environment_log.read_text(encoding="utf-8").strip() == str(
+        expected_scratch / "generic_tmp"
+    )
+    assert expected_scratch.is_dir()
 
 
 def test_mutating_launchers_reject_broad_or_option_like_destinations(

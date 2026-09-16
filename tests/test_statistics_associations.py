@@ -49,6 +49,7 @@ from protein_signatures.statistics import (
 from protein_signatures.structural_signatures import (
     _comparison_passes,
     _connected_components,
+    _index_structural_components,
     derive_structure_assessment_universes,
     derive_structure_features,
 )
@@ -748,6 +749,43 @@ def test_structural_clusters_are_frozen_before_validation_projection() -> None:
     assert projected["membership_method"] == "VALIDATION_PROJECTION"
     assert projected["reference_member_count"] == 2
     assert all(row["reference_partition"] == "DISCOVERY" for row in rows)
+
+
+def test_structural_component_index_accumulates_support_in_bounded_passes() -> None:
+    """Indexed clustering should preserve duplicate-edge and projection evidence."""
+
+    comparisons = (
+        _structure_comparison("d1", "d2", "reference_one", score=0.7),
+        _structure_comparison("d2", "d3", "reference_two", score=0.8),
+        _structure_comparison("d1", "d2", "reference_duplicate", score=0.9),
+        _structure_comparison("v1", "d1", "projection_one", score=0.6),
+        _structure_comparison("d2", "v1", "projection_two", score=0.95),
+        _structure_comparison("v2", "d3", "projection_three", score=0.65),
+        _structure_comparison("v1", "v2", "validation_only", score=0.99),
+    )
+    partitions = {
+        "d1": "DISCOVERY",
+        "d2": "DISCOVERY",
+        "d3": "DISCOVERY",
+        "v1": "VALIDATION",
+        "v2": "VALIDATION",
+        **{f"unmodelled_{index}": "VALIDATION" for index in range(10_000)},
+    }
+
+    (component,) = _index_structural_components(
+        comparisons=comparisons,
+        partition_by_protein=partitions,
+    )
+
+    assert component.reference_members == ("d1", "d2", "d3")
+    assert component.edge_count == 2
+    assert component.members == (
+        ("d1", "DISCOVERY_COMPONENT", 2, 0.9),
+        ("d2", "DISCOVERY_COMPONENT", 3, 0.9),
+        ("d3", "DISCOVERY_COMPONENT", 1, 0.8),
+        ("v1", "VALIDATION_PROJECTION", 2, 0.95),
+        ("v2", "VALIDATION_PROJECTION", 1, 0.65),
+    )
 
 
 def test_structural_clusters_do_not_bridge_comparison_universes_or_tools() -> None:

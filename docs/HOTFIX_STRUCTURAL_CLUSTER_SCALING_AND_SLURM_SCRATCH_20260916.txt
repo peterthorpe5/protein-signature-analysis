@@ -1,0 +1,130 @@
+Protein Signature Analysis hotfix
+Structural-cluster scaling and portable Slurm scratch
+Date: 16 September 2026
+
+1. Cluster symptom and diagnosis
+================================
+
+Slurm job 388402 completed the 10,827-model Foldseek search and logged:
+
+  Validated profile structural policy status=COMPLETE eligible_items=2507537
+  Prepared 0 confirmatory generic feature rows ...
+
+The zero is not a loss of Pfam, Foldseek or imported Stage 09b evidence. It
+describes only the optional generic feature-input table. Immediately afterwards,
+the pipeline enters structural-cluster derivation.
+
+The job-state directory inspected during diagnosis was from the older campaign:
+
+  e3_all1972_v0_1_0_20260914
+
+Job 388402 instead uses:
+
+  e3_all1972_evidence_provisional_v0_1_0_20260915
+
+Its log already showed 04_analysis/CAMPAIGN_REVALIDATED.json, so it had reached
+analysis stage 04 rather than remaining at stages 01 or 02.
+
+The original structural-cluster implementation was correct for small fixtures
+but did not scale. For each reference member it rescanned every comparison in
+the structural universe. It then repeated a full scan for every validation
+protein and every component. With about 2.5 million comparisons and 121,635
+partition assignments, the silent Python step could require many billions of
+comparisons and was unlikely to finish within the 48-hour allocation. This is
+an algorithmic scaling defect, not a RAM or temporary-directory failure.
+
+2. Structural correction
+========================
+
+Structural clustering now uses bounded indexing passes for each evidence
+universe:
+
+* discovery-to-discovery edges still define frozen connected components;
+* validation-to-validation edges still cannot define or bridge a component;
+* validation proteins are projected only through their direct passing edges to
+  a frozen discovery component;
+* duplicate comparison rows still contribute separately to supporting-edge
+  counts;
+* best TM-score, unique graph-edge count, component membership, universe/tool
+  separation, cluster digests and deterministic output ordering are preserved;
+* comparison thresholds and scientific evidence rules are unchanged.
+
+The work is now proportional to the comparisons, graph and emitted memberships,
+rather than comparisons multiplied by every partitioned protein/component.
+Progress logging reports the structural input size, passing-edge count, each
+universe's component and membership counts, and completion.
+
+The indexed implementation was checked against the former reference algorithm
+on 100 deterministic randomized discovery/validation graphs with exact output
+equality. Dedicated unit tests also cover duplicate support, best-score
+selection, validation projection and 10,000 irrelevant validation proteins.
+
+3. Portable Slurm scratch
+=========================
+
+The completed-E3 Slurm worker now selects temporary storage inside the allocated
+job, in this order:
+
+1. --slurm-scratch-base / PROTEIN_SIGNATURE_SCRATCH_BASE
+2. SLURM_TMPDIR
+3. TMPDIR
+4. /tmp/${USER}
+5. WORK_DIR/workflow_state/tmp on persistent storage
+
+For every candidate it creates the base where permitted, resolves its physical
+path, verifies it is a writable directory, performs a real write probe and
+checks free capacity. The first valid candidate receives a controlled
+protein_signature_JOBID subdirectory. TMPDIR, TMP and TEMP are exported to its
+generic_tmp child, which is also the temporary base used by Foldseek.
+
+The default free-space requirement is 10 GiB. It can be changed explicitly:
+
+  --slurm-min-scratch-free-gib 25
+
+A site-specific preferred base can be supplied without relying on a login-node
+TMPDIR:
+
+  --slurm-scratch-base "/scratch/${USER}"
+
+No scratch option is required. If scheduler or node-local temporary storage is
+absent, the worker falls back to the persistent work directory. The exact
+selection and capacity are recorded at:
+
+  WORK_DIR/slurm_logs/protein_signature_scratch_JOBID.tsv
+
+On success, only the validated per-job scratch directory is removed. On failure
+it is retained for diagnosis when the scheduler itself does not clear local
+scratch.
+
+4. Recovery for job 388402
+==========================
+
+The completed Foldseek cache is checksum-keyed and persistent. After installing
+this hotfix, resubmitting the same campaign and work directory should reuse that
+cache rather than repeat the eight-hour search. A reuse line should appear in
+04_run_e3_campaign.log.
+
+Because the current process is in the non-scalable implementation, cancelling it
+avoids consuming the remainder of the allocation:
+
+  scancel 388402
+
+After pulling the corrected main branch on the cluster, repeat the same
+run_completed_e3_workflow.sh --phase all command. Scratch selection is automatic.
+To request an explicit cluster base, add the two options shown above.
+
+Expected new progress lines include:
+
+  Deriving structural features from ...
+  Indexing ... passing structural comparisons across ... comparison universes
+  Indexed structural universe ... reference_components=... memberships=...
+  Completed structural feature derivation features=... cluster_memberships=...
+
+5. Verification performed
+===========================
+
+The hotfix is covered by structural, Foldseek, launcher and worker tests,
+including scratch precedence, missing/unusable scheduler scratch, successful
+cleanup, failed-job retention, provenance, option validation and confirmation
+that Foldseek creates its temporary directory below TMPDIR. The full repository
+quality gates and exact final counts are recorded in RELEASE_QA.md.

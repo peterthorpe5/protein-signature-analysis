@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Replace structural-cluster membership's repeated full-universe scans with
+  bounded edge indexes while preserving discovery components, held-out
+  projection, support counts, best scores, cluster identities and deterministic
+  output. Add progress logs for the formerly silent post-Foldseek stage.
+- Add allocation-time Slurm scratch discovery with explicit, `SLURM_TMPDIR`,
+  `TMPDIR`, node `/tmp` and persistent-work-directory fallbacks; validate real
+  writability and free space, export `TMPDIR`/`TMP`/`TEMP`, record provenance,
+  clean successful job scratch and retain failed-job scratch for diagnosis.
 - Make both evidence-led Snakemake DAGs compatible with atomic bundle
   publication by explicitly allowing removal of the empty output directory that
   Snakemake creates before the rule command. Existing files, non-empty

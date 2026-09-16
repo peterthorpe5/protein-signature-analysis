@@ -140,6 +140,38 @@ thread count. Standard output and error are retained under `WORK_DIR/slurm_logs/
 Slurm job identifier. The DAG creates or verifies `prepared_inputs/`, then safely creates or
 adopts `reviewed_label_assignments.tsv`; it never overwrites that human-owned file.
 
+The direct worker resolves temporary storage in this order:
+
+1. `--slurm-scratch-base` / `PROTEIN_SIGNATURE_SCRATCH_BASE`;
+2. scheduler-provided `SLURM_TMPDIR`;
+3. inherited `TMPDIR`;
+4. `/tmp/${USER}` on the allocated node; and
+5. `WORK_DIR/workflow_state/tmp` on persistent storage.
+
+It creates each missing candidate where permitted, resolves its physical path, rejects
+non-directories and unsafe per-job links, performs a real write probe, checks available space,
+and selects the first valid candidate.
+The default minimum is 10 GiB and can be changed with
+`--slurm-min-scratch-free-gib`. The job-specific directory is exported through `TMPDIR`,
+`TMP` and `TEMP`; this is the directory used by Foldseek's explicit temporary workspace and
+by Python's normal temporary-file machinery. A TSV record is written to
+`WORK_DIR/slurm_logs/protein_signature_scratch_JOBID.tsv`. Successful jobs remove only their
+validated `protein_signature_JOBID` directory. Failed jobs retain it for diagnosis where the
+scheduler does not independently clear node-local scratch.
+
+For example:
+
+```bash
+./run_completed_e3_workflow.sh \
+  ... \
+  --submit-slurm \
+  --slurm-scratch-base "/scratch/${USER}" \
+  --slurm-min-scratch-free-gib 25
+```
+
+No scratch option is required. If the cluster has neither `SLURM_TMPDIR` nor a usable
+`TMPDIR`, the node `/tmp` and persistent workflow-state fallbacks keep execution portable.
+
 Preparation streams projected Parquet columns in bounded batches and streams FASTA output;
 it no longer materialises every full upstream Parquet row twice. It still retains one exact
 deduplicated sequence and its merged context per protein. The observed all-1972 job used

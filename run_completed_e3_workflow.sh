@@ -102,6 +102,12 @@ Slurm options:
   --slurm-time TIME      Wall time as HH:MM:SS or D-HH:MM:SS (default: 2-00:00:00).
   --slurm-job-name NAME  Job name (default: protein_signature_PHASE).
   --slurm-log-dir PATH   Absolute log directory (default: WORK_DIR/slurm_logs).
+  --slurm-scratch-base PATH
+                         Optional preferred scratch base. The worker otherwise
+                         tries SLURM_TMPDIR, TMPDIR, node /tmp and finally a
+                         persistent WORK_DIR fallback.
+  --slurm-min-scratch-free-gib N
+                         Minimum free space accepted for scratch (default: 10 GiB).
   --slurm-dry-run        Print the exact validated sbatch command without submitting.
 EOF
 }
@@ -145,6 +151,8 @@ SLURM_MEMORY="128G"
 SLURM_TIME="2-00:00:00"
 SLURM_JOB_NAME=""
 SLURM_LOG_DIR=""
+SLURM_SCRATCH_BASE="${PROTEIN_SIGNATURE_SCRATCH_BASE:-}"
+SLURM_MIN_SCRATCH_FREE_GIB="${PROTEIN_SIGNATURE_MIN_SCRATCH_FREE_GIB:-10}"
 SLURM_DRY_RUN="false"
 SLURM_OPTION_SEEN="false"
 
@@ -305,6 +313,18 @@ while [[ $# -gt 0 ]]; do
         --slurm-log-dir)
             require_option_value "$@"
             SLURM_LOG_DIR="${2:-}"
+            SLURM_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --slurm-scratch-base)
+            require_option_value "$@"
+            SLURM_SCRATCH_BASE="${2:-}"
+            SLURM_OPTION_SEEN="true"
+            shift 2
+            ;;
+        --slurm-min-scratch-free-gib)
+            require_option_value "$@"
+            SLURM_MIN_SCRATCH_FREE_GIB="${2:-}"
             SLURM_OPTION_SEEN="true"
             shift 2
             ;;
@@ -503,7 +523,7 @@ submit_slurm_phase() {
         "--mem=${SLURM_MEMORY}"
         "--time=${SLURM_TIME}"
         "--cpus-per-task=${THREADS}"
-        "--export=ALL,PROTEIN_SIGNATURE_REQUESTED_CPUS=${THREADS}"
+        "--export=ALL"
         "--chdir=${SCRIPT_DIR}"
         "--output=${log_dir}/%x_%j.out"
         "--error=${log_dir}/%x_%j.err"
@@ -551,7 +571,12 @@ submit_slurm_phase() {
     fi
 
     if [[ "${SLURM_DRY_RUN}" == "true" ]]; then
-        printf 'Validated Slurm command; nothing was submitted:\n  env -u SLURM_CPUS_PER_TASK sbatch'
+        printf 'Validated Slurm command; nothing was submitted:\n  env -u SLURM_CPUS_PER_TASK'
+        printf ' PROTEIN_SIGNATURE_REQUESTED_CPUS=%q' "${THREADS}"
+        printf ' PROTEIN_SIGNATURE_WORK_DIR=%q' "${WORK_DIR}"
+        printf ' PROTEIN_SIGNATURE_MIN_SCRATCH_FREE_GIB=%q' \
+            "${SLURM_MIN_SCRATCH_FREE_GIB}"
+        printf ' PROTEIN_SIGNATURE_SCRATCH_BASE=%q sbatch' "${SLURM_SCRATCH_BASE}"
         printf ' %q' "${sbatch_arguments[@]}" "${SLURM_WORKER}" \
             "${SCRIPT_DIR}/run_completed_e3_workflow.sh" "${worker_arguments[@]}"
         printf '\n'
@@ -568,7 +593,12 @@ submit_slurm_phase() {
     fi
     mkdir -p -- "${log_dir}"
     submission_result="$(
-        env -u SLURM_CPUS_PER_TASK sbatch \
+        env -u SLURM_CPUS_PER_TASK \
+            PROTEIN_SIGNATURE_REQUESTED_CPUS="${THREADS}" \
+            PROTEIN_SIGNATURE_WORK_DIR="${WORK_DIR}" \
+            PROTEIN_SIGNATURE_MIN_SCRATCH_FREE_GIB="${SLURM_MIN_SCRATCH_FREE_GIB}" \
+            PROTEIN_SIGNATURE_SCRATCH_BASE="${SLURM_SCRATCH_BASE}" \
+            sbatch \
             "${sbatch_arguments[@]}" \
             "${SLURM_WORKER}" \
             "${SCRIPT_DIR}/run_completed_e3_workflow.sh" \
@@ -628,6 +658,14 @@ if [[ "${SUBMIT_SLURM}" == "true" ]]; then
     fi
     if [[ -n "${SLURM_LOG_DIR}" && "${SLURM_LOG_DIR}" != /* ]]; then
         echo "--slurm-log-dir must be absolute." >&2
+        exit 2
+    fi
+    if [[ -n "${SLURM_SCRATCH_BASE}" && "${SLURM_SCRATCH_BASE}" != /* ]]; then
+        echo "--slurm-scratch-base must be absolute." >&2
+        exit 2
+    fi
+    if [[ ! "${SLURM_MIN_SCRATCH_FREE_GIB}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "--slurm-min-scratch-free-gib must be a positive integer." >&2
         exit 2
     fi
     submit_slurm_phase

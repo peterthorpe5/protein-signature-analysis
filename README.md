@@ -277,6 +277,23 @@ completed-E3 Snakemake DAG through its `review_ready` target. An existing checks
 The observed all-1972 preparation used about 4 GiB peak RSS; 32 GiB retains ample headroom.
 Scheduler logs are written to `${SIGNATURE_WORK}/slurm_logs/`.
 
+The Slurm worker also creates and validates a per-job scratch directory. It tries an explicit
+`--slurm-scratch-base`, then `SLURM_TMPDIR`, `TMPDIR`, `/tmp/${USER}` and finally
+`${SIGNATURE_WORK}/workflow_state/tmp`. Each candidate must be an ordinary writable directory
+with at least 10 GiB free by default. The selected job directory is exported as `TMPDIR`,
+`TMP` and `TEMP`, so Foldseek and Python temporary files use it automatically. Selection and
+capacity are recorded in `slurm_logs/protein_signature_scratch_JOBID.tsv`; successful jobs
+remove their per-job scratch, while failed jobs retain it when the underlying scheduler does.
+For a cluster-specific location or larger capacity guard, add for example:
+
+```bash
+  --slurm-scratch-base "/scratch/${USER}" \
+  --slurm-min-scratch-free-gib 25
+```
+
+The persistent work-directory fallback means the workflow can still run when the cluster
+does not define or provide a node-local temporary directory.
+
 This produces exact FASTA, Pfam assessment, structure and curation-review authorities under
 `prepared_inputs/`. All generated label assignments are deliberately `UNMAPPED`; upstream
 E3-family fields are hints only. Snakemake, rather than a manual `cp`, stages this editable
