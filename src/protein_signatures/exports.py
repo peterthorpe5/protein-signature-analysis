@@ -158,17 +158,28 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
             subtitle_format = workbook.add_format(
                 {"font_color": "#425466", "italic": True, "align": "left"}
             )
-            integer_format = workbook.add_format({"num_format": "#,##0", "valign": "top"})
-            float_format = workbook.add_format({"num_format": "0.0000", "valign": "top"})
-            scientific_format = workbook.add_format({"num_format": "0.00E+00", "valign": "top"})
-            text_format = workbook.add_format({"valign": "top"})
+            cell_format_options = {
+                "border": 1,
+                "border_color": "#D9E2F3",
+                "valign": "top",
+            }
+            integer_format = workbook.add_format(
+                {**cell_format_options, "num_format": "#,##0"}
+            )
+            float_format = workbook.add_format(
+                {**cell_format_options, "num_format": "0.0000"}
+            )
+            scientific_format = workbook.add_format(
+                {**cell_format_options, "num_format": "0.00E+00"}
+            )
+            text_format = workbook.add_format(cell_format_options)
             header_format = workbook.add_format(
                 {
                     "bold": True,
                     "font_color": "#FFFFFF",
                     "bg_color": "#1F4E78",
                     "border": 1,
-                    "border_color": "#D9E2F3",
+                    "border_color": "#A6A6A6",
                     "text_wrap": True,
                     "align": "center",
                     "valign": "vcenter",
@@ -263,13 +274,21 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
                         {
                             "name": f"ProteinSignatureData{sheet_number:03d}",
                             "style": "Table Style Medium 2",
-                            "columns": [{"header": str(column)} for column in chunk.columns],
+                            "autofilter": True,
+                            "banded_rows": True,
+                            "columns": [
+                                {
+                                    "header": str(column),
+                                    "header_format": header_format,
+                                }
+                                for column in chunk.columns
+                            ],
                         },
                     )
                 else:
                     worksheet.autofilter(2, 0, 2, final_column)
                 worksheet.freeze_panes(3, 0)
-                worksheet.hide_gridlines(2)
+                worksheet.hide_gridlines(0)
                 worksheet.set_row(0, 28)
                 worksheet.set_row(2, 34)
                 worksheet.set_zoom(90)
@@ -324,11 +343,19 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
                         {
                             "name": f"ProteinSignatureLongText{continuation_number:03d}",
                             "style": "Table Style Medium 2",
-                            "columns": [{"header": str(column)} for column in continuation.columns],
+                            "autofilter": True,
+                            "banded_rows": True,
+                            "columns": [
+                                {
+                                    "header": str(column),
+                                    "header_format": header_format,
+                                }
+                                for column in continuation.columns
+                            ],
                         },
                     )
                     worksheet.freeze_panes(3, 0)
-                    worksheet.hide_gridlines(2)
+                    worksheet.hide_gridlines(0)
                     worksheet.set_row(0, 28)
                     worksheet.set_row(2, 34)
                     worksheet.set_zoom(90)
