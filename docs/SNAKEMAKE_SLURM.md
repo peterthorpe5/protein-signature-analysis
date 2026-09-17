@@ -140,6 +140,12 @@ thread count. Standard output and error are retained under `WORK_DIR/slurm_logs/
 Slurm job identifier. The DAG creates or verifies `prepared_inputs/`, then safely creates or
 adopts `reviewed_label_assignments.tsv`; it never overwrites that human-owned file.
 
+For a submitted completed-E3 run, the launcher converts `--slurm-memory` to MiB and passes
+that value to the worker as the Snakemake `e3_memory_mb` resource. For example, `256G` is
+recorded as `262144` MiB. The Slurm cgroup remains the actual memory limit; this propagation
+keeps the rule metadata, logs and requested allocation consistent. A direct, non-submitted
+run may set the resource annotation explicitly with `--memory-mb`.
+
 The direct worker resolves temporary storage in this order:
 
 1. `--slurm-scratch-base` / `PROTEIN_SIGNATURE_SCRATCH_BASE`;

@@ -1007,10 +1007,35 @@ def verify_evidence_label_bundle(*, bundle_dir: Path) -> Mapping[str, Any]:
             raise InputValidationError(f"Evidence output size differs: {candidate}")
         if sha256_file(path=candidate) != row.get("sha256"):
             raise InputValidationError(f"Evidence output checksum differs: {candidate}")
+    ignored_metadata = tuple(
+        sorted(
+            (
+                path
+                for path in root.rglob("*")
+                if path.is_file()
+                and path != marker_path
+                and _is_ignored_macos_metadata(path=path)
+            ),
+            key=str,
+        )
+    )
+    if ignored_metadata:
+        LOGGER.info(
+            "Ignored %d recognised macOS metadata files during evidence-label "
+            "verification.",
+            len(ignored_metadata),
+        )
+        for path in ignored_metadata:
+            LOGGER.info(
+                "Ignored recognised macOS metadata path=%s",
+                path.relative_to(root),
+            )
     actual = {
         str(path.relative_to(root))
         for path in root.rglob("*")
-        if path.is_file() and path != marker_path
+        if path.is_file()
+        and path != marker_path
+        and not _is_ignored_macos_metadata(path=path)
     }
     if actual != declared:
         raise InputValidationError(
@@ -1063,6 +1088,22 @@ def verify_evidence_label_bundle(*, bundle_dir: Path) -> Mapping[str, Any]:
             "Evidence marker has an analysis-domain checksum without a domain authority."
         )
     return document
+
+
+def _is_ignored_macos_metadata(*, path: Path) -> bool:
+    """Return whether a file is recognised non-scientific macOS metadata.
+
+    AppleDouble sidecars and Finder's directory-view file do not alter the
+    declared evidence authority. No other hidden or undeclared file is ignored.
+
+    Args:
+        path: Candidate file path.
+
+    Returns:
+        ``True`` only for ``._*`` AppleDouble files or ``.DS_Store``.
+    """
+
+    return path.name.startswith("._") or path.name == ".DS_Store"
 
 
 def read_evidence_audit_table(

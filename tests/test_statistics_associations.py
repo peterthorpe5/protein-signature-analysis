@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from protein_signatures.assessment import compose_feature_assessment_universes
 from protein_signatures.associations import (
     _analyse_partition,
     _apply_fdr,
@@ -333,6 +334,52 @@ def test_feature_assessment_universes_exclude_unknown_blocks() -> None:
     assert complete.analysis_unit == "FEATURE_ASSESSED_INDEPENDENCE_BLOCK"
     assert complete.target_prevalence == pytest.approx(0.5)
     assert complete.background_prevalence == pytest.approx(0.0)
+
+
+def test_shared_universal_assessment_preserves_association_results() -> None:
+    """Compact universal denominators must equal explicit per-feature copies."""
+
+    key = ("AMINO_ACID_KMER", "k3:AAA")
+    features = (
+        replace(
+            _feature(protein_id="t1", feature_id=key[1], name="AAA"),
+            feature_type=key[0],
+        ),
+        replace(
+            _feature(protein_id="t2", feature_id=key[1], name="AAA"),
+            feature_type=key[0],
+        ),
+    )
+    protein_ids = frozenset({"t1", "t2", "b1", "b2"})
+    compact = compose_feature_assessment_universes(
+        protein_ids=protein_ids,
+        features=features,
+    )
+    arguments = {
+        "comparison": _comparison(),
+        "partition": "DISCOVERY",
+        "target": {"t1", "t2"},
+        "background": {"b1", "b2"},
+        "feature_proteins": {key: {"t1", "t2"}},
+        "feature_names": {key: "AAA"},
+        "settings": _settings(),
+    }
+
+    compact_result = _analyse_partition(
+        **arguments,
+        feature_assessment_universes=compact,
+    )
+    explicit_universe = frozenset(set(protein_ids))
+    assert explicit_universe == protein_ids
+    assert explicit_universe is not protein_ids
+    explicit_result = _analyse_partition(
+        **arguments,
+        feature_assessment_universes={key: explicit_universe},
+    )
+
+    assert compact_result == explicit_result
+    assert compact_result[0].target_assessed_unit_count == 2
+    assert compact_result[0].background_assessed_unit_count == 2
 
 
 def test_all_data_features_are_excluded_from_validation_inference() -> None:

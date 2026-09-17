@@ -163,6 +163,46 @@ def test_composer_uses_sequence_domain_and_explicit_assessment_ledgers(
         )
 
 
+def test_universal_assessment_universes_share_one_immutable_protein_set() -> None:
+    """Large universal feature vocabularies must not copy the protein universe."""
+
+    protein_ids = frozenset(f"p{index}" for index in range(200))
+    features = tuple(
+        _feature("p0", "AMINO_ACID_KMER", f"k3:{index:04d}")
+        for index in range(2_000)
+    )
+
+    universes = compose_feature_assessment_universes(
+        protein_ids=protein_ids,
+        features=features,
+    )
+
+    assert len(universes) == len(features)
+    shared = universes[("AMINO_ACID_KMER", "k3:0000")]
+    assert shared is protein_ids
+    assert all(universe is shared for universe in universes.values())
+
+    normalised = normalise_feature_assessment_universes(
+        universes=universes,
+        known_protein_ids=protein_ids,
+        feature_proteins={
+            (feature.feature_type, feature.feature_id): {feature.protein_id}
+            for feature in features
+        },
+    )
+    assert normalised is not None
+    assert all(universe is shared for universe in normalised.values())
+
+    with pytest.raises(InputValidationError, match="incomplete explicit assessment universe"):
+        compose_feature_assessment_universes(
+            protein_ids=protein_ids,
+            features=features[:1],
+            explicit_assessment_universes=(
+                {("AMINO_ACID_KMER", "k3:0000"): {"p0"}},
+            ),
+        )
+
+
 def test_composer_requires_explicit_complete_structure_universes() -> None:
     """Retained structural hits must not imply a no-hit assessment universe."""
 

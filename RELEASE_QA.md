@@ -139,6 +139,33 @@ docstrings, Bash syntax, `git diff --check`, source-distribution construction an
 wheel construction/inspection passed. The hotfix is suitable for the cluster rerun but the
 repository should still not be release-tagged until the global coverage gate is restored.
 
+### Post-push k-mer assessment-memory correction
+
+The all-species evidence-led campaign subsequently completed the indexed structural stage
+and retained 168,219 k-mers represented by 119,209,362 positive protein-feature rows, but
+Slurm killed the process at the same next boundary under both 128G and 256G allocations.
+The assessment composer was attempting to materialise every one of the 121,635 campaign
+protein identifiers independently for every k-mer: 20,461,318,065 redundant set memberships.
+Universally assessed k-mer keys now reference one shared immutable campaign-protein universe,
+and repeated immutable universes are validated once and retained by identity. This changes
+only the representation: assessed absences, target/background denominators, independence
+blocks and association statistics remain identical. Explainable-model eligibility also
+constructs its all-protein set once rather than once per candidate feature.
+
+The same update ignores only recognised `._*` AppleDouble sidecars and `.DS_Store` during
+evidence-bundle inventory verification; every other undeclared file remains fatal. Submitted
+completed-E3 runs now propagate `--slurm-memory` into the Snakemake memory resource, so a
+256G allocation records `e3_memory_mb=262144` instead of the former fixed 128000 value.
+
+At the operator's request, the previously passing 376-test suite was not repeated. New unit
+tests cover shared-universe identity, exact association-result equivalence, strict macOS
+metadata tolerance and launcher memory propagation. In this packaging environment, pytest,
+Ruff, pycodestyle and pydocstyle were unavailable, so those new tests are delegated to the
+Mac/GitHub gate. A direct 5,000-feature contract check confirmed one shared universe object
+before and after normalisation and exact association-result equality. A launcher dry run
+confirmed the 256G-to-262144-MiB conversion without creating campaign state. Python
+compilation, Bash syntax, the 100-character source-line check and `git diff --check` passed.
+
 ## Code-quality and test gates
 
 | Gate | Result |

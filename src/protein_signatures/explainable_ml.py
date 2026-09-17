@@ -327,13 +327,14 @@ def _fit_one_comparison(
             None,
         )
     all_ids = (*discovery, *validation)
+    all_id_set = frozenset(all_ids)
     eligible_feature_keys = (
         None
         if feature_assessment_universes is None
         else frozenset(
             key
             for key, assessed_proteins in feature_assessment_universes.items()
-            if frozenset(all_ids) <= assessed_proteins
+            if all_id_set <= assessed_proteins
         )
     )
     feature_keys = _select_feature_keys(

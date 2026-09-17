@@ -94,6 +94,11 @@ and prespecified outcome-blind matching. Without
 With that explicit flag it runs unattended, but results remain provisional
 hypothesis-generation evidence until human scientific review.
 
+Analysis resources:
+  --memory-mb MB          Snakemake analysis-memory resource for a direct run
+                          (default: 128000). Slurm submissions derive this
+                          automatically from --slurm-memory.
+
 Slurm options:
   --submit-slurm          Submit prepare, initialise, all or run.
   --slurm-account NAME   Account (default: barton).
@@ -142,6 +147,7 @@ TEST_SAMPLES_PER_CLASS="20"
 MINIMUM_MEAN_PLDDT="50"
 CONDA_ENVIRONMENT="protein_signature_analysis"
 THREADS="1"
+MEMORY_MB="128000"
 LOG_LEVEL="INFO"
 RESUME="false"
 SUBMIT_SLURM="false"
@@ -267,6 +273,11 @@ while [[ $# -gt 0 ]]; do
             THREADS="${2:-}"
             shift 2
             ;;
+        --memory-mb)
+            require_option_value "$@"
+            MEMORY_MB="${2:-}"
+            shift 2
+            ;;
         --log-level)
             require_option_value "$@"
             LOG_LEVEL="${2:-}"
@@ -362,6 +373,10 @@ if [[ "${WORK_DIR}" == -* ]]; then
 fi
 if [[ ! "${THREADS}" =~ ^[1-9][0-9]*$ ]]; then
     echo "--threads must be a positive integer: ${THREADS}" >&2
+    exit 2
+fi
+if [[ ! "${MEMORY_MB}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--memory-mb must be a positive integer: ${MEMORY_MB}" >&2
     exit 2
 fi
 if [[ ! "${TEST_SAMPLES_PER_CLASS}" =~ ^[1-9][0-9]*$ ]] || \
@@ -501,16 +516,41 @@ validate_slurm_time() {
     return 1
 }
 
+slurm_memory_to_mb() {
+    local value="$1"
+    local amount=""
+    local unit=""
+    if [[ ! "${value}" =~ ^([1-9][0-9]*)([KMGT]?)$ ]]; then
+        return 1
+    fi
+    amount="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+    case "${unit}" in
+        "") printf '%s\n' "${amount}" ;;
+        K) printf '%s\n' "$(( (10#${amount} + 1023) / 1024 ))" ;;
+        M) printf '%s\n' "${amount}" ;;
+        G) printf '%s\n' "$(( 10#${amount} * 1024 ))" ;;
+        T) printf '%s\n' "$(( 10#${amount} * 1024 * 1024 ))" ;;
+        *) return 1 ;;
+    esac
+}
+
 submit_slurm_phase() {
     local job_name="${SLURM_JOB_NAME:-protein_signature_${PHASE}}"
     local log_dir="${SLURM_LOG_DIR:-${WORK_DIR}/slurm_logs}"
     local submission_result=""
     local job_id=""
+    local slurm_memory_mb=""
+    slurm_memory_mb="$(slurm_memory_to_mb "${SLURM_MEMORY}")" || {
+        echo "Could not convert --slurm-memory to megabytes: ${SLURM_MEMORY}" >&2
+        exit 2
+    }
     local -a worker_arguments=(
         --phase "${PHASE}"
         --work-dir "${WORK_DIR}"
         --conda-environment "${CONDA_ENVIRONMENT}"
         --threads "${THREADS}"
+        --memory-mb "${slurm_memory_mb}"
         --log-level "${LOG_LEVEL}"
         --campaign-id "${CAMPAIGN_ID}"
         --label-assignments "${LABEL_ASSIGNMENTS}"
@@ -722,7 +762,7 @@ run_e3_snakemake() {
         "e3_test_target_label=${TEST_TARGET_LABEL}"
         "e3_test_samples_per_class=${TEST_SAMPLES_PER_CLASS}"
         "e3_threads=${THREADS}"
-        "e3_memory_mb=128000"
+        "e3_memory_mb=${MEMORY_MB}"
         "e3_runtime_minutes=2880"
         "e3_log_level=${LOG_LEVEL}"
     )

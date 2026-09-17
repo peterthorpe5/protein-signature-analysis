@@ -93,8 +93,21 @@ def analyse_feature_associations(
             "No feature-assessment universes were supplied; association absence "
             "assumes every partitioned protein was assessed for every feature."
         )
+    LOGGER.info(
+        "Starting feature association analysis comparisons=%d feature_definitions=%d "
+        "feature_rows=%d",
+        len(comparisons),
+        len(feature_proteins),
+        len(features),
+    )
     results: list[AssociationResult] = []
-    for comparison in comparisons:
+    for comparison_index, comparison in enumerate(comparisons, start=1):
+        LOGGER.info(
+            "Analysing feature comparison %d/%d comparison_id=%s",
+            comparison_index,
+            len(comparisons),
+            comparison.comparison_id,
+        )
         validation_candidate_keys: frozenset[FeatureKey] | None = None
         for partition in ("DISCOVERY", "VALIDATION"):
             eligible = {
@@ -145,6 +158,11 @@ def analyse_feature_associations(
                     and item.prevalence_difference not in {None, 0.0}
                 )
     results = list(_apply_study_fdr(results=tuple(results)))
+    LOGGER.info(
+        "Completed feature association analysis comparisons=%d result_rows=%d",
+        len(comparisons),
+        len(results),
+    )
     return tuple(
         sorted(
             results,

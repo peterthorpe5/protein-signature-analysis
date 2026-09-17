@@ -127,8 +127,9 @@ def compose_feature_assessment_universes(
 
     The composer never infers a negative merely because a positive feature row
     is absent. Native sequence feature types explicitly named as universal use
-    the FASTA inventory. Domain features use successful authority assessments;
-    caller-supplied universes (for example from imported feature assessments or
+    one shared immutable FASTA inventory rather than per-feature copies. Domain
+    features use successful authority assessments; caller-supplied universes
+    (for example from imported feature assessments or
     ``derive_structure_assessment_universes``) are merged before strict
     validation. This composer never expands a structural universe from retained
     pairwise hits: an explicit completed-search universe is required upstream.
@@ -156,17 +157,21 @@ def compose_feature_assessment_universes(
     known = _validated_protein_ids(values=protein_ids, context="campaign proteins")
     universal_types = _validated_feature_types(values=universally_assessed_feature_types)
     feature_proteins: dict[FeatureKey, set[str]] = defaultdict(set)
+    universal_feature_keys: set[FeatureKey] = set()
     for feature in features:
         key = _validated_feature_key(value=(feature.feature_type, feature.feature_id))
         if feature.protein_id not in known:
             raise InputValidationError(
                 f"Feature {key!r} references unknown protein {feature.protein_id!r}."
             )
-        feature_proteins[key].add(feature.protein_id)
-    universes: dict[FeatureKey, set[str]] = {
+        if feature.feature_type in universal_types:
+            universal_feature_keys.add(key)
+        else:
+            feature_proteins[key].add(feature.protein_id)
+    universes: dict[FeatureKey, set[str] | frozenset[str]] = {
         key: set(positives) for key, positives in feature_proteins.items()
     }
-    proved_keys: set[FeatureKey] = set()
+    proved_keys: set[FeatureKey] = set(universal_feature_keys)
     if isinstance(explicit_assessment_universes, Mapping):
         raise InputValidationError(
             "explicit_assessment_universes must be a collection of per-feature mappings."
@@ -185,13 +190,16 @@ def compose_feature_assessment_universes(
         if explicit is None:  # pragma: no cover - guarded by the branch above
             raise InputValidationError("Explicit assessment universes were not normalised.")
         for key, assessed in explicit.items():
+            if key in universal_feature_keys and assessed != known:
+                raise InputValidationError(
+                    f"Universally assessed feature {key!r} has an incomplete explicit "
+                    "assessment universe."
+                )
             if key in universes:
                 universes[key].update(assessed)
                 proved_keys.add(key)
-    for key in universes:
-        if key[0] in universal_types:
-            universes[key].update(known)
-            proved_keys.add(key)
+    for key in universal_feature_keys:
+        universes[key] = known
     assessed_domains: dict[str, set[str]] = defaultdict(set)
     for assessment in domain_assessments:
         if assessment.protein_id not in known:
@@ -232,6 +240,13 @@ def compose_feature_assessment_universes(
     )
     if normalised is None:  # pragma: no cover - universes is always explicit
         raise InputValidationError("Feature assessment universes were not composed.")
+    LOGGER.info(
+        "Composed feature assessment universes definitions=%d "
+        "universal_definitions=%d shared_universal_proteins=%d",
+        len(normalised),
+        len(universal_feature_keys),
+        len(known),
+    )
     return normalised
 
 
@@ -246,6 +261,8 @@ def normalise_feature_assessment_universes(
     A protein in a feature's universe was successfully assessed for that
     feature. A protein outside the universe is unknown, not an observed zero.
     Every observed positive must therefore be present in the matching universe.
+    Repeated references to the same immutable universe are validated once and
+    preserved by identity; positive collections are inspected without copying.
 
     Args:
         universes: Proteins successfully assessed for each feature, or ``None``
@@ -265,48 +282,88 @@ def normalise_feature_assessment_universes(
     """
 
     known = _validated_protein_ids(values=known_protein_ids, context="known proteins")
-    positives: dict[FeatureKey, frozenset[str]] = {}
+    positives: dict[FeatureKey, Collection[str]] = {}
     for raw_key, raw_proteins in feature_proteins.items():
         key = _validated_feature_key(value=raw_key)
-        protein_ids = _validated_protein_ids(
+        _validate_protein_id_membership(
             values=raw_proteins,
             context=f"positive proteins for feature {key!r}",
+            known_protein_ids=known,
         )
-        unknown = protein_ids - known
-        if unknown:
-            raise InputValidationError(
-                f"Feature {key!r} contains proteins outside the known universe: "
-                f"{sorted(unknown)[:10]}"
-            )
-        positives[key] = protein_ids
+        positives[key] = raw_proteins
     if universes is None:
         return None
     normalised: NormalisedAssessmentUniverses = {}
+    validated_collections: dict[int, tuple[Collection[str], frozenset[str]]] = {}
     for raw_key, raw_proteins in universes.items():
         key = _validated_feature_key(value=raw_key)
         if key in normalised:
             raise InputValidationError(f"Duplicate assessment universe for feature {key!r}.")
-        protein_ids = _validated_protein_ids(
-            values=raw_proteins,
-            context=f"assessment universe for feature {key!r}",
-        )
-        unknown = protein_ids - known
-        if unknown:
-            raise InputValidationError(
-                f"Assessment universe for feature {key!r} contains unknown proteins: "
-                f"{sorted(unknown)[:10]}"
+        cached = validated_collections.get(id(raw_proteins))
+        if cached is not None and cached[0] is raw_proteins:
+            protein_ids = cached[1]
+        else:
+            protein_ids = _validated_protein_ids(
+                values=raw_proteins,
+                context=f"assessment universe for feature {key!r}",
             )
+            unknown = protein_ids - known
+            if unknown:
+                raise InputValidationError(
+                    f"Assessment universe for feature {key!r} contains unknown proteins: "
+                    f"{sorted(unknown)[:10]}"
+                )
+            validated_collections[id(raw_proteins)] = (raw_proteins, protein_ids)
         normalised[key] = protein_ids
     for key, positive_proteins in positives.items():
         if key not in normalised:
             raise InputValidationError(f"Missing assessment universe for observed feature {key!r}.")
-        unassessed_positives = positive_proteins - normalised[key]
+        unassessed_positives = sorted(
+            protein_id
+            for protein_id in positive_proteins
+            if protein_id not in normalised[key]
+        )
         if unassessed_positives:
             raise InputValidationError(
                 f"Observed positive proteins for feature {key!r} were not declared assessed: "
-                f"{sorted(unassessed_positives)[:10]}"
+                f"{unassessed_positives[:10]}"
             )
     return normalised
+
+
+def _validate_protein_id_membership(
+    *,
+    values: Collection[str],
+    context: str,
+    known_protein_ids: frozenset[str],
+) -> None:
+    """Validate protein identifiers without copying a large collection.
+
+    Args:
+        values: Candidate protein identifiers.
+        context: Human-readable location used in validation errors.
+        known_protein_ids: Complete permitted protein universe.
+
+    Raises:
+        InputValidationError: If the collection is malformed or contains an
+            identifier outside the known universe.
+    """
+
+    if isinstance(values, (str, bytes)) or not isinstance(values, Collection):
+        raise InputValidationError(f"{context.capitalize()} must be a collection of strings.")
+    unknown: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise InputValidationError(
+                f"{context.capitalize()} contains empty or non-string protein identifiers."
+            )
+        if value not in known_protein_ids and len(unknown) < 10:
+            unknown.append(value)
+    if unknown:
+        raise InputValidationError(
+            f"Feature {context.removeprefix('positive proteins for feature ')} contains "
+            f"proteins outside the known universe: {sorted(unknown)}"
+        )
 
 
 def _validated_feature_key(*, value: object) -> FeatureKey:

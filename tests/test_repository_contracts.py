@@ -274,6 +274,7 @@ def test_launchers_reject_missing_option_values() -> None:
         ("start_from_inputs.sh", "--foldseek-maximum-hits"),
         ("run_completed_e3_workflow.sh", "--run-root"),
         ("run_completed_e3_workflow.sh", "--minimum-mean-plddt"),
+        ("run_completed_e3_workflow.sh", "--memory-mb"),
         ("run_completed_e3_workflow.sh", "--slurm-memory"),
         ("run_completed_e3_workflow.sh", "--slurm-scratch-base"),
         ("run_completed_e3_workflow.sh", "--slurm-min-scratch-free-gib"),
@@ -489,6 +490,8 @@ def test_completed_e3_launcher_submits_bounded_slurm_worker(tmp_path: Path) -> N
     assert "--account=barton" in arguments
     assert "--partition=barton" in arguments
     assert str(root / "slurm/run_completed_e3_workflow.sbatch") in arguments
+    memory_option_index = arguments.index("--memory-mb")
+    assert arguments[memory_option_index + 1] == "65536"
     assert "--submit-slurm" not in arguments
     assert environment_capture.read_text(encoding="utf-8").strip() == "unset"
     assert scratch_environment_capture.read_text(encoding="utf-8").splitlines() == [
@@ -537,6 +540,8 @@ def test_completed_e3_prepare_is_owned_by_snakemake_and_stages_review(
             "fixture_campaign",
             "--threads",
             "6",
+            "--memory-mb",
+            "70000",
         ),
         capture_output=True,
         text=True,
@@ -551,6 +556,7 @@ def test_completed_e3_prepare_is_owned_by_snakemake_and_stages_review(
     assert f"e3_work_dir={work_dir}" in commands
     assert f"e3_reviewed_labels={work_dir / 'reviewed_label_assignments.tsv'}" in commands
     assert "e3_threads=6" in commands
+    assert "e3_memory_mb=70000" in commands
     assert "Curate that file" in result.stdout
 
 
@@ -598,6 +604,23 @@ def test_completed_e3_launcher_validates_slurm_options_and_dry_run(tmp_path: Pat
     )
     assert invalid_memory.returncode == 2
     assert "positive Slurm size" in invalid_memory.stderr
+    invalid_analysis_memory = subprocess.run(
+        (
+            "bash",
+            str(launcher),
+            "--phase",
+            "prepare",
+            "--work-dir",
+            str(work_dir),
+            "--memory-mb",
+            "0",
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert invalid_analysis_memory.returncode == 2
+    assert "--memory-mb must be a positive integer" in invalid_analysis_memory.stderr
     invalid_time = subprocess.run(
         (
             "bash",
@@ -678,6 +701,7 @@ def test_completed_e3_launcher_validates_slurm_options_and_dry_run(tmp_path: Pat
     assert dry_run.returncode == 0, dry_run.stderr
     assert "nothing was submitted" in dry_run.stdout
     assert "--mem=128G" in dry_run.stdout
+    assert "--memory-mb 131072" in dry_run.stdout
     assert not work_dir.exists()
 
 

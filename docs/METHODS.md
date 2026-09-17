@@ -50,6 +50,12 @@ FASTA protein, including held-out validation proteins. Each feature records the 
 discovery sequence-cohort digest and a deterministic definition digest. The feature states
 that a string is present, not how many times it occurs.
 
+Every retained k-mer is assessed against every authoritative FASTA protein. Computationally,
+the implementation represents that fact with one immutable campaign-protein universe shared
+by all k-mer definitions; it does not materialise a separate copy for every k-mer. This is
+only a compact representation: target/background denominators, assessed absences, Fisher
+tests and false-discovery-rate correction are identical to explicit per-feature copies.
+
 This deliberately simple native layer is useful for short exact signals and compositional
 checks. It is not equivalent to a gapped motif, position-specific probability matrix,
 profile HMM, evolutionary-rate estimate or experimentally verified active site. Calls from

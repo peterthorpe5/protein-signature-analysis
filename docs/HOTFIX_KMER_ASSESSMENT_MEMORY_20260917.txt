@@ -1,0 +1,117 @@
+Protein Signature Analysis hotfix
+Compact k-mer assessment universes and workflow hygiene
+Date: 17 September 2026
+
+1. Production symptom and diagnosis
+===================================
+
+The all-species evidence-led campaign completed structural-feature derivation,
+retained 168,219 discovery-defined amino-acid k-mers represented by
+119,209,362 positive protein-feature rows, and proved 2,357 structural
+assessment universes. Slurm then killed the process for exceeding both 128G and
+256G allocations. Both failures occurred immediately after the same final log
+line, before association analysis began.
+
+The failure was deterministic. Native amino-acid k-mers are assessed for every
+authoritative FASTA protein. The former assessment composer represented that
+scientific fact by copying the entire protein-ID set into every k-mer's
+assessment universe:
+
+  168,219 k-mers x 121,635 proteins = 20,461,318,065 memberships
+
+Python set/hash-table overhead made this representation larger than the Slurm
+allocations. Increasing RAM would postpone rather than correct the problem.
+The feature vocabulary, structural evidence and matched backgrounds were not
+responsible for the combinatorial expansion.
+
+2. Scientific and computational correction
+===========================================
+
+All universally assessed k-mer keys now reference one immutable, validated
+campaign-protein universe. The software continues to treat every campaign
+protein as assessed for every retained k-mer. It therefore preserves:
+
+* the complete discovery-defined k-mer vocabulary;
+* positive protein-feature membership;
+* target and matched-background denominators;
+* assessed absence versus unknown semantics;
+* independence-block aggregation;
+* Fisher exact tests, confidence intervals and FDR correction; and
+* explainable-model feature eligibility.
+
+Only the in-memory representation changes. The normaliser also validates large
+positive-membership collections in place instead of first copying each set to a
+second frozen set. Repeated shared universes are validated once by object
+identity and remain shared downstream. Explainable-model eligibility constructs
+its comparison-protein set once rather than once per candidate feature.
+
+The log now reports the number of composed definitions, shared universal
+definitions and shared proteins at this boundary. Association analysis then
+reports its feature-row count and progress through every configured comparison,
+so a long production calculation remains observable.
+
+The correction does not reduce the number of k-mers, alter thresholds, sample
+proteins, relabel proteins or introduce a new database dependency. DuckDB and
+partitioned Parquet remain the appropriate route for a future fully out-of-core
+association engine if later campaign sizes require it; SQLite is not introduced.
+
+3. Evidence-bundle filesystem metadata
+======================================
+
+Evidence-label verification now ignores only these recognised non-scientific
+macOS artefacts:
+
+* AppleDouble sidecars whose basename begins `._`; and
+* Finder's `.DS_Store` file.
+
+Every ignored path is logged. All other undeclared files, including other hidden
+files, still fail the checksum-bound inventory check. Declared evidence files
+remain subject to exact path, size and SHA-256 verification.
+
+4. Slurm memory provenance
+==========================
+
+The completed-E3 launcher formerly submitted the requested Slurm memory but
+always recorded `e3_memory_mb=128000` inside the Snakemake command. The Slurm
+cgroup was correct, but the internal resource annotation was misleading.
+
+Submitted runs now convert the requested Slurm unit to MiB and pass it to the
+worker through the named `--memory-mb` option. Examples are:
+
+  --slurm-memory 128G  ->  e3_memory_mb=131072
+  --slurm-memory 256G  ->  e3_memory_mb=262144
+
+Direct non-submitted execution may also set `--memory-mb` explicitly. Slurm
+remains the actual resource-enforcement authority.
+
+5. Regression coverage
+=======================
+
+Focused tests cover:
+
+* 2,000 universal k-mer definitions sharing one immutable protein set;
+* identity preservation when the shared map is normalised again downstream;
+* exact equality of association results from shared and explicitly copied
+  denominators;
+* successful bundle verification with AppleDouble and `.DS_Store` files;
+* continued rejection of a different undeclared hidden file;
+* named direct-run memory validation; and
+* conversion of a 64G Slurm request to a 65,536 MiB worker resource.
+
+The previously passing complete suite was not repeated during this packaging
+pass at the operator's request. The new focused tests and lightweight syntax,
+formatting and compilation checks are recorded in RELEASE_QA.md. The complete
+suite remains delegated to the Mac/GitHub workflow before any tagged release.
+
+6. Campaign recovery
+====================
+
+Install this hotfix, retain the existing campaign work directory and resubmit
+the same `--phase all` command. Valid persistent caches and checksum-bound
+authorities remain reusable. A fresh work directory is not required. The
+corrected run should pass the former failure boundary without requesting 480G.
+
+The first recovery run should use 256G as a cautious diagnostic allocation. If
+another OOM occurs after a later, different progress line, collect the new final
+log line and Slurm MaxRSS before changing scientific settings. Do not silently
+reduce the k-mer vocabulary to accommodate an implementation limit.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import jsonschema
@@ -389,6 +390,43 @@ def test_bundle_verification_detects_a_modified_audit(tmp_path: Path) -> None:
     audit.write_text(audit.read_text(encoding="utf-8") + "\n", encoding="utf-8")
 
     with pytest.raises(InputValidationError, match="size differs|checksum differs"):
+        verify_evidence_label_bundle(bundle_dir=bundle)
+
+
+def test_bundle_verification_ignores_only_recognised_macos_metadata(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AppleDouble and Finder files should not weaken other inventory checks."""
+
+    profile = tmp_path / "profile.yaml"
+    rules = tmp_path / "rules.yaml"
+    annotations = tmp_path / "annotations.tsv"
+    _write_profile(path=profile)
+    _write_rules(path=rules)
+    fasta, metadata, domains = _write_inputs(root=tmp_path)
+    _write_annotations(path=annotations)
+    bundle = tmp_path / "evidence_bundle"
+    create_evidence_label_bundle(
+        sequences_fasta=fasta,
+        output_dir=bundle,
+        profile=profile,
+        evidence_rules=rules,
+        protein_metadata=metadata,
+        domains=domains,
+        external_annotations=annotations,
+    )
+    (bundle / "._class_labelling_summary.xlsx").write_bytes(b"AppleDouble metadata")
+    (bundle / ".DS_Store").write_bytes(b"Finder metadata")
+
+    with caplog.at_level(logging.INFO):
+        verified = verify_evidence_label_bundle(bundle_dir=bundle)
+
+    assert verified["status"] == EVIDENCE_BUNDLE_STATUS
+    assert "Ignored 2 recognised macOS metadata files" in caplog.text
+
+    (bundle / ".unexpected_hidden_file").write_text("undeclared\n", encoding="utf-8")
+    with pytest.raises(InputValidationError, match="inventory differs"):
         verify_evidence_label_bundle(bundle_dir=bundle)
 
 

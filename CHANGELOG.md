@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Represent universally assessed amino-acid k-mer denominators with one shared
+  immutable campaign-protein universe instead of materialising one full set per
+  feature. Validation now checks large positive-membership collections without
+  copying them, preserving identical association denominators while preventing
+  the all-species campaign's 20.46-billion-membership allocation.
+- Ignore only recognised macOS `._*` AppleDouble sidecars and `.DS_Store` files
+  when verifying an evidence-label bundle, log every ignored path and continue
+  to reject every other undeclared file.
+- Derive the completed-E3 Snakemake `e3_memory_mb` resource from the submitted
+  `--slurm-memory` request; direct execution can set the same recorded resource
+  explicitly with `--memory-mb`.
 - Replace structural-cluster membership's repeated full-universe scans with
   bounded edge indexes while preserving discovery components, held-out
   projection, support counts, best scores, cluster identities and deterministic
