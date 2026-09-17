@@ -319,9 +319,7 @@ def normalise_feature_assessment_universes(
         if key not in normalised:
             raise InputValidationError(f"Missing assessment universe for observed feature {key!r}.")
         unassessed_positives = sorted(
-            protein_id
-            for protein_id in positive_proteins
-            if protein_id not in normalised[key]
+            protein_id for protein_id in positive_proteins if protein_id not in normalised[key]
         )
         if unassessed_positives:
             raise InputValidationError(

@@ -1012,17 +1012,14 @@ def verify_evidence_label_bundle(*, bundle_dir: Path) -> Mapping[str, Any]:
             (
                 path
                 for path in root.rglob("*")
-                if path.is_file()
-                and path != marker_path
-                and _is_ignored_macos_metadata(path=path)
+                if path.is_file() and path != marker_path and _is_ignored_macos_metadata(path=path)
             ),
             key=str,
         )
     )
     if ignored_metadata:
         LOGGER.info(
-            "Ignored %d recognised macOS metadata files during evidence-label "
-            "verification.",
+            "Ignored %d recognised macOS metadata files during evidence-label verification.",
             len(ignored_metadata),
         )
         for path in ignored_metadata:
@@ -1033,9 +1030,7 @@ def verify_evidence_label_bundle(*, bundle_dir: Path) -> Mapping[str, Any]:
     actual = {
         str(path.relative_to(root))
         for path in root.rglob("*")
-        if path.is_file()
-        and path != marker_path
-        and not _is_ignored_macos_metadata(path=path)
+        if path.is_file() and path != marker_path and not _is_ignored_macos_metadata(path=path)
     }
     if actual != declared:
         raise InputValidationError(

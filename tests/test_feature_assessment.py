@@ -167,10 +167,7 @@ def test_universal_assessment_universes_share_one_immutable_protein_set() -> Non
     """Large universal feature vocabularies must not copy the protein universe."""
 
     protein_ids = frozenset(f"p{index}" for index in range(200))
-    features = tuple(
-        _feature("p0", "AMINO_ACID_KMER", f"k3:{index:04d}")
-        for index in range(2_000)
-    )
+    features = tuple(_feature("p0", "AMINO_ACID_KMER", f"k3:{index:04d}") for index in range(2_000))
 
     universes = compose_feature_assessment_universes(
         protein_ids=protein_ids,
@@ -186,8 +183,7 @@ def test_universal_assessment_universes_share_one_immutable_protein_set() -> Non
         universes=universes,
         known_protein_ids=protein_ids,
         feature_proteins={
-            (feature.feature_type, feature.feature_id): {feature.protein_id}
-            for feature in features
+            (feature.feature_type, feature.feature_id): {feature.protein_id} for feature in features
         },
     )
     assert normalised is not None
@@ -197,9 +193,7 @@ def test_universal_assessment_universes_share_one_immutable_protein_set() -> Non
         compose_feature_assessment_universes(
             protein_ids=protein_ids,
             features=features[:1],
-            explicit_assessment_universes=(
-                {("AMINO_ACID_KMER", "k3:0000"): {"p0"}},
-            ),
+            explicit_assessment_universes=({("AMINO_ACID_KMER", "k3:0000"): {"p0"}},),
         )
 
 
