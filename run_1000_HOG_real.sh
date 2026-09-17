@@ -43,6 +43,11 @@ conda run --no-capture-output --name protein_signature_analysis \
   "e3_evidence_rules=e3" \
   "e3_threads=24"
 
+cd /gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/protein-signature-analysis
+
+RUN_ROOT="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/e3_end_to_end_runs/grant_aligned_corrected_expression_structural_all1972_v0_16_0_20260909"
+
+SIGNATURE_PRODUCTION_WORK="/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/analysis/protein_signature_runs/e3_all1972_evidence_provisional_v0_1_0_20260915"
 
 ./run_completed_e3_workflow.sh \
   --phase all \
@@ -56,9 +61,10 @@ conda run --no-capture-output --name protein_signature_analysis \
   --submit-slurm \
   --slurm-account barton \
   --slurm-partition barton \
-  --slurm-memory 128G \
+  --slurm-memory 256G \
   --slurm-time 2-00:00:00 \
   --threads 24
+
 
 
 
