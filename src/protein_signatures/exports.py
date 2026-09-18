@@ -163,12 +163,8 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
                 "border_color": "#D9E2F3",
                 "valign": "top",
             }
-            integer_format = workbook.add_format(
-                {**cell_format_options, "num_format": "#,##0"}
-            )
-            float_format = workbook.add_format(
-                {**cell_format_options, "num_format": "0.0000"}
-            )
+            integer_format = workbook.add_format({**cell_format_options, "num_format": "#,##0"})
+            float_format = workbook.add_format({**cell_format_options, "num_format": "0.0000"})
             scientific_format = workbook.add_format(
                 {**cell_format_options, "num_format": "0.00E+00"}
             )
