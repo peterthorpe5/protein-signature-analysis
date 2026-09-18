@@ -180,8 +180,8 @@ def test_table_publication_validates_arrow_schema_and_parquet_failure(
 
         raise OSError("simulated")
 
-    monkeypatch.setattr(publication_module.pq, "write_table", fail_parquet)
-    with pytest.raises(PublicationError, match="Could not publish Parquet"):
+    monkeypatch.setattr(publication_module, "_append_parquet_rows", fail_parquet)
+    with pytest.raises(PublicationError, match="Could not publish canonical table"):
         _write_table(
             table_name="proteins",
             records=(

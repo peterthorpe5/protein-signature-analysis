@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-09-17
+
+- Add an atomic, checksum-bound analytical checkpoint after feature association
+  and explainable modelling. Unchanged resumed campaigns now reuse all 31
+  canonical Parquet tables instead of repeating feature derivation and 73 E3
+  comparisons when reporting or final publication was interrupted.
+- Stream canonical Parquet and TSV/TSV.GZ output in bounded 50,000-row batches,
+  split Parquet datasets into deterministic parts of at most one million rows,
+  and use deterministic gzip, per-table and million-row progress messages,
+  strict Arrow schemas and tamper-checked input authorities.
+- Build the physical DuckDB directly from checkpoint Parquet tables and publish
+  the same verified files, avoiding whole-table Python, pandas and Arrow copies.
+- Generate formatted Excel workbooks only for manageable tables. Very large
+  relations retain complete Parquet and TSV.GZ authorities plus a compact
+  summary/index workbook; the 119-million-row feature relation is never
+  represented as an unusable monolithic Excel workbook.
+- Add bounded, parameterised feature filtering in the application with matched
+  TSV and formatted-Excel downloads of up to 250,000 selected rows.
+- Process human table reports one at a time, close every static figure promptly,
+  aggregate the large feature table through DuckDB, and add precise progress
+  logging throughout checkpointing, report creation and DuckDB construction.
+- Add a self-contained HTML campaign summary covering table sizes, evidence
+  coverage, comparison completion, evidence classes and the top prioritised
+  signatures.
+
 - Represent universally assessed amino-acid k-mer denominators with one shared
   immutable campaign-protein universe instead of materialising one full set per
   feature. Validation now checks large positive-membership collections without

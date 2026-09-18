@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import shutil
-from collections import Counter
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,15 @@ from . import __version__
 from .alphafold import acquire_alphafold_models, read_alphafold_requests
 from .assessment import compose_feature_assessment_universes
 from .associations import analyse_feature_associations, summarise_signatures
+from .checkpoint import (
+    RecordSequence,
+    checkpoint_directory,
+    create_analysis_checkpoint,
+    verify_analysis_checkpoint,
+)
 from .checksums import sha256_json
 from .config import config_to_record, load_config
+from .disk_reporting import build_checkpoint_human_reports
 from .errors import ExternalToolError, InputValidationError, PublicationError
 from .evidence_labels import (
     CLASS_SUMMARY_FIELDS,
@@ -61,9 +69,12 @@ from .profiles import (
     validate_assignment_profile_compatibility,
     validate_comparison_labels,
 )
-from .publication import publish_result, verify_completed_result, verify_input_authorities
+from .publication import (
+    publish_checkpoint_result,
+    verify_completed_result,
+    verify_input_authorities,
+)
 from .redundancy import derive_exact_sequence_clusters, read_redundancy_clusters
-from .reporting import build_human_reports
 from .sequence_signatures import build_kmer_features
 from .structural_resource import import_structural_alignment_resource
 from .structural_signatures import (
@@ -128,7 +139,59 @@ def run_campaign(
         verify_input_authorities(result_dir=destination)
         LOGGER.info("Reused complete checksum-compatible campaign result %s", destination)
         return destination
-    data = _prepare_campaign(config=config, profile=profile, threads=threads)
+    cache_root = config.explainable_ml.plot_cache_dir.parent
+    checkpoint_dir = checkpoint_directory(
+        cache_root=cache_root,
+        run_identity_sha256=run_identity,
+    )
+    marker_path = checkpoint_dir / "ANALYSIS_CHECKPOINT.json"
+    if resume and marker_path.is_file():
+        checkpoint = verify_analysis_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            run_identity_sha256=run_identity,
+            verify_inputs=True,
+        )
+        state = dict(checkpoint.state)
+    else:
+        prepared = _prepare_campaign(config=config, profile=profile, threads=threads)
+        state = _checkpoint_state(data=prepared)
+        checkpoint = create_analysis_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            run_identity_sha256=run_identity,
+            tables=prepared["tables"],
+            state=state,
+            input_paths=prepared["input_paths"],
+        )
+        del prepared
+        collected = gc.collect()
+        LOGGER.info(
+            "Released in-memory analytical tables before reporting collected_cycles=%d",
+            collected,
+        )
+    report_cache = cache_root / "human_reports" / run_identity
+    existing_plot_assets = tuple(
+        (str(relative), Path(str(source)).expanduser().resolve())
+        for relative, source in state.get("existing_plot_assets", [])
+    )
+    human_reports = build_checkpoint_human_reports(
+        checkpoint=checkpoint,
+        cache_dir=report_cache,
+        existing_plot_assets=existing_plot_assets,
+        fdr_threshold=config.analysis.fdr_threshold,
+        summary_context={
+            "campaign_id": config.campaign_id,
+            "profile_display_name": profile.display_name,
+        },
+    )
+    base_asset_sources = {
+        str(relative): Path(str(source)).expanduser().resolve()
+        for relative, source in dict(state.get("base_asset_sources", {})).items()
+    }
+    report_asset_sources = dict(human_reports.assets)
+    collisions = set(base_asset_sources) & set(report_asset_sources)
+    if collisions:
+        raise InputValidationError(f"Result asset paths collide: {sorted(collisions)}")
+    asset_sources = {**base_asset_sources, **report_asset_sources}
     metadata = {
         "schema_version": 1,
         "package": "protein-signature-analysis",
@@ -147,27 +210,35 @@ def run_campaign(
             "default_excluded_subtree_label_ids": list(profile.default_excluded_subtree_label_ids),
         },
         "threads": threads,
-        "counts": {table_name: len(records) for table_name, records in data["tables"].items()},
-        "evidence_availability": data["evidence_availability"],
-        "profile_structural_evidence": data["profile_structural_evidence"],
-        "orthofinder": data["orthofinder"],
-        "foldseek": data["foldseek"],
-        "imported_structural_alignment": data["imported_structural_alignment"],
-        "explainable_ml": data["explainable_ml"],
-        "human_reports": data["human_reports"],
-        "automated_label_evidence": data["automated_label_evidence"],
+        "counts": checkpoint.counts,
+        "evidence_availability": state["evidence_availability"],
+        "profile_structural_evidence": state["profile_structural_evidence"],
+        "orthofinder": state["orthofinder"],
+        "foldseek": state["foldseek"],
+        "imported_structural_alignment": state["imported_structural_alignment"],
+        "explainable_ml": state["explainable_ml"],
+        "human_reports": {
+            "status": "COMPLETE",
+            "report_file_count": len(human_reports.assets),
+            "logical_figure_count": human_reports.figure_count,
+            "excel_workbook_count": human_reports.workbook_count,
+            "inventory_row_count": len(human_reports.inventory),
+            "html_summary": "analysis/00_run_information/results_summary.html",
+        },
+        "automated_label_evidence": state["automated_label_evidence"],
         "determinism": {
             "partition_seed": config.analysis.random_seed,
             "stable_sorting": True,
             "atomic_publication": True,
+            "analysis_checkpoint_sha256": run_identity,
+            "bounded_table_batches": True,
         },
     }
-    return publish_result(
+    return publish_checkpoint_result(
         output_dir=output_dir,
-        tables=data["tables"],
+        checkpoint=checkpoint,
         metadata=metadata,
-        input_paths=data["input_paths"],
-        asset_sources=data["asset_sources"],
+        asset_sources=asset_sources,
         resume=resume,
     )
 
@@ -784,7 +855,7 @@ def _prepare_campaign(
                 ),
             )
         ),
-        "features": tuple(item.to_record() for item in features),
+        "features": RecordSequence(values=features),
         "label_assignments": tuple(item.to_record() for item in assignments),
         **label_evidence_tables,
         "label_memberships": label_memberships,
@@ -813,18 +884,6 @@ def _prepare_campaign(
             _structure_record(item=item, asset_names=asset_names) for item in structures
         ),
     }
-    report_cache = (
-        config.explainable_ml.plot_cache_dir.parent
-        / "human_reports"
-        / _run_identity(config=config, profile=profile)
-    )
-    human_reports = build_human_reports(
-        tables=tables,
-        cache_dir=report_cache,
-        existing_plot_assets=explainable_ml.plot_assets,
-        fdr_threshold=config.analysis.fdr_threshold,
-    )
-    report_asset_sources = dict(human_reports.assets)
     foldseek_asset_sources = (
         {
             (
@@ -837,18 +896,11 @@ def _prepare_campaign(
         if foldseek_evidence is not None
         else {}
     )
-    asset_collections = (
-        structure_asset_sources,
-        report_asset_sources,
-        foldseek_asset_sources,
-    )
-    all_asset_names = [name for collection in asset_collections for name in collection]
-    collisions = {name for name, count in Counter(all_asset_names).items() if count > 1}
+    collisions = set(structure_asset_sources) & set(foldseek_asset_sources)
     if collisions:
         raise InputValidationError(f"Result asset paths collide: {sorted(collisions)}")
     asset_sources = {
         **structure_asset_sources,
-        **report_asset_sources,
         **foldseek_asset_sources,
     }
     input_paths = _input_authorities(
@@ -864,7 +916,8 @@ def _prepare_campaign(
     return {
         "tables": tables,
         "profile_structural_evidence": structural_policy,
-        "asset_sources": asset_sources,
+        "base_asset_sources": asset_sources,
+        "existing_plot_assets": explainable_ml.plot_assets,
         "input_paths": tuple(input_paths),
         "evidence_availability": {
             "domains": "COMPLETE" if config.inputs.domains else "INPUT_UNAVAILABLE",
@@ -928,14 +981,37 @@ def _prepare_campaign(
             "plot_count": len(explainable_ml.plots),
             "explanation_method": "SHAP_LINEAR_INTERVENTIONAL_LOG_ODDS",
         },
-        "human_reports": {
-            "status": "COMPLETE",
-            "report_file_count": len(human_reports.assets),
-            "logical_figure_count": human_reports.figure_count,
-            "excel_workbook_count": human_reports.workbook_count,
-            "inventory_row_count": len(human_reports.inventory),
-        },
         "automated_label_evidence": label_evidence_metadata,
+    }
+
+
+def _checkpoint_state(*, data: Mapping[str, Any]) -> dict[str, Any]:
+    """Convert prepared non-tabular analysis state to JSON-compatible paths.
+
+    Args:
+        data: Prepared campaign payload before table checkpointing.
+
+    Returns:
+        State required to resume reporting and immutable publication.
+    """
+
+    return {
+        "schema_version": 1,
+        "profile_structural_evidence": data["profile_structural_evidence"],
+        "evidence_availability": data["evidence_availability"],
+        "orthofinder": data["orthofinder"],
+        "foldseek": data["foldseek"],
+        "imported_structural_alignment": data["imported_structural_alignment"],
+        "explainable_ml": data["explainable_ml"],
+        "automated_label_evidence": data["automated_label_evidence"],
+        "base_asset_sources": {
+            str(relative): str(Path(source).expanduser().resolve())
+            for relative, source in data["base_asset_sources"].items()
+        },
+        "existing_plot_assets": [
+            [str(relative), str(Path(source).expanduser().resolve())]
+            for relative, source in data["existing_plot_assets"]
+        ],
     }
 
 

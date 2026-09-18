@@ -6,10 +6,12 @@ its size and SHA-256. `protein-signature-app` verifies the result before opening
 
 ## Storage forms
 
-Every canonical table is written twice:
+Every canonical table is written twice through bounded 50,000-row batches:
 
-- `tables/<name>.tsv` for portable, reviewable scientific exchange; and
-- `tables/<name>.parquet` with the fixed Arrow schema for typed analysis.
+- `tables/<name>.tsv` for manageable portable tables, or
+  `tables/<name>.tsv.gz` when the table exceeds one million rows; and
+- `tables/<name>.parquet/part-*.parquet` with the fixed Arrow schema for typed
+  analysis. Each deterministic part contains at most one million rows.
 
 `protein_signatures.duckdb` contains physical copies of all tables and a
 `signature_evidence` convenience view. Null numeric values remain null in Parquet/DuckDB and
@@ -30,9 +32,13 @@ The pipeline also writes file-first reports that do not require the app:
 | `analysis/06_explainable_models` | Model, prediction, importance, numeric SHAP and graphical SHAP outputs |
 | `analysis/99_final_results` | Copies of principal decision tables and every decision-facing figure |
 
-Each table in a numbered stage is available as UTF-8 TSV and a formatted XLSX workbook.
+Each manageable table in a numbered stage is available as UTF-8 TSV and a formatted XLSX
+workbook. A table exceeding 500,000 rows retains its complete canonical Parquet and
+TSV/TSV.GZ files and receives a compact TSV/XLSX summary index instead. This avoids treating
+Excel's worksheet boundary as a scalable scientific-data format. The application creates
+bounded filtered feature exports as TSV and XLSX when a user selects at least one filter.
+
 Workbooks have frozen headers, filters, widths, numeric formats and status highlighting;
-tables larger than one Excel worksheet are split deterministically across numbered sheets.
 Text longer than Excel's cell limit is replaced by a pointer and preserved in numbered
 `Long_Text` continuation sheets. TSV/Parquet remain the preferred lossless programmatic
 authorities.
@@ -42,9 +48,22 @@ for reporting. The same source file may be copied to an owning stage and `99_fin
 both result paths are checksum-inventoried. `report_inventory.tsv` is the entry point.
 
 The application's canonical-data browser covers every table listed below. It shows a bounded
-DuckDB preview while offering the complete, manifested TSV and formatted XLSX from the
-numbered file-first hierarchy. The report inventory itself is downloadable in both formats
-from the same page.
+DuckDB preview and the exact result-relative Parquet plus TSV/TSV.GZ storage paths. Complete
+formatted XLSX is offered for manageable tables; large tables expose their summary workbook
+and bounded filtered exporter. The report inventory itself is downloadable in both formats.
+
+## Analytical checkpoint and resume
+
+Before human reporting begins, all canonical tables and non-tabular analysis state are sealed
+under `.protein_signature_cache/analysis_checkpoints/<run-identity>/`. The marker binds the
+manifest, input authorities, row counts, table schemas, every Parquet part and TSV/TSV.GZ
+file by SHA-256. It is published only after every table finishes. `--resume` accepts it only when the
+package/configuration/profile identity and all original input checksums still match.
+
+This checkpoint is computational state rather than a completed result. It permits report,
+HTML, DuckDB and final-publication recovery without rerunning feature derivation, 73 E3
+comparisons or explainable models. Only the final `result/COMPLETED.json` and result manifest
+make a portable campaign complete.
 
 ## Canonical tables
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ import duckdb
 import pytest
 
 import protein_signatures.cli as cli_module
+import protein_signatures.pipeline as pipeline_module
 from protein_signature_app import backend, launcher
 from protein_signatures.cli import build_parser, main
 from protein_signatures.errors import InputValidationError, PublicationError
@@ -67,13 +69,14 @@ def test_offline_example_publishes_all_authorities(completed_result: Path) -> No
         ).fetchone() == (True, "control:matched_substrate_receptor_reference")
     for table_name in expected_tables:
         assert (completed_result / "tables" / f"{table_name}.tsv").is_file()
-        assert (completed_result / "tables" / f"{table_name}.parquet").is_file()
+        assert (completed_result / "tables" / f"{table_name}.parquet").is_dir()
     assert (completed_result / "analysis/99_final_results/tables/signatures.xlsx").is_file()
     assert (
         completed_result
         / "analysis/05_association_statistics/figures/00_signature_evidence_classes.pdf"
     ).is_file()
     assert (completed_result / "analysis/00_run_information/report_inventory.tsv").is_file()
+    assert (completed_result / "analysis/00_run_information/results_summary.html").is_file()
 
 
 def test_validate_and_resume_are_deterministic(tmp_path: Path, example_dir: Path) -> None:
@@ -149,6 +152,35 @@ def test_validate_and_resume_are_deterministic(tmp_path: Path, example_dir: Path
             output_dir=tmp_path / "bad_threads",
             threads=0,
         )
+
+
+def test_incomplete_publication_resumes_from_analysis_checkpoint(
+    completed_result: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing final result should republish without repeating scientific analysis."""
+
+    config_path = completed_result.parent / "campaign.yaml"
+    destination = completed_result
+    shutil.rmtree(destination)
+
+    def fail_if_reanalysed(**_kwargs: object) -> dict[str, object]:
+        """Prove that the expensive preparation boundary is not crossed."""
+
+        raise AssertionError("scientific analysis was repeated")
+
+    monkeypatch.setattr(pipeline_module, "_prepare_campaign", fail_if_reanalysed)
+    resumed = run_campaign(
+        config_path=config_path,
+        output_dir=destination,
+        threads=2,
+        resume=True,
+    )
+
+    assert resumed == destination
+    verify_completed_result(result_dir=resumed)
+    metadata = json.loads((resumed / "run_metadata.json").read_text(encoding="utf-8"))
+    assert metadata["determinism"]["bounded_table_batches"] is True
 
 
 def test_resume_and_verification_reject_tampering(
@@ -253,7 +285,46 @@ def test_app_backend_exposes_every_complete_canonical_download(
         assert assets[1].payload.startswith(b"PK")
     inventory_assets = backend.load_report_inventory_assets(database=database)
     assert tuple(asset.file_format for asset in inventory_assets) == ("TSV", "XLSX")
-    assert {asset.row_count for asset in inventory_assets} == {213}
+    assert len(inventory_assets) == 2
+    assert len({asset.row_count for asset in inventory_assets}) == 1
+
+
+def test_filtered_feature_exports_are_bounded_and_dual_format(
+    completed_result: Path,
+) -> None:
+    """Feature subsets should be downloadable without reading the full relation."""
+
+    database = backend.resolve_database(resource=completed_result)
+    feature_type = backend.distinct_values(
+        database=database,
+        table_name="features",
+        column_name="feature_type",
+    )[0]
+    assets = backend.filtered_feature_exports(
+        database=database,
+        feature_types=(feature_type,),
+        maximum_rows=10_000,
+    )
+    assert tuple(asset.file_format for asset in assets) == ("TSV", "XLSX")
+    assert assets[0].payload.startswith(b"protein_id\t")
+    assert assets[1].payload.startswith(b"PK")
+    storage = backend.canonical_table_storage(database=database, table_name="features")
+    assert {record["file_format"] for record in storage} == {"PARQUET", "TSV"}
+    assert any(record["relative_path"] == "tables/features.parquet" for record in storage)
+    with pytest.raises(InputValidationError, match="at least one feature filter"):
+        backend.filtered_feature_exports(database=database)
+    with pytest.raises(InputValidationError, match="1 through 250,000"):
+        backend.filtered_feature_exports(
+            database=database,
+            feature_types=(feature_type,),
+            maximum_rows=250_001,
+        )
+    with pytest.raises(InputValidationError, match="exceeds the 1-row export limit"):
+        backend.filtered_feature_exports(
+            database=database,
+            feature_types=(feature_type,),
+            maximum_rows=1,
+        )
 
 
 @pytest.mark.parametrize(

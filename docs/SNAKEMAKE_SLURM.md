@@ -217,11 +217,20 @@ without approval it runs only through `review_ready`, reports the pause and exit
 
 - Use `--dry-run` before the first controller or preparation submission.
 - Use a new work directory for a scientifically changed campaign.
-- Use `--resume` only for an unchanged configuration and completed checksum-valid result.
+- Use `--resume` only for an unchanged configuration. A completed checksum-valid result is
+  reused directly; otherwise a checksum-valid analytical checkpoint resumes reporting and
+  publication without repeating scientific analysis.
 - Use `--unlock` only after confirming no controller or Snakemake process owns the workflow.
 - Never edit files under a completed `result/`; any extra or changed file invalidates it.
 - Preserve the workflow state, result manifest, scheduler logs and frozen configuration with
   the analysis record.
+
+After the log message `Published checksum-bound analytical checkpoint`, the expensive
+feature, association and explainable-model stages are recoverable. Subsequent progress is
+reported for every human table and every DuckDB relation. If a job fails after that marker,
+resubmit the identical `--phase all` command against the same work directory; do not delete
+`.protein_signature_cache/analysis_checkpoints/`. Changed inputs, configuration, profile or
+package version invalidate reuse rather than silently combining runs.
 
 ## Generic evidence-led DAG
 

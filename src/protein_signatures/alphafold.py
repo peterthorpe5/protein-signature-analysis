@@ -30,7 +30,7 @@ from .validation import validate_identifier
 LOGGER = logging.getLogger(__name__)
 ALPHAFOLD_API_ROOT = "https://alphafold.ebi.ac.uk/api/prediction"
 ACCESSION_FIELDS = ("protein_id", "uniprot_accession")
-_USER_AGENT = "protein-signature-analysis/0.1.0"
+_USER_AGENT = "protein-signature-analysis/0.2.0"
 _MAX_METADATA_BYTES = 5 * 1024 * 1024
 _MAX_MODEL_BYTES = 512 * 1024 * 1024
 

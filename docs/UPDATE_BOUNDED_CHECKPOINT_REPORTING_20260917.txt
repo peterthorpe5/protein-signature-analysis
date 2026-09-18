@@ -1,0 +1,170 @@
+BOUNDED CHECKPOINT, REPORTING AND HTML UPDATE
+Date: 17 September 2026
+Package version: 0.2.0
+Required starting commit: 12faa71 (Fix all-species k-mer assessment memory scaling)
+
+WHY THIS UPDATE EXISTS
+======================
+
+Slurm job 392068 completed all 73 feature comparisons and produced 198,013
+association rows. It was then OOM-killed after reporting began because the old
+publisher attempted to convert 119,209,362 protein-feature membership rows into
+whole-table pandas, TSV-buffer and Excel representations. The scientific analysis
+had completed; the failure was in delivery of the results.
+
+This update removes that whole-table publication boundary. SQLite is not introduced.
+The package uses its existing Parquet and DuckDB analytical stack, which is better
+suited to bounded scans and filtered exports.
+
+IMPLEMENTED BEHAVIOUR
+=====================
+
+1. After analysis and explainable modelling, all 31 canonical tables are sealed in
+   an atomic, run-identity-specific analytical checkpoint before reporting starts.
+2. Rows are consumed in batches of at most 50,000. Typed Zstandard Parquet is split
+   into deterministic parts of at most 1,000,000 rows. Portable text is TSV, or
+   deterministic TSV.GZ above 1,000,000 rows.
+3. The completion marker is written last and binds the exact inputs, package/config/
+   profile identity, table inventory, row counts, state and every generated file by
+   SHA-256.
+4. An unchanged --resume verifies and reuses the checkpoint. Reporting, DuckDB
+   creation or immutable publication can therefore restart without repeating feature
+   derivation, the 73 comparisons or explainable modelling.
+5. DuckDB is built directly from the verified Parquet parts. Its internal memory is
+   capped at 70 percent of the detected Slurm/cgroup allocation and external work may
+   spill to the job-local TMPDIR.
+6. Human reports load one table at a time. Each static figure is written and closed
+   before the next is built. Every checkpoint, report and DuckDB table logs its exact
+   name and progress; very large tables also log every million rows.
+7. Tables of at most 500,000 rows receive their normal formatted, filterable Excel
+   workbook. Larger tables retain complete Parquet and TSV/TSV.GZ authorities and
+   receive a compact summary/index workbook instead.
+8. In particular, the 119-million-row features relation receives a small workbook
+   reporting membership rows, distinct features and distinct proteins by feature
+   type. It is never expanded into a monolithic Excel workbook.
+9. The application can export an exact filtered feature subset, capped at 250,000
+   rows, as both TSV and formatted Excel. At least one feature-type, protein-ID or
+   literal feature-ID filter is required.
+10. A self-contained HTML overview is published at:
+
+       result/analysis/00_run_information/results_summary.html
+
+    It includes campaign/profile context, canonical row counts, feature coverage,
+    signature evidence classes, comparison completion, the top 100 prioritised
+    signatures and interpretation/data-access guidance.
+
+SCIENTIFIC INVARIANTS
+=====================
+
+This update changes persistence and presentation only. It does not sample or discard
+canonical feature rows, change matching, assessment universes, contingency counts,
+p-values, q-values, signature selection, model fitting or SHAP interpretation. The
+complete features relation remains available in partitioned Parquet, TSV.GZ and the
+physical DuckDB database.
+
+IMPORTANT FIRST-RUN LIMITATION
+==============================
+
+The checkpoint format did not exist in the code used by failed job 392068. Therefore
+the first 0.2.0 run must perform the scientific analysis once more. It should reuse
+the existing checksum-valid Foldseek and other upstream caches. As soon as the log
+contains:
+
+    Published checksum-bound analytical checkpoint
+
+any later reporting/publication failure can be resumed without repeating the expensive
+analysis. Do not delete the work directory or .protein_signature_cache directory.
+
+MAC APPLICATION
+===============
+
+Start from a clean checkout containing commit 12faa71, unpack the update and overlay it:
+
+    cd "$HOME/path/to/protein-signature-analysis"
+    git pull --ff-only origin main
+    git status --short
+
+    rsync -av --itemize-changes \
+      "$HOME/Downloads/protein-signature-analysis_bounded_checkpoint_reporting_update_20260917/overlay/" \
+      ./
+
+    git diff --check
+    conda run --no-capture-output -n protein_signature_analysis \
+      python -m ruff format --check src tests
+    conda run --no-capture-output -n protein_signature_analysis \
+      python -m ruff check src tests
+    conda run --no-capture-output -n protein_signature_analysis \
+      python -m compileall -q src
+
+The update is already Ruff-formatted. A Ruff "would be reformatted" message is not
+macOS-specific; it means the copied source differs from Ruff's canonical layout.
+
+Only the new/directly affected focused tests are needed for this handover. Do not rerun
+the complete suite merely for this update unless you choose to do so independently:
+
+    conda run --no-capture-output -n protein_signature_analysis \
+      python -m pytest -q \
+      tests/test_checkpoint_publication.py \
+      tests/test_pipeline_app.py::test_offline_example_publishes_all_authorities \
+      tests/test_pipeline_app.py::test_incomplete_publication_resumes_from_analysis_checkpoint \
+      tests/test_pipeline_app.py::test_filtered_feature_exports_are_bounded_and_dual_format \
+      tests/test_publication_edges.py::test_table_publication_validates_arrow_schema_and_parquet_failure \
+      tests/test_reporting.py::test_numbered_reports_publish_tables_figures_and_final_copies \
+      tests/test_reporting.py::test_empty_static_reports_and_duplicate_destinations_fail_closed \
+      tests/test_app_ui.py::test_every_application_page_renders_and_stays_synchronised \
+      tests/test_repository_contracts.py::test_documentation_local_links_and_release_metadata_exist \
+      tests/test_repository_contracts.py::test_release_versions_and_launcher_modes_are_consistent
+
+Commit and push only after those checks finish:
+
+    git add CHANGELOG.md CITATION.cff INFO.txt README.md RELEASE_QA.md \
+      docs pyproject.toml src tests
+    git commit -m "Add bounded checkpoint and report publication"
+    git push origin main
+
+CLUSTER CONTINUATION
+====================
+
+After the commit is visible on GitHub and no workflow job is using the checkout:
+
+    cd /gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_protac/protein-signature-analysis
+    git pull --ff-only origin main
+
+Reuse the existing RUN_ROOT and SIGNATURE_PRODUCTION_WORK, then submit the same completed-E3
+command with 256G and 24 threads. There is no current reason to request 480G because the two
+known combinatorial/whole-table allocations have been removed and DuckDB is explicitly
+bounded. Keep the existing --resume behaviour and the same work directory.
+
+Useful progress messages, in order, are:
+
+    Completed feature association analysis comparisons=73 ...
+    Checkpointing canonical table ... table=features rows=119209362
+    Checkpoint table progress table=features rows=1000000/119209362
+    Published checksum-bound analytical checkpoint ...
+    Building human table report ... table=features rows=119209362
+    Building DuckDB table ... table=features ...
+    Published immutable checkpoint-backed result ...
+
+If the job fails after the checkpoint-completion message, submit the identical command again.
+The log should say "Reused checksum-bound analytical checkpoint" and should proceed directly
+to reporting. Never remove a checkpoint merely because a later reporting attempt failed; a
+checksum or identity error should be investigated rather than bypassed.
+
+EXPECTED STORAGE
+================
+
+The checkpoint, final canonical Parquet/TSV files and physical DuckDB intentionally coexist,
+so disk use will be materially higher than in the former failed publication path. Check quota
+and free space before the run. The duplicate durable forms are deliberate: the checkpoint is
+restart state, the result directory is immutable and portable, and DuckDB serves interactive
+queries and filtered exports.
+
+VALIDATION PERFORMED FOR THIS UPDATE
+====================================
+
+Thirteen unique new or directly affected focused tests passed locally. They cover multipart
+checkpoint writing and tamper detection, deterministic TSV.GZ, bounded DuckDB memory/spill,
+large-table summary reports and HTML, end-to-end publication, checkpoint-only resume,
+filtered TSV/XLSX export, legacy publication errors, immediate figure closure, every app page
+and version/documentation contracts. Ruff formatting/lint and Python compilation passed.
+The complete existing suite was not rerun, as requested.

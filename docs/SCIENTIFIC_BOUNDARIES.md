@@ -118,7 +118,7 @@ ledger and held-out metrics, never as a replacement for them.
 
 ## Native and imported methods
 
-Version 0.1.0 natively implements exact k-mer presence, supplied domains/architectures,
+Version 0.2.0 natively implements exact k-mer presence, supplied domains/architectures,
 reviewed fold calls, AlphaFold DB acquisition, Foldseek structural comparisons,
 discovery-frozen structural clusters, block-level association and mandatory explainable
 modelling. Generic `features.tsv` can carry results from MEME/STREME/FIMO, HMMER,

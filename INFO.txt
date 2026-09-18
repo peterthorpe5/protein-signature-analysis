@@ -66,7 +66,7 @@ checksum-complete route.
 External MEME/STREME/FIMO, HMMER, conservation, disorder or experimentally curated motif
 calls can be supplied through the generic `features.tsv` contract. Definitions must be
 prespecified or learned only on the frozen discovery cohort to enter confirmatory inference;
-all-data-derived definitions remain explicitly exploratory. Version 0.1.0 does not silently
+all-data-derived definitions remain explicitly exploratory. Version 0.2.0 does not silently
 invoke those tools or describe an imported feature as natively calculated.
 
 ## Quick start: executable offline example

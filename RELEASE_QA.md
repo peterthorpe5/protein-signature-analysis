@@ -1,7 +1,7 @@
-# Release QA: version 0.1.0
+# Release QA: version 0.2.0
 
-QA date: 15 September 2026
-Candidate: `protein-signature-analysis` 0.1.0  
+QA date: 17 September 2026
+Candidate: `protein-signature-analysis` 0.2.0
 Local platform: Linux x86_64, Python 3.12.14
 
 ## Release decision
@@ -16,6 +16,25 @@ from that cluster; synthetic authorities independently exercise the same contrac
 One independent release confirmation is still required after transfer to the Mac: run the
 complete quality gate on the exact patched tree and allow GitHub Actions to repeat it after
 the push.
+
+### Post-QA bounded checkpoint and reporting update
+
+The all-species E3 run completed all 73 comparisons and 198,013 association rows before a
+256G Slurm allocation was OOM-killed while the former report publisher attempted to expand
+119,209,362 feature-membership rows into whole-table pandas/TSV/Excel representations. Version
+0.2.0 now seals every canonical table first in checksum-bound, multipart Parquet plus bounded
+TSV/TSV.GZ, resumes unchanged runs from that checkpoint, builds DuckDB directly from Parquet,
+and substitutes a compact feature index for the infeasible workbook. Reports process tables
+lazily, figures are written and closed immediately, DuckDB retains allocation headroom and
+uses local spill, the app supplies bounded filtered TSV/XLSX feature exports, and a standalone
+HTML result summary is published.
+
+Thirteen unique new or directly affected focused tests passed, covering checkpoint parts and
+tamper detection, bounded DuckDB resources, large-table reports/HTML, end-to-end publication,
+checkpoint-only resume, filtered exports, publication failures, immediate figure closure,
+every application page and release contracts. Ruff formatting/lint and Python compilation
+also passed. The complete existing suite was not rerun in accordance with the operator's
+explicit request.
 
 ### Post-QA automated smoke-label extension
 

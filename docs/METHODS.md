@@ -64,11 +64,11 @@ MEME, STREME, FIMO, HMMER, conservation or other reviewed producers can be impor
 is a submitter attestation that feature definition was label-blind as well as restricted to
 the exact discovery sequence cohort; the software verifies the cohort digest but cannot
 inspect an external producer's behaviour. Label-aware discovery definitions use
-`DISCOVERY_SUPERVISED` and remain audit-only in v0.1 because reusing their selection labels
+`DISCOVERY_SUPERVISED` and remain audit-only in v0.2 because reusing their selection labels
 for a discovery Fisher test would produce post-selection p-values. Features learned from the
 full campaign are likewise retained as exploratory evidence but cannot enter confirmatory
 held-out association or explainable modelling, and can never be promoted to a decision
-candidate. The v0.1 production pipeline keeps these rows audit-ledger-only so they cannot
+candidate. The v0.2 production pipeline keeps these rows audit-ledger-only so they cannot
 alter confirmatory feature-family FDR. The low-level association API can label all-data
 features in a separately scoped discovery-only exploratory analysis when a complete
 assessment universe is available; callers must not merge that exploratory test family into
@@ -125,7 +125,7 @@ Imported predecessor pocket calls remain exploratory `STRUCTURAL_POCKET` feature
 rows, retain the upstream resource manifest and are namespaced by upstream cluster. Pocket
 positions from different predecessor clusters are not treated as the same feature. Global
 structural clusters and within-group conserved-pocket claims are intentionally different
-evidence families; only the former enters v0.1 association testing.
+evidence families; only the former enters v0.2 association testing.
 
 ## Prevalence and confidence intervals
 
@@ -281,3 +281,32 @@ SHAP jitter and file naming are deterministic. Foldseek caches include coordinat
 effective parameters and tool version. Publication uses a sibling staging directory and one
 same-filesystem atomic rename; a directory without a valid completion marker and manifest
 is not complete.
+
+### Bounded analytical checkpoint
+
+After association testing and explainable modelling finish, every canonical table is written
+once to a run-identity-specific analytical checkpoint. Rows are consumed in fixed 50,000-row
+batches and written simultaneously to typed Zstandard-compressed Parquet and UTF-8 TSV.
+Parquet is physically partitioned into deterministic parts of at most one million rows;
+tables above one million rows use deterministic gzip-compressed TSV.GZ. No publication stage
+constructs another whole-table tuple, pandas frame or Arrow table.
+
+The checkpoint marker is written last and binds the table inventory, row counts, Parquet and
+TSV checksums, non-tabular analysis state, package/configuration/profile run identity and all
+input-authority checksums. It is not a scientific completion marker. On an unchanged
+`--resume`, it allows human reports, the HTML overview, DuckDB and immutable publication to
+continue without repeating feature derivation, association testing or model fitting.
+
+### Large-table human reporting
+
+Human reports process one table at a time and release its data frame before loading the next;
+each static figure is also written and closed before the next figure is constructed.
+Complete formatted Excel is produced only for tables with at most 500,000 rows. Larger tables
+retain their complete Parquet and TSV/TSV.GZ authorities and receive a small index workbook.
+For the feature-membership table this workbook reports, by feature type, the membership-row,
+distinct-feature and distinct-protein counts plus the exact canonical paths. The application
+can query DuckDB and produce a filtered TSV/XLSX feature subset capped at 250,000 rows.
+
+This export policy does not sample, aggregate or remove evidence from the canonical result.
+It changes only the human delivery format. Association denominators, p-values, q-values,
+signatures and model results are identical to those produced before checkpoint publication.

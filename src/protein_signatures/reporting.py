@@ -380,6 +380,7 @@ def _build_static_figures(
     root: Path,
     assets: dict[str, Path],
     inventory: list[dict[str, Any]],
+    feature_counts: pd.DataFrame | None = None,
 ) -> int:
     """Build global and comparison-specific static scientific figures.
 
@@ -389,6 +390,8 @@ def _build_static_figures(
         root: Report cache root.
         assets: Mutable result-asset mapping.
         inventory: Mutable report inventory.
+        feature_counts: Optional pre-aggregated feature coverage. Supplying this
+            avoids loading a very large protein-feature membership table.
 
     Returns:
         Number of logical figures, excluding format variants.
@@ -399,7 +402,29 @@ def _build_static_figures(
 
     validated_fdr_threshold = _validate_fdr_threshold(fdr_threshold=fdr_threshold)
     matplotlib.rcParams["svg.hashsalt"] = "protein-signature-analysis-reports"
-    figures: list[tuple[Any, str, str, str, str, bool]] = []
+    figure_count = 0
+
+    def emit(specification: tuple[Any, str, str, str, str, bool]) -> None:
+        """Write and close one figure before constructing the next."""
+
+        nonlocal figure_count
+        figure, stem, section, description, content_id, copy_to_final = specification
+        try:
+            _register_figure_set(
+                figure=figure,
+                stem=stem,
+                section=section,
+                description=description,
+                content_id=content_id,
+                root=root,
+                assets=assets,
+                inventory=inventory,
+                copy_to_final=copy_to_final,
+            )
+        finally:
+            plt.close(figure)
+        figure_count += 1
+
     assignments = frames["label_assignments"]
     assignment_counts = (
         assignments.groupby("label_id", sort=True)
@@ -417,7 +442,7 @@ def _build_static_figures(
         axis.barh(assignment_counts.index.astype(str), assignment_counts.values, color="#3274A1")
         axis.set_xlabel("Directly assigned proteins")
     axis.set_title("Most populated direct protein labels")
-    figures.append(
+    emit(
         (
             figure,
             "00_direct_label_counts",
@@ -427,6 +452,7 @@ def _build_static_figures(
             True,
         )
     )
+    del assignments, assignment_counts
     class_summary = frames["class_labelling_summary"]
     figure, axis = plt.subplots(figsize=(10.5, 6.0))
     target_summary = class_summary[class_summary["label_type"].astype(str) == "TARGET"].copy()
@@ -450,7 +476,7 @@ def _build_static_figures(
         )
         axis.set_xlabel("Evidence-supported proteins")
     axis.set_title("Automated provisional target-label coverage")
-    figures.append(
+    emit(
         (
             figure,
             "01_evidence_supported_label_coverage",
@@ -460,6 +486,7 @@ def _build_static_figures(
             True,
         )
     )
+    del class_summary, target_summary
     control_matches = frames["control_matching_audit"]
     figure, axis = plt.subplots(figsize=(9.0, 5.8))
     match_scores = pd.to_numeric(
@@ -481,7 +508,7 @@ def _build_static_figures(
         axis.set_xlabel("Prespecified matching distance (lower is closer)")
         axis.set_ylabel("Target-control matches")
     axis.set_title("Outcome-blind matched-control distance")
-    figures.append(
+    emit(
         (
             figure,
             "02_matched_control_distance",
@@ -491,6 +518,7 @@ def _build_static_figures(
             True,
         )
     )
+    del control_matches, match_scores
     partitions = frames["partitions"]
     figure, axis = plt.subplots(figsize=(8.5, 5.5))
     if partitions.empty:
@@ -500,7 +528,7 @@ def _build_static_figures(
         axis.bar(partition_counts.index.astype(str), partition_counts.values, color="#4C956C")
         axis.set_ylabel("Proteins")
     axis.set_title("Frozen discovery/validation partition sizes")
-    figures.append(
+    emit(
         (
             figure,
             "00_partition_sizes",
@@ -510,6 +538,7 @@ def _build_static_figures(
             True,
         )
     )
+    del partitions
     orthogroups = frames["orthofinder_group_context"]
     figure, axis = plt.subplots(figsize=(9.5, 5.8))
     group_sizes = pd.to_numeric(orthogroups.get("member_count"), errors="coerce").dropna()
@@ -522,7 +551,7 @@ def _build_static_figures(
         axis.set_xlabel("Proteins per selected group")
         axis.set_ylabel("Groups")
     axis.set_title("Selected OrthoFinder group-size distribution")
-    figures.append(
+    emit(
         (
             figure,
             "01_orthofinder_group_sizes",
@@ -532,12 +561,18 @@ def _build_static_figures(
             True,
         )
     )
-    features = frames["features"]
-    feature_counts = (
-        features.groupby("feature_type", sort=True)
-        .agg(feature_count=("feature_id", "nunique"), protein_count=("protein_id", "nunique"))
-        .reset_index()
-    )
+    del orthogroups, group_sizes
+    if feature_counts is None:
+        features = frames["features"]
+        feature_counts = (
+            features.groupby("feature_type", sort=True)
+            .agg(
+                feature_count=("feature_id", "nunique"),
+                protein_count=("protein_id", "nunique"),
+            )
+            .reset_index()
+        )
+        del features
     figure, axis = plt.subplots(figsize=(10, 5.8))
     if feature_counts.empty:
         _draw_no_data(axis=axis, message="No positive feature evidence was available")
@@ -546,7 +581,7 @@ def _build_static_figures(
         axis.tick_params(axis="x", rotation=35)
         axis.set_ylabel("Proteins")
     axis.set_title("Evidence coverage by feature type")
-    figures.append(
+    emit(
         (
             figure,
             "00_evidence_coverage",
@@ -565,7 +600,7 @@ def _build_static_figures(
         axis.barh(signature_counts.index.astype(str), signature_counts.values, color="#C44E52")
         axis.set_xlabel("Signatures")
     axis.set_title("Signature evidence classes across all comparisons")
-    figures.append(
+    emit(
         (
             figure,
             "00_signature_evidence_classes",
@@ -575,6 +610,7 @@ def _build_static_figures(
             True,
         )
     )
+    del signatures
     models = frames["ml_models"]
     figure, axis = plt.subplots(figsize=(10, 5.8))
     if models.empty:
@@ -584,7 +620,7 @@ def _build_static_figures(
         axis.barh(model_counts.index.astype(str), model_counts.values, color="#937860")
         axis.set_xlabel("Comparisons")
     axis.set_title("Explainable-model completion status")
-    figures.append(
+    emit(
         (
             figure,
             "00_model_statuses",
@@ -609,7 +645,7 @@ def _build_static_figures(
         axis.set_ylabel("Proteins")
         axis.legend(title="Assessment", bbox_to_anchor=(1.02, 1), loc="upper left")
     axis.set_title("Domain assessment coverage")
-    figures.append(
+    emit(
         (
             figure,
             "01_domain_assessment_coverage",
@@ -619,6 +655,7 @@ def _build_static_figures(
             True,
         )
     )
+    del domains
     structures = frames["structures"]
     figure, axis = plt.subplots(figsize=(10, 5.8))
     if structures.empty:
@@ -634,7 +671,7 @@ def _build_static_figures(
         axis.set_ylabel("Models")
         axis.legend(title="Status", bbox_to_anchor=(1.02, 1), loc="upper left")
     axis.set_title("Structure evidence coverage")
-    figures.append(
+    emit(
         (
             figure,
             "00_structure_evidence_coverage",
@@ -644,14 +681,17 @@ def _build_static_figures(
             True,
         )
     )
+    del structures
     comparison_rows = frames["comparisons"][["comparison_id", "display_name"]]
+    association = frames["associations"]
+    importance = frames["ml_feature_importance"]
+    predictions = frames["ml_predictions"]
     for comparison_row in comparison_rows.itertuples(index=False):
         comparison_id = str(comparison_row.comparison_id)
         raw_display_name = comparison_row.display_name
         display_name = "" if pd.isna(raw_display_name) else str(raw_display_name).strip()
         if not display_name:
             display_name = comparison_id
-        association = frames["associations"]
         subset = association[
             (association["comparison_id"].astype(str) == comparison_id)
             & (association["partition"].astype(str) == "DISCOVERY")
@@ -663,7 +703,7 @@ def _build_static_figures(
                 comparison_display_name=display_name,
                 fdr_threshold=validated_fdr_threshold,
             )
-            figures.append(
+            emit(
                 (
                     figure,
                     f"{_safe_report_token(value=comparison_id)}_association_landscape",
@@ -677,7 +717,7 @@ def _build_static_figures(
                 frame=subset,
                 comparison_display_name=display_name,
             )
-            figures.append(
+            emit(
                 (
                     figure,
                     f"{_safe_report_token(value=comparison_id)}_top_prevalence",
@@ -689,14 +729,13 @@ def _build_static_figures(
             )
         model_rows = models[models["comparison_id"].astype(str) == comparison_id]
         complete = not model_rows.empty and str(model_rows.iloc[0]["status"]).startswith("COMPLETE")
-        importance = frames["ml_feature_importance"]
         selected_importance = importance[importance["comparison_id"].astype(str) == comparison_id]
         if complete and not selected_importance.empty:
             figure = _model_importance_figure(
                 frame=selected_importance,
                 comparison_display_name=display_name,
             )
-            figures.append(
+            emit(
                 (
                     figure,
                     f"{_safe_report_token(value=comparison_id)}_model_coefficients",
@@ -706,7 +745,6 @@ def _build_static_figures(
                     True,
                 )
             )
-        predictions = frames["ml_predictions"]
         selected_predictions = predictions[
             predictions["comparison_id"].astype(str) == comparison_id
         ]
@@ -715,7 +753,7 @@ def _build_static_figures(
                 frame=selected_predictions,
                 comparison_display_name=display_name,
             )
-            figures.append(
+            emit(
                 (
                     figure,
                     f"{_safe_report_token(value=comparison_id)}_prediction_distributions",
@@ -725,22 +763,8 @@ def _build_static_figures(
                     True,
                 )
             )
-    for figure, stem, section, description, content_id, copy_to_final in figures:
-        try:
-            _register_figure_set(
-                figure=figure,
-                stem=stem,
-                section=section,
-                description=description,
-                content_id=content_id,
-                root=root,
-                assets=assets,
-                inventory=inventory,
-                copy_to_final=copy_to_final,
-            )
-        finally:
-            plt.close(figure)
-    return len(figures)
+    del association, comparison_rows, importance, models, predictions
+    return figure_count
 
 
 def _association_figure(

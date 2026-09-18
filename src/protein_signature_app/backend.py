@@ -13,6 +13,7 @@ import duckdb
 import pandas as pd
 
 from protein_signatures.errors import InputValidationError
+from protein_signatures.exports import dataframe_to_tsv_bytes, dataframe_to_xlsx_bytes
 from protein_signatures.publication import verify_completed_result
 from protein_signatures.schemas import table_schemas
 
@@ -41,6 +42,7 @@ class DownloadAsset:
     row_count: int
     payload: bytes
     mime_type: str
+    complete: bool = True
 
 
 def resolve_database(*, resource: Path) -> Path:
@@ -244,14 +246,16 @@ def canonical_table_preview(
 
 
 def load_canonical_table_assets(*, database: Path, table_name: str) -> tuple[DownloadAsset, ...]:
-    """Load the complete published TSV/XLSX pair for one canonical table.
+    """Load practical published downloads for one canonical table.
 
     Args:
         database: Verified physical DuckDB path.
         table_name: Canonical table name.
 
     Returns:
-        TSV then XLSX download assets from the numbered report hierarchy.
+        Complete TSV and XLSX for manageable tables. Large tables return their
+        compact XLSX index; their complete TSV.GZ remains available by path and
+        through filtered exports without being loaded into app memory.
 
     Raises:
         InputValidationError: If inventory rows or assets violate the result contract.
@@ -263,29 +267,30 @@ def load_canonical_table_assets(*, database: Path, table_name: str) -> tuple[Dow
     rows = [
         row
         for row in inventory
-        if row.get("asset_kind") == "TABLE"
-        and row.get("content_id") == table_name
-        and row.get("section") != "99_final_results"
+        if row.get("content_id") == table_name and row.get("section") != "99_final_results"
     ]
     expected_count = table_count(database=database, table_name=table_name)
     assets: list[DownloadAsset] = []
-    for file_format, mime_type in (
-        ("TSV", "text/tab-separated-values"),
-        ("XLSX", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-    ):
-        matching = [row for row in rows if row.get("file_format") == file_format]
-        if len(matching) != 1:
-            raise InputValidationError(
-                f"Canonical table {table_name!r} requires exactly one {file_format} asset."
-            )
-        row = matching[0]
+    complete_rows = [row for row in rows if row.get("asset_kind") == "TABLE"]
+    if complete_rows:
+        selected = complete_rows
+    else:
+        selected = [row for row in rows if row.get("asset_kind") == "TABLE_INDEX"]
+    for row in selected:
+        file_format = str(row.get("file_format", ""))
+        mime_type = (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            if file_format == "XLSX"
+            else "text/tab-separated-values"
+        )
         try:
             row_count = int(row.get("row_count", ""))
         except (TypeError, ValueError) as error:
             raise InputValidationError(
                 f"Canonical table {table_name!r} has an invalid inventory row count."
             ) from error
-        if row_count != expected_count:
+        complete = row.get("asset_kind") == "TABLE"
+        if complete and row_count != expected_count:
             raise InputValidationError(
                 f"Canonical table {table_name!r} inventory count differs from DuckDB."
             )
@@ -298,9 +303,164 @@ def load_canonical_table_assets(*, database: Path, table_name: str) -> tuple[Dow
                 row_count=row_count,
                 payload=payload,
                 mime_type=mime_type,
+                complete=complete,
             )
         )
+    if not assets:
+        raise InputValidationError(
+            f"Canonical table {table_name!r} has no practical download or summary asset."
+        )
     return tuple(assets)
+
+
+def canonical_table_storage(*, database: Path, table_name: str) -> tuple[dict[str, Any], ...]:
+    """Describe complete canonical files without reading them into memory.
+
+    Args:
+        database: Verified physical DuckDB path.
+        table_name: Canonical table name.
+
+    Returns:
+        Parquet and TSV/TSV.GZ path, size and row-count records.
+
+    Raises:
+        InputValidationError: If the table or files are invalid.
+    """
+
+    if table_name not in table_schemas():
+        raise InputValidationError(f"Unknown canonical result table: {table_name!r}")
+    root = Path(database).expanduser().resolve().parent
+    candidates = sorted((root / "tables").glob(f"{table_name}.*"))
+    row_count = table_count(database=database, table_name=table_name)
+    records: list[dict[str, Any]] = []
+    for path in candidates:
+        if path.name.endswith(".parquet"):
+            file_format = "PARQUET"
+            if path.is_dir():
+                parts = tuple(sorted(path.glob("part-*.parquet")))
+                if not parts:
+                    raise InputValidationError(
+                        f"Canonical Parquet dataset is empty for {table_name!r}."
+                    )
+                size_bytes = sum(part.stat().st_size for part in parts)
+            else:
+                size_bytes = path.stat().st_size
+        elif path.name.endswith(".tsv.gz"):
+            file_format = "TSV.GZ"
+            size_bytes = path.stat().st_size
+        elif path.name.endswith(".tsv"):
+            file_format = "TSV"
+            size_bytes = path.stat().st_size
+        else:
+            continue
+        records.append(
+            {
+                "file_format": file_format,
+                "relative_path": str(path.relative_to(root)),
+                "size_bytes": size_bytes,
+                "row_count": row_count,
+            }
+        )
+    if {record["file_format"] for record in records} & {"TSV", "TSV.GZ"} == set() or not any(
+        record["file_format"] == "PARQUET" for record in records
+    ):
+        raise InputValidationError(f"Canonical storage files are incomplete for {table_name!r}.")
+    return tuple(records)
+
+
+def filtered_feature_exports(
+    *,
+    database: Path,
+    feature_types: tuple[str, ...] = (),
+    protein_id: str = "",
+    feature_id_contains: str = "",
+    maximum_rows: int = 100_000,
+) -> tuple[DownloadAsset, ...]:
+    """Build bounded TSV and Excel downloads from filtered feature memberships.
+
+    Args:
+        database: Verified physical DuckDB path.
+        feature_types: Optional exact feature-type filters.
+        protein_id: Optional exact protein identifier.
+        feature_id_contains: Optional literal feature-identifier substring.
+        maximum_rows: Hard result cap from 1 through 250,000 rows.
+
+    Returns:
+        Matching TSV and formatted XLSX payloads.
+
+    Raises:
+        InputValidationError: If filters are unsafe, absent or too broad.
+    """
+
+    if (
+        isinstance(maximum_rows, bool)
+        or not isinstance(maximum_rows, int)
+        or not 1 <= maximum_rows <= 250_000
+    ):
+        raise InputValidationError("Filtered feature export limit must be 1 through 250,000.")
+    types = tuple(
+        dict.fromkeys(str(value).strip() for value in feature_types if str(value).strip())
+    )
+    protein = str(protein_id).strip()
+    feature_text = str(feature_id_contains).strip()
+    if not types and not protein and not feature_text:
+        raise InputValidationError("Select at least one feature filter before exporting.")
+    clauses: list[str] = []
+    parameters: list[Any] = []
+    if types:
+        placeholders = ",".join("?" for _value in types)
+        clauses.append(f"feature_type IN ({placeholders})")
+        parameters.extend(types)
+    if protein:
+        clauses.append("protein_id = ?")
+        parameters.append(protein)
+    if feature_text:
+        clauses.append("position(? in feature_id) > 0")
+        parameters.append(feature_text)
+    where_sql = " AND ".join(clauses)
+    count_frame = query_dataframe(
+        database=database,
+        sql=f"SELECT count(*) AS row_count FROM features WHERE {where_sql}",
+        parameters=tuple(parameters),
+    )
+    matched_rows = int(count_frame.iloc[0]["row_count"])
+    if matched_rows > maximum_rows:
+        raise InputValidationError(
+            f"Filtered feature selection contains {matched_rows:,} rows and exceeds the "
+            f"{maximum_rows:,}-row export limit; narrow the filters."
+        )
+    parameters.append(maximum_rows)
+    frame = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT * FROM features WHERE "
+            + where_sql
+            + ' ORDER BY feature_type, feature_id, protein_id, "start" LIMIT ?'
+        ),
+        parameters=tuple(parameters),
+    )
+    if len(frame) != matched_rows:
+        raise InputValidationError(
+            "Filtered feature export row count changed during its immutable DuckDB query."
+        )
+    tsv = dataframe_to_tsv_bytes(frame=frame)
+    xlsx = dataframe_to_xlsx_bytes(frame=frame, title="Filtered Feature Memberships")
+    return (
+        DownloadAsset(
+            file_format="TSV",
+            relative_path="filtered_features.tsv",
+            row_count=len(frame),
+            payload=tsv,
+            mime_type="text/tab-separated-values",
+        ),
+        DownloadAsset(
+            file_format="XLSX",
+            relative_path="filtered_features.xlsx",
+            row_count=len(frame),
+            payload=xlsx,
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+    )
 
 
 def load_report_inventory_assets(*, database: Path) -> tuple[DownloadAsset, ...]:

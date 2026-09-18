@@ -78,7 +78,7 @@ def test_documentation_local_links_and_release_metadata_exist() -> None:
                 target,
             )
     citation = yaml.safe_load((root / "CITATION.cff").read_text(encoding="utf-8"))
-    assert citation["version"] == "0.1.0"
+    assert citation["version"] == "0.2.0"
     assert (root / "CONTRIBUTING.md").is_file()
     assert (root / "SECURITY.md").is_file()
 

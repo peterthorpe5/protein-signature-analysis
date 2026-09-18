@@ -12,7 +12,9 @@ import streamlit as st
 from protein_signature_app.backend import (
     canonical_table_names,
     canonical_table_preview,
+    canonical_table_storage,
     distinct_values,
+    filtered_feature_exports,
     load_canonical_table_assets,
     load_metadata,
     load_report_inventory_assets,
@@ -113,8 +115,9 @@ def _render_canonical_data(*, database: Path) -> None:
     st.title("Canonical data & downloads")
     names = canonical_table_names()
     st.caption(
-        "Browse a bounded preview, then download the complete checksum-verified "
-        f"TSV or formatted Excel workbook. All {len(names)} canonical datasets are available."
+        "Browse a bounded preview and inspect the complete checksum-verified storage files. "
+        "Manageable tables have full formatted Excel workbooks; very large tables have a "
+        f"compact workbook and filtered exporter. All {len(names)} datasets are available."
     )
     table_name = st.selectbox("Canonical dataset", names)
     row_count = table_count(database=database, table_name=table_name)
@@ -128,18 +131,31 @@ def _render_canonical_data(*, database: Path) -> None:
     )
     st.dataframe(preview, use_container_width=True, hide_index=True)
     try:
+        storage = canonical_table_storage(database=database, table_name=table_name)
+    except InputValidationError as error:
+        st.error(f"Could not inspect canonical storage: {error}")
+        return
+    st.caption("Complete canonical storage (paths are relative to the result directory).")
+    st.dataframe(storage, use_container_width=True, hide_index=True)
+    try:
         assets = load_canonical_table_assets(database=database, table_name=table_name)
     except InputValidationError as error:
         st.error(f"Could not prepare canonical downloads: {error}")
         return
     for asset in assets:
         st.download_button(
-            label=f"Download complete {asset.file_format}",
+            label=(
+                f"Download complete {asset.file_format}"
+                if asset.complete
+                else f"Download compact {asset.file_format} summary"
+            ),
             data=asset.payload,
             file_name=Path(asset.relative_path).name,
             mime=asset.mime_type,
             key=f"canonical_{table_name}_{asset.file_format}",
         )
+    if table_name == "features":
+        _render_filtered_feature_export(database=database)
     st.subheader("Complete report inventory")
     st.caption("The inventory indexes every numbered table, figure and documentation asset.")
     try:
@@ -154,6 +170,55 @@ def _render_canonical_data(*, database: Path) -> None:
             file_name=Path(asset.relative_path).name,
             mime=asset.mime_type,
             key=f"report_inventory_{asset.file_format}",
+        )
+
+
+def _render_filtered_feature_export(*, database: Path) -> None:
+    """Render bounded filters for the complete feature-membership relation.
+
+    Args:
+        database: Verified result database.
+    """
+
+    st.subheader("Filtered feature export")
+    st.caption(
+        "Select at least one filter. Exports are generated from DuckDB and capped before "
+        "conversion to TSV and formatted Excel."
+    )
+    available_types = distinct_values(
+        database=database,
+        table_name="features",
+        column_name="feature_type",
+    )
+    selected_types = tuple(st.multiselect("Feature types to export", available_types))
+    protein_id = st.text_input("Exact protein identifier (optional)")
+    feature_id_contains = st.text_input("Feature identifier contains (optional)")
+    maximum_rows = st.selectbox(
+        "Maximum exported rows",
+        (10_000, 50_000, 100_000, 250_000),
+        index=2,
+    )
+    if not st.button("Prepare filtered feature downloads"):
+        return
+    try:
+        exports = filtered_feature_exports(
+            database=database,
+            feature_types=selected_types,
+            protein_id=protein_id,
+            feature_id_contains=feature_id_contains,
+            maximum_rows=int(maximum_rows),
+        )
+    except InputValidationError as error:
+        st.warning(str(error))
+        return
+    st.success(f"Prepared {exports[0].row_count:,} matching feature rows.")
+    for asset in exports:
+        st.download_button(
+            label=f"Download filtered features as {asset.file_format}",
+            data=asset.payload,
+            file_name=Path(asset.relative_path).name,
+            mime=asset.mime_type,
+            key=f"filtered_features_{asset.file_format}",
         )
 
 

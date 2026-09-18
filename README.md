@@ -65,7 +65,7 @@ SHA-256. A published `orthofinder-results` resource remains the preferred, riche
 External MEME/STREME/FIMO, HMMER, conservation, disorder or experimentally curated motif
 calls can be supplied through the generic `features.tsv` contract. Definitions must be
 prespecified or learned only on the frozen discovery cohort to enter confirmatory inference;
-all-data-derived definitions remain explicitly exploratory. Version 0.1.0 does not silently
+all-data-derived definitions remain explicitly exploratory. Version 0.2.0 does not silently
 invoke those tools or describe an imported feature as natively calculated.
 
 ## Quick start: executable offline example
@@ -606,6 +606,7 @@ result/
 ├── protein_signatures.duckdb
 ├── analysis/
 │   ├── 00_run_information/     # reading guide and complete report inventory
+│   │   └── results_summary.html # self-contained campaign overview
 │   ├── 01_proteins_and_curation/
 │   ├── 02_homology_and_partitions/
 │   ├── 03_sequence_and_domains/
@@ -616,23 +617,37 @@ result/
 ├── assets/structures/          # portable coordinate models when supplied
 └── tables/
     ├── associations.tsv
-    ├── associations.parquet
+    ├── associations.parquet/       # bounded part-*.parquet dataset
     ├── signatures.tsv
-    ├── signatures.parquet
+    ├── signatures.parquet/
     ├── ml_plot_inventory.tsv
-    ├── ml_plot_inventory.parquet
-    └── ...                     # every canonical table in both formats
+    ├── ml_plot_inventory.parquet/
+    ├── features.tsv.gz         # compressed when a canonical table is very large
+    └── features.parquet/       # many bounded parts; no monolithic workbook
 ```
 
-Every canonical table has a human-facing TSV and formatted, filterable Excel workbook in its
-numbered analysis stage. Static scientific figures are emitted as PNG, SVG and PDF. Start
-with `analysis/00_run_information/report_inventory.tsv`, or open `99_final_results` for the
-principal decision tables and figures.
+Manageable canonical tables have a human-facing TSV and formatted, filterable Excel workbook
+in their numbered analysis stage. Very large tables retain complete Parquet and TSV.GZ
+authorities plus a compact summary/index workbook; they are not expanded into impractical
+hundred-sheet Excel files. Static scientific figures are emitted as PNG, SVG and PDF. Start
+with `analysis/00_run_information/results_summary.html` and
+`report_inventory.tsv`, or open `99_final_results` for the principal decision tables and
+figures.
 
-The root `tables/` directory remains the machine authority in TSV and typed Parquet. The
-physical DuckDB contains every canonical table and a `signature_evidence` view. The app
+The root `tables/` directory remains the machine authority in TSV/TSV.GZ and typed,
+partitioned Parquet datasets. Each `<name>.parquet/` directory contains deterministic
+`part-*.parquet` files of at most one million rows. The physical DuckDB contains every
+canonical table and a `signature_evidence` view. The app
 queries only this published database in read-only mode. Original inputs are not required to
 view a portable result, but computational resume verifies that they are still byte-identical.
+
+After scientific analysis, all 31 tables are written to an atomic checksum-bound checkpoint
+in bounded batches. If reporting, DuckDB construction or final publication is interrupted,
+`--resume` verifies that checkpoint and continues without repeating feature derivation,
+association testing or explainable modelling.
+
+See the [bounded checkpoint and reporting update handover](docs/UPDATE_BOUNDED_CHECKPOINT_REPORTING_20260917.txt)
+for the production restart procedure and expected progress messages.
 
 See [Output contracts](docs/OUTPUT_CONTRACTS.md) for every table.
 
@@ -646,10 +661,12 @@ The nine pages cover campaign overview, candidate signatures, explainable predic
 SHAP graphics, protein/Pfam evidence, class roles, structures/folds, orthology/partitions, a
 complete canonical-data browser and data quality/provenance. Explicit feature-assessment
 states, association denominators and structure eligibility/comparison-universe fields remain
-browsable. Every canonical dataset has a bounded preview plus complete,
-manifested TSV and formatted Excel downloads; every interactive or displayed static plot has
-a PDF download. The app performs no scientific recomputation, opens only checksum-verified
-results, and restricts read-only queries to canonical result tables.
+browsable. Every canonical dataset has a bounded preview and complete Parquet plus TSV or
+TSV.GZ storage. Manageable tables also have complete formatted Excel downloads. The feature
+page can export a filtered subset of up to 250,000 rows as matching TSV and formatted Excel,
+without loading the complete feature relation into application memory. Every interactive or
+displayed static plot has a PDF download. The app performs no scientific recomputation,
+opens only checksum-verified results, and restricts read-only queries to canonical tables.
 
 ## Custom protein types
 
