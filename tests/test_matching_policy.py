@@ -136,18 +136,86 @@ class MatchingPolicyTests(unittest.TestCase):
         wrong_species = replace(
             _context(protein_id="control", unit_id="control_unit"), species=("animal",)
         )
-        rows, selected = _match_background_units(
-            background_label="control:reference",
-            target_label_ids=("protein:class",),
-            target_ids=frozenset({"target"}),
-            contexts={"target": target},
-            candidates=(wrong_species,),
-            settings=_settings(strategy="COVERAGE_FIRST_BOUNDED"),
+        for strategy in ("COVERAGE_FIRST_BOUNDED", "COVERAGE_FIRST_CALIPER_COMPLETE"):
+            with self.subTest(strategy=strategy):
+                rows, selected = _match_background_units(
+                    background_label="control:reference",
+                    target_label_ids=("protein:class",),
+                    target_ids=frozenset({"target"}),
+                    contexts={"target": target},
+                    candidates=(wrong_species,),
+                    settings=_settings(strategy=strategy),
+                )
+                coverage, summary = _summarise_control_coverage(
+                    rows=rows, requested_control_count=3
+                )
+                self.assertEqual(selected, frozenset())
+                self.assertEqual(coverage[0]["coverage_status"], "UNMATCHED")
+                self.assertEqual(summary[0]["target_without_control_count"], 1)
+
+    def test_caliper_complete_search_recovers_controls_beyond_128(self) -> None:
+        """The 128-candidate limit must not make compatible targets unmatched."""
+
+        targets = {
+            f"target_{index:03d}": _context(
+                protein_id=f"target_{index:03d}", unit_id=f"target_{index:03d}"
+            )
+            for index in range(130)
+        }
+        controls = tuple(
+            _context(protein_id=f"control_{index:03d}", unit_id=f"control_{index:03d}")
+            for index in range(130)
         )
-        coverage, summary = _summarise_control_coverage(rows=rows, requested_control_count=3)
-        self.assertEqual(selected, frozenset())
-        self.assertEqual(coverage[0]["coverage_status"], "UNMATCHED")
-        self.assertEqual(summary[0]["target_without_control_count"], 1)
+        inputs = {
+            "background_label": "control:reference",
+            "target_label_ids": ("protein:class",),
+            "target_ids": frozenset(targets),
+            "contexts": targets,
+            "candidates": controls,
+        }
+        one_slot = replace(
+            _settings(strategy="COVERAGE_FIRST_BOUNDED"), control_units_per_target_unit=1
+        )
+        bounded, _ = _match_background_units(**inputs, settings=one_slot)
+        complete, selected = _match_background_units(
+            **inputs,
+            settings=replace(one_slot, matching_strategy="COVERAGE_FIRST_CALIPER_COMPLETE"),
+        )
+        bounded_coverage, _ = _summarise_control_coverage(rows=bounded, requested_control_count=1)
+        complete_coverage, _ = _summarise_control_coverage(rows=complete, requested_control_count=1)
+        self.assertEqual(sum(row["matched_control_count"] for row in bounded_coverage), 128)
+        self.assertEqual(sum(row["matched_control_count"] for row in complete_coverage), 130)
+        self.assertEqual(len(selected), 130)
+
+    def test_caliper_complete_search_skips_nearby_ineligible_lengths(self) -> None:
+        """Out-of-caliper candidates must not fill the 128-candidate search cap."""
+
+        target = _context(protein_id="target", unit_id="target")
+        controls = tuple(
+            replace(
+                _context(protein_id=f"bad_{index:03d}", unit_id=f"bad_{index:03d}"),
+                sequence_length=50,
+            )
+            for index in range(128)
+        ) + (replace(_context(protein_id="good", unit_id="good"), sequence_length=160),)
+        inputs = {
+            "background_label": "control:reference",
+            "target_label_ids": ("protein:class",),
+            "target_ids": frozenset({"target"}),
+            "contexts": {"target": target},
+            "candidates": controls,
+        }
+        one_slot = replace(
+            _settings(strategy="COVERAGE_FIRST_BOUNDED"), control_units_per_target_unit=1
+        )
+        bounded, _ = _match_background_units(**inputs, settings=one_slot)
+        complete, selected = _match_background_units(
+            **inputs,
+            settings=replace(one_slot, matching_strategy="COVERAGE_FIRST_CALIPER_COMPLETE"),
+        )
+        self.assertEqual(bounded[0]["status"], "UNMATCHED")
+        self.assertEqual(complete[0]["control_protein_id"], "good")
+        self.assertEqual(selected, frozenset({"good"}))
 
     def test_coverage_summary_rejects_control_reuse(self) -> None:
         """The exported audit cannot silently count one control twice."""

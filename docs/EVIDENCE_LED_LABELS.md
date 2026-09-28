@@ -247,12 +247,15 @@ difference. The versioned `matching_strategy` chooses allocation:
 | Strategy | Allocation |
 |---|---|
 | `TARGET_GREEDY` | Legacy policy: fill each target's slots before moving to the next target. This remains the default for old custom rulesets. |
-| `COVERAGE_FIRST_BOUNDED` | Assign one unused control to as many target blocks as possible, then allocate second and later slots. It uses deterministic augmenting paths over at most 128 nearest-length candidates per compatible bucket. The built-in E3 rules version 1.1.0 and generic example select this policy. |
+| `COVERAGE_FIRST_BOUNDED` | Assign one unused control to as many target blocks as possible, then allocate second and later slots. It uses deterministic augmenting paths over at most 128 nearest-length candidates per compatible bucket. Retained for reproducibility of older rulesets. |
+| `COVERAGE_FIRST_CALIPER_COMPLETE` | Begin with 128 candidates per compatible bucket and expand the search when any target remains uncovered. Stop only when all targets have a control or all candidates passing the prespecified calipers have been considered. Built-in E3 rules version 1.2.0 and the generic example select this policy. |
 
-The bounded candidate lists mean coverage-first matching is maximum-cardinality
-**on those lists**, not a global optimum over every control. Calipers and clean
-pool exclusions are unchanged. Both strategies emit a row for every successful
-or unmatched requested slot.
+The bounded policy finds maximum coverage on its truncated candidate lists. The
+caliper-complete policy finds maximum coverage over all eligible controls for
+each requested slot, but allocates earlier slots first. Neither policy optimises
+distance globally or makes the downstream association a paired statistical test.
+Calipers and clean-pool exclusions are unchanged. Every strategy emits a row
+for each successful or unmatched requested slot.
 
 No target class is analysed unless its profile-resolved background has the configured minimum
 number of independent control blocks.
@@ -290,10 +293,21 @@ Every table is emitted as machine-oriented TSV and formatted XLSX:
 
 `EVIDENCE_LABELS.json` records package/profile/rules versions, settings, counts, input
 checksums and every output checksum. Any modification invalidates verification.
-The new coverage tables expose unpaired targets; they do not change the pooled
-Fisher test into a paired analysis or automatically exclude unmatched targets
-from a downstream campaign. Review those rows before treating an association
-as a matched-control comparison.
+For a campaign with an evidence bundle, association and explainable-model
+analysis use a comparison-specific cohort: only target blocks with at least one
+control and only controls allocated to those blocks enter that comparison.
+Unmatched targets remain positive in the original assignment authority and
+visible in the coverage table. The campaign metadata records the included and
+excluded protein and block counts per comparison under
+`automated_label_evidence.matched_comparison_cohorts`. A comparison with no
+audited background uses its reviewed cohort; mixing audited and unaudited
+backgrounds within one comparison is rejected. The Fisher test remains an
+unpaired block-level enrichment analysis on this restricted cohort.
+Changing the matching policy requires a fresh work directory and campaign ID:
+the evidence bundle and checkpoint are immutable, checksum-bound authorities.
+Inspect the new `control_match_summary.tsv` before launching the full analysis;
+caliper-complete search can still leave a target unmatched when no suitable
+control exists in its eligible pool.
 
 ## Generic execution
 

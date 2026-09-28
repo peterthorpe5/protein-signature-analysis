@@ -1,6 +1,6 @@
 schema_version: 1
 ruleset_id: kinase_example_rules
-ruleset_version: "1.0.0"
+ruleset_version: "1.1.0"
 profile_id: kinase_example
 
 # This example deliberately requires annotation plus domain corroboration.
@@ -20,7 +20,7 @@ settings:
   orthology_propagation_enabled: true
   minimum_orthology_anchor_proteins: 2
   control_units_per_target_unit: 2
-  matching_strategy: COVERAGE_FIRST_BOUNDED
+  matching_strategy: COVERAGE_FIRST_CALIPER_COMPLETE
   minimum_control_units_per_background: 3
   require_species_match: true
   require_structure_match: true

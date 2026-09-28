@@ -42,6 +42,7 @@ from .feature_provenance import (
 )
 from .foldseek import foldseek_version, run_foldseek_all_vs_all
 from .io_utils import read_json
+from .matched_cohorts import derive_matched_comparison_cohorts
 from .models import (
     AlphaFoldRequest,
     CampaignConfig,
@@ -92,6 +93,7 @@ from .tables import (
 )
 
 LOGGER = logging.getLogger(__name__)
+ANALYSIS_SEMANTICS_VERSION = "matched_comparison_cohorts_v1"
 
 
 def run_campaign(
@@ -230,6 +232,7 @@ def run_campaign(
             "partition_seed": config.analysis.random_seed,
             "stable_sorting": True,
             "atomic_publication": True,
+            "analysis_semantics_version": ANALYSIS_SEMANTICS_VERSION,
             "analysis_checkpoint_sha256": run_identity,
             "bounded_table_batches": True,
         },
@@ -730,6 +733,16 @@ def _prepare_campaign(
         random_seed=config.analysis.random_seed,
         redundancy_memberships=supplied_redundancy,
     )
+    matched_cohorts = derive_matched_comparison_cohorts(
+        comparisons=config.comparisons,
+        label_memberships=label_memberships,
+        partitions=partitions,
+        control_matching_audit=label_evidence_tables["control_matching_audit"],
+    )
+    label_evidence_metadata["matched_comparison_cohorts"] = {
+        comparison_id: cohort.to_record()
+        for comparison_id, cohort in sorted(matched_cohorts.items())
+    }
     discovery_protein_ids = frozenset(
         item.protein_id for item in partitions if item.partition == "DISCOVERY"
     )
@@ -818,6 +831,7 @@ def _prepare_campaign(
         settings=config.analysis,
         feature_assessment_universes=feature_assessment_universes,
         exploratory_feature_keys=exploratory_feature_keys,
+        matched_cohorts=matched_cohorts,
     )
     signatures = summarise_signatures(
         associations=associations,
@@ -833,6 +847,7 @@ def _prepare_campaign(
         random_seed=config.analysis.random_seed,
         feature_assessment_universes=feature_assessment_universes,
         exploratory_feature_keys=exploratory_feature_keys,
+        matched_cohorts=matched_cohorts,
     )
     structure_asset_sources, asset_names = _structure_asset_sources(structures=structures)
     tables = {
@@ -1454,6 +1469,7 @@ def _run_identity(*, config: CampaignConfig, profile: ProteinProfile) -> str:
     return sha256_json(
         value={
             "package_version": __version__,
+            "analysis_semantics_version": ANALYSIS_SEMANTICS_VERSION,
             "configuration": config_to_record(config=config),
             "profile": {
                 "profile_id": profile.profile_id,

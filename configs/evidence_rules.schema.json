@@ -57,7 +57,11 @@
         "control_units_per_target_unit": {"type": "integer", "minimum": 1},
         "matching_strategy": {
           "type": "string",
-          "enum": ["TARGET_GREEDY", "COVERAGE_FIRST_BOUNDED"]
+          "enum": [
+            "TARGET_GREEDY",
+            "COVERAGE_FIRST_BOUNDED",
+            "COVERAGE_FIRST_CALIPER_COMPLETE"
+          ]
         },
         "minimum_control_units_per_background": {"type": "integer", "minimum": 1},
         "require_species_match": {"type": "boolean"},

@@ -16,7 +16,7 @@ import re
 import tempfile
 import warnings
 from collections import Counter, defaultdict
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,7 @@ from .assessment import (
     validate_feature_inference_scopes,
 )
 from .errors import ConfigurationError, InputValidationError, PublicationError
+from .matched_cohorts import MatchedComparisonCohort
 from .models import (
     ComparisonDefinition,
     ExplainableMLSettings,
@@ -66,6 +67,7 @@ def run_explainable_models(
     random_seed: int,
     feature_assessment_universes: FeatureAssessmentUniverses | None = None,
     exploratory_feature_keys: Collection[FeatureKey] = (),
+    matched_cohorts: Mapping[str, MatchedComparisonCohort] | None = None,
 ) -> ExplainableMLResult:
     """Fit independently validated elastic-net models for eligible comparisons.
 
@@ -82,6 +84,7 @@ def run_explainable_models(
             assessed for every model sample.
         exploratory_feature_keys: All-data-derived features excluded from model
             selection to protect held-out evaluation and SHAP interpretation.
+        matched_cohorts: Optional comparison-specific matched analysis subsets.
 
     Returns:
         Canonical model, importance, prediction and local-explanation rows.
@@ -150,6 +153,7 @@ def run_explainable_models(
             excluded_technical_feature_rows=excluded_technical,
             dependencies=dependencies,
             feature_assessment_universes=assessment_universes,
+            matched_cohort=(matched_cohorts or {}).get(comparison.comparison_id),
         )
         model_rows.append(result[0])
         importance_rows.extend(result[1])
@@ -230,6 +234,7 @@ def _fit_one_comparison(
     excluded_technical_feature_rows: int,
     dependencies: dict[str, Any],
     feature_assessment_universes: NormalisedAssessmentUniverses | None,
+    matched_cohort: MatchedComparisonCohort | None = None,
 ) -> tuple[
     dict[str, Any],
     tuple[dict[str, Any], ...],
@@ -251,6 +256,9 @@ def _fit_one_comparison(
                 f"Comparison {comparison.comparison_id!r} has an ML sample in both classes: "
                 f"{protein_id!r}."
             )
+        if matched_cohort is not None:
+            is_target = is_target and protein_id in matched_cohort.target_protein_ids
+            is_background = is_background and protein_id in matched_cohort.background_protein_ids
         if is_target or is_background:
             samples[protein_id] = 1 if is_target else 0
     discovery = tuple(

@@ -17,6 +17,7 @@ from .assessment import (
     validate_feature_inference_scopes,
 )
 from .errors import InputValidationError
+from .matched_cohorts import MatchedComparisonCohort
 from .models import (
     AnalysisSettings,
     AnalysisStatus,
@@ -40,6 +41,7 @@ def analyse_feature_associations(
     settings: AnalysisSettings,
     feature_assessment_universes: FeatureAssessmentUniverses | None = None,
     exploratory_feature_keys: Collection[FeatureKey] = (),
+    matched_cohorts: Mapping[str, MatchedComparisonCohort] | None = None,
 ) -> tuple[AssociationResult, ...]:
     """Test categorical features in each explicit comparison and partition.
 
@@ -56,6 +58,8 @@ def analyse_feature_associations(
         exploratory_feature_keys: Features derived from all data rather than a
             discovery-only reference. These remain eligible for exploratory
             discovery tests but are excluded from held-out validation tests.
+        matched_cohorts: Optional per-comparison target and background subsets
+            derived from the verified control-match audit.
 
     Returns:
         Exact association results with within-feature-type FDR correction.
@@ -102,6 +106,7 @@ def analyse_feature_associations(
     )
     results: list[AssociationResult] = []
     for comparison_index, comparison in enumerate(comparisons, start=1):
+        cohort = (matched_cohorts or {}).get(comparison.comparison_id)
         LOGGER.info(
             "Analysing feature comparison %d/%d comparison_id=%s",
             comparison_index,
@@ -131,6 +136,9 @@ def analyse_feature_associations(
                     f"Comparison {comparison.comparison_id!r} has proteins in both classes: "
                     f"{sorted(overlap)[:10]}"
                 )
+            if cohort is not None:
+                target.intersection_update(cohort.target_protein_ids)
+                background.intersection_update(cohort.background_protein_ids)
             subset = _analyse_partition(
                 comparison=comparison,
                 partition=partition,

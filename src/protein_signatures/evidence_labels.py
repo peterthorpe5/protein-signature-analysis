@@ -1257,9 +1257,11 @@ def _parse_evidence_settings(*, value: Any) -> EvidenceSettings:
     if not isinstance(matching_strategy, str) or matching_strategy not in {
         "TARGET_GREEDY",
         "COVERAGE_FIRST_BOUNDED",
+        "COVERAGE_FIRST_CALIPER_COMPLETE",
     }:
         raise InputValidationError(
-            "matching_strategy must be TARGET_GREEDY or COVERAGE_FIRST_BOUNDED."
+            "matching_strategy must be TARGET_GREEDY, COVERAGE_FIRST_BOUNDED "
+            "or COVERAGE_FIRST_CALIPER_COMPLETE."
         )
     return EvidenceSettings(
         **numbers,
@@ -2271,7 +2273,10 @@ def _match_background_units(
     )
     candidate_representatives = _unit_representatives(contexts=candidates)
     index = _control_bucket_index(contexts=tuple(candidate_representatives.values()))
-    if settings.matching_strategy == "COVERAGE_FIRST_BOUNDED":
+    if settings.matching_strategy in {
+        "COVERAGE_FIRST_BOUNDED",
+        "COVERAGE_FIRST_CALIPER_COMPLETE",
+    }:
         return _match_background_units_coverage_first(
             background_label=background_label,
             target_label_ids=target_label_ids,
@@ -2338,9 +2343,10 @@ def _match_background_units_coverage_first(
 ) -> tuple[tuple[dict[str, Any], ...], frozenset[str]]:
     """Give each target one control before allocating extra controls.
 
-    Maximum-cardinality augmentation operates on the same bounded, outcome-blind
-    candidate lists as the legacy matcher. The candidate cap means this method
-    must not be described as an exhaustive global optimum.
+    The caliper-complete policy expands the outcome-blind candidate search only
+    when a matching slot is uncovered. Expansion continues until every target
+    has a control or every compatible control is considered. The legacy bounded
+    policy retains its original 128-candidate limit.
 
     Args:
         background_label: Named control stratum.
@@ -2353,42 +2359,52 @@ def _match_background_units_coverage_first(
         Audit rows for every requested slot and selected control protein IDs.
     """
 
-    preferences: dict[str, tuple[ProteinEvidenceContext, ...]] = {}
-    for unit_id, target in sorted(target_representatives.items()):
-        compatible = _nearby_control_candidates(
-            target=target,
-            index=index,
-            used_units=frozenset(),
-            settings=settings,
-        )
-        preferences[unit_id] = tuple(
-            sorted(
-                (
-                    control
-                    for control in compatible
-                    if _control_is_compatible(target=target, control=control, settings=settings)
-                ),
-                key=lambda control: (
-                    _control_distance(target=target, control=control),
-                    control.protein_id,
-                ),
-            )
-        )
+    complete_search = settings.matching_strategy == "COVERAGE_FIRST_CALIPER_COMPLETE"
+    maximum_bucket_size = max((len(bucket) for bucket in index.values()), default=0)
     allocations: dict[str, list[ProteinEvidenceContext]] = {
         unit_id: [] for unit_id in target_representatives
     }
     used_units: set[str] = set()
     for slot in range(settings.control_units_per_target_unit):
-        eligible = {
-            unit_id: tuple(
-                control
-                for control in preferences[unit_id]
-                if control.independence_unit not in used_units
+        candidate_limit = 128
+        while True:
+            eligible = {
+                unit_id: _preferred_control_candidates(
+                    target=target_representatives[unit_id],
+                    index=index,
+                    used_units=used_units if complete_search else frozenset(),
+                    settings=settings,
+                    maximum_per_bucket=candidate_limit,
+                    filter_by_length_caliper=complete_search,
+                )
+                for unit_id in allocations
+                if len(allocations[unit_id]) == slot
+            }
+            if not complete_search:
+                eligible = {
+                    unit_id: tuple(
+                        control
+                        for control in preferences
+                        if control.independence_unit not in used_units
+                    )
+                    for unit_id, preferences in eligible.items()
+                }
+            assigned = _maximum_coverage_assignment(preferences=eligible)
+            if (
+                not complete_search
+                or len(assigned) == len(eligible)
+                or candidate_limit >= maximum_bucket_size
+            ):
+                break
+            candidate_limit = min(candidate_limit * 2, maximum_bucket_size)
+            LOGGER.info(
+                "Expanding control search background=%s slot=%d candidate_limit=%d "
+                "uncovered_targets=%d",
+                background_label,
+                slot + 1,
+                candidate_limit,
+                len(eligible) - len(assigned),
             )
-            for unit_id in allocations
-            if len(allocations[unit_id]) == slot
-        }
-        assigned = _maximum_coverage_assignment(preferences=eligible)
         for unit_id, control in assigned.items():
             allocations[unit_id].append(control)
             used_units.add(control.independence_unit)
@@ -2420,13 +2436,56 @@ def _match_background_units_coverage_first(
                     ),
                     status="MATCHED" if control is not None else "UNMATCHED",
                     reason=(
-                        "Coverage-first bounded allocation within every configured caliper."
+                        (
+                            "Coverage-first caliper-complete allocation."
+                            if complete_search
+                            else "Coverage-first bounded allocation within "
+                            "every configured caliper."
+                        )
                         if control is not None
-                        else "No unused compatible control in the bounded candidate lists."
+                        else (
+                            "No available compatible control after complete caliper search."
+                            if complete_search
+                            else "No unused compatible control in the bounded candidate lists."
+                        )
                     ),
                 )
             )
     return tuple(rows), frozenset(selected)
+
+
+def _preferred_control_candidates(
+    *,
+    target: ProteinEvidenceContext,
+    index: Mapping[tuple[str, bool, int], tuple[tuple[int, str, ProteinEvidenceContext], ...]],
+    used_units: Collection[str],
+    settings: EvidenceSettings,
+    maximum_per_bucket: int,
+    filter_by_length_caliper: bool,
+) -> tuple[ProteinEvidenceContext, ...]:
+    """Order currently available candidates by prespecified matching distance."""
+
+    candidates = _nearby_control_candidates(
+        target=target,
+        index=index,
+        used_units=used_units,
+        settings=settings,
+        maximum_per_bucket=maximum_per_bucket,
+        filter_by_length_caliper=filter_by_length_caliper,
+    )
+    return tuple(
+        sorted(
+            (
+                control
+                for control in candidates
+                if _control_is_compatible(target=target, control=control, settings=settings)
+            ),
+            key=lambda control: (
+                _control_distance(target=target, control=control),
+                control.protein_id,
+            ),
+        )
+    )
 
 
 def _maximum_coverage_assignment(
@@ -2584,6 +2643,7 @@ def _nearby_control_candidates(
     used_units: Collection[str],
     settings: EvidenceSettings,
     maximum_per_bucket: int = 128,
+    filter_by_length_caliper: bool = False,
 ) -> tuple[ProteinEvidenceContext, ...]:
     """Return bounded nearest-length candidates from compatible matching buckets."""
 
@@ -2608,6 +2668,23 @@ def _nearby_control_candidates(
                 right = insertion
                 accepted = 0
                 while accepted < maximum_per_bucket and (left >= 0 or right < len(bucket)):
+                    if filter_by_length_caliper:
+                        if (
+                            left >= 0
+                            and abs(math.log2((target.sequence_length + 1) / (bucket[left][0] + 1)))
+                            > settings.maximum_log2_length_difference
+                        ):
+                            left = -1
+                        if (
+                            right < len(bucket)
+                            and abs(
+                                math.log2((target.sequence_length + 1) / (bucket[right][0] + 1))
+                            )
+                            > settings.maximum_log2_length_difference
+                        ):
+                            right = len(bucket)
+                        if left < 0 and right >= len(bucket):
+                            break
                     choose_left = right >= len(bucket) or (
                         left >= 0
                         and abs(bucket[left][0] - target.sequence_length)

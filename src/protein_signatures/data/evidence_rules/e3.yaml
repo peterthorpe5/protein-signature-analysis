@@ -1,6 +1,6 @@
 schema_version: 1
 ruleset_id: e3_evidence_defaults
-ruleset_version: "1.1.0"
+ruleset_version: "1.2.0"
 profile_id: e3_default
 
 # These rules create provisional evidence-supported hypotheses, not reviewed
@@ -21,7 +21,7 @@ settings:
   orthology_propagation_enabled: true
   minimum_orthology_anchor_proteins: 2
   control_units_per_target_unit: 3
-  matching_strategy: COVERAGE_FIRST_BOUNDED
+  matching_strategy: COVERAGE_FIRST_CALIPER_COMPLETE
   minimum_control_units_per_background: 3
   require_species_match: true
   require_structure_match: true

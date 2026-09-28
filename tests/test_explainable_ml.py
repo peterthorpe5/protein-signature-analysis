@@ -33,6 +33,7 @@ from protein_signatures.explainable_ml import (
     _sigmoid,
     run_explainable_models,
 )
+from protein_signatures.matched_cohorts import MatchedComparisonCohort
 from protein_signatures.models import (
     ComparisonDefinition,
     ExplainableMLSettings,
@@ -73,6 +74,29 @@ def test_mandatory_and_complete_explainable_models(tmp_path: Path) -> None:
         "SHAP_GLOBAL_BAR",
         "SHAP_WATERFALL",
     }
+
+
+def test_explainable_model_uses_only_matched_comparison_samples(tmp_path: Path) -> None:
+    """Unmatched positives and controls for other targets cannot enter a model."""
+
+    dataset = _dataset()
+    cohort = MatchedComparisonCohort(
+        target_protein_ids=frozenset({"t1", "t2", "t3", "t4", "t5", "tv1", "tv2"}),
+        background_protein_ids=frozenset({"b1", "b2", "b3", "b4", "b5", "bv1", "bv2"}),
+        target_unit_count=7,
+        unmatched_target_unit_count=1,
+        unmatched_target_protein_count=1,
+        control_unit_count=7,
+    )
+    result = run_explainable_models(
+        **dataset,
+        settings=_settings(plot_cache_dir=tmp_path / "matched-plots"),
+        random_seed=7,
+        matched_cohorts={"cmp": cohort},
+    )
+    assert result.models[0]["status"].startswith("COMPLETE")
+    assert result.models[0]["discovery_target_count"] == 5
+    assert result.models[0]["discovery_background_count"] == 5
     assert all(path.is_file() for _, path in result.plot_assets)
 
 

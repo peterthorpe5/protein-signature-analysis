@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Expand coverage-first control searches until all caliper-compatible candidates
+  have been considered when target blocks remain unmatched. Version the E3
+  evidence rules at 1.2.0 without changing existing bounded-policy runs.
+- Restrict automated-evidence associations and explainable models to target
+  blocks with at least one control and controls allocated to those blocks for
+  each comparison. Keep all provisional assignments in the evidence authority
+  and record excluded blocks in the campaign metadata.
 - Add a generic candidate-query command for frozen, held-out validated
   signatures on new proteomes or overlapping orthogroups. Assess exact k-mers
   from FASTA, combine explicit domain/structural feature calls, preserve unknown
