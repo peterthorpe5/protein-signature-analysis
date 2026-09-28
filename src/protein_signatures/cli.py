@@ -26,6 +26,7 @@ from .logging_config import configure_logging
 from .pipeline import run_campaign, validate_campaign
 from .profiles import load_profile
 from .publication import verify_completed_result
+from .query import project_structural_signatures, query_signature_evidence
 from .starter import initialise_campaign
 from .workflow_markers import publish_validation_marker, publish_verification_marker
 
@@ -264,6 +265,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     profile_parser.add_argument("--profile", default="e3")
     profile_parser.add_argument("--log-level", default="WARNING")
+    query_parser = subparsers.add_parser(
+        "query-signatures",
+        help="Apply frozen validated signatures to a new FASTA or supplied protein groups.",
+    )
+    query_parser.add_argument("--signatures", required=True, type=Path)
+    query_parser.add_argument("--comparisons", required=True, type=Path)
+    query_parser.add_argument("--query-fasta", required=True, type=Path)
+    query_parser.add_argument("--query-features", type=Path, action="append", default=[])
+    query_parser.add_argument("--query-units", type=Path)
+    query_parser.add_argument("--comparison-id", action="append", default=[])
+    query_parser.add_argument("--output-dir", required=True, type=Path)
+    query_parser.add_argument("--include-within-comparison", action="store_true")
+    query_parser.add_argument("--log-level", default="INFO")
+    projection_parser = subparsers.add_parser(
+        "project-structural-signatures",
+        help="Map new structure alignments to frozen discovery clusters (positive evidence only).",
+    )
+    projection_parser.add_argument("--reference-clusters", required=True, type=Path)
+    projection_parser.add_argument("--query-comparisons", required=True, type=Path)
+    projection_parser.add_argument("--query-fasta", required=True, type=Path)
+    projection_parser.add_argument("--output-dir", required=True, type=Path)
+    projection_parser.add_argument("--log-level", default="INFO")
     return parser
 
 
@@ -492,6 +515,36 @@ def main(argv: Sequence[str] | None = None) -> int:
                 marker_path=arguments.marker,
             )
             print(json.dumps({"status": "VALID", "marker": str(destination)}, sort_keys=True))
+        elif arguments.command == "query-signatures":
+            destination = query_signature_evidence(
+                signatures_path=arguments.signatures,
+                comparisons_path=arguments.comparisons,
+                query_fasta=arguments.query_fasta,
+                query_features_path=(
+                    arguments.query_features[0] if arguments.query_features else None
+                ),
+                additional_query_features_paths=tuple(arguments.query_features[1:]),
+                query_units_path=arguments.query_units,
+                output_dir=arguments.output_dir,
+                include_within_comparison=arguments.include_within_comparison,
+                comparison_ids=tuple(arguments.comparison_id),
+            )
+            print(json.dumps({"status": "QUERY_EVIDENCE_COMPLETE", "result_dir": str(destination)}))
+        elif arguments.command == "project-structural-signatures":
+            destination = project_structural_signatures(
+                reference_clusters_path=arguments.reference_clusters,
+                query_comparisons_path=arguments.query_comparisons,
+                query_fasta=arguments.query_fasta,
+                output_dir=arguments.output_dir,
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": "POSITIVE_STRUCTURAL_PROJECTIONS_COMPLETE",
+                        "result_dir": str(destination),
+                    }
+                )
+            )
         else:
             profile = load_profile(source=arguments.profile)
             print(

@@ -189,6 +189,19 @@ Verify a copied result independently with:
 protein-signatures verify --resource /data/signature_campaigns/e3_1000/result
 ```
 
+## Apply validated signatures to a new proteome
+
+After a reference campaign, `protein-signatures query-signatures` reads its frozen
+`signatures` and `comparisons` tables and evaluates new FASTA proteins or supplied
+orthogroups. It scans exact amino-acid k-mers natively; domain, fold, custom and
+structural features can be supplied as explicit assessment TSVs. Missing
+assessments remain unknown. `project-structural-signatures` maps supplied new
+pairwise alignments onto discovery-frozen structural clusters and emits positive
+evidence only. The result is a checksum-bound candidate table, not a class
+probability or an automatic functional assignment. See
+[Query new proteomes and orthogroups](docs/QUERY_NEW_PROTEOMES.md) for commands,
+input columns and interpretation.
+
 ## Evidence-led production proposals for any protein type
 
 The package can create conservative, provisional target labels and outcome-blind matched

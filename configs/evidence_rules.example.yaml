@@ -20,6 +20,7 @@ settings:
   orthology_propagation_enabled: true
   minimum_orthology_anchor_proteins: 2
   control_units_per_target_unit: 2
+  matching_strategy: COVERAGE_FIRST_BOUNDED
   minimum_control_units_per_background: 3
   require_species_match: true
   require_structure_match: true

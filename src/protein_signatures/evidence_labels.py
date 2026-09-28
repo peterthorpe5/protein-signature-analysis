@@ -135,6 +135,22 @@ CONTROL_MATCH_FIELDS = (
     "status",
     "reason",
 )
+CONTROL_COVERAGE_FIELDS = (
+    "background_label_id",
+    "target_protein_id",
+    "target_unit_id",
+    "requested_control_count",
+    "matched_control_count",
+    "coverage_status",
+)
+CONTROL_SUMMARY_FIELDS = (
+    "background_label_id",
+    "target_unit_count",
+    "matched_control_unit_count",
+    "target_with_control_count",
+    "target_without_control_count",
+    "target_coverage_fraction",
+)
 LABEL_DEFINITION_FIELDS = (
     "label_id",
     "feature_type",
@@ -218,6 +234,7 @@ class EvidenceSettings:
     maximum_log2_length_difference: float
     maximum_domain_count_difference: int
     exclude_input_candidates_from_controls: bool
+    matching_strategy: str = "TARGET_GREEDY"
 
 
 @dataclass(frozen=True)
@@ -690,6 +707,10 @@ def create_evidence_label_bundle(
         controls_by_label=controls_by_label,
         contexts=contexts,
     )
+    coverage_rows, matching_summary_rows = _summarise_control_coverage(
+        rows=tuple(control_rows),
+        requested_control_count=ruleset.settings.control_units_per_target_unit,
+    )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.staging.", dir=destination.parent))
@@ -698,6 +719,8 @@ def create_evidence_label_bundle(
             "label_assignments": tuple(label_rows),
             "label_evidence_audit": tuple(audit_rows),
             "control_matching_audit": tuple(control_rows),
+            "control_match_coverage": coverage_rows,
+            "control_match_summary": matching_summary_rows,
             "label_definition_features": tuple(definitions),
             "class_labelling_summary": tuple(class_rows),
             "unresolved_assignments": tuple(unresolved_rows),
@@ -706,6 +729,8 @@ def create_evidence_label_bundle(
             "label_assignments": LABEL_FIELDS,
             "label_evidence_audit": EVIDENCE_AUDIT_FIELDS,
             "control_matching_audit": CONTROL_MATCH_FIELDS,
+            "control_match_coverage": CONTROL_COVERAGE_FIELDS,
+            "control_match_summary": CONTROL_SUMMARY_FIELDS,
             "label_definition_features": LABEL_DEFINITION_FIELDS,
             "class_labelling_summary": CLASS_SUMMARY_FIELDS,
             "unresolved_assignments": UNRESOLVED_FIELDS,
@@ -833,6 +858,8 @@ def create_evidence_label_bundle(
                 ),
                 "label_evidence_audit": str(destination / "label_evidence_audit.tsv"),
                 "control_matching_audit": str(destination / "control_matching_audit.tsv"),
+                "control_match_coverage": str(destination / "control_match_coverage.tsv"),
+                "control_match_summary": str(destination / "control_match_summary.tsv"),
                 "label_definition_features": str(destination / "label_definition_features.tsv"),
                 "class_labelling_summary": str(destination / "class_labelling_summary.tsv"),
                 "unresolved_assignments": str(destination / "unresolved_assignments.tsv"),
@@ -1071,6 +1098,13 @@ def verify_evidence_label_bundle(*, bundle_dir: Path) -> Mapping[str, Any]:
             raise InputValidationError(
                 f"Evidence marker {field!r} path differs from the bundle authority."
             )
+    for field in ("control_match_coverage", "control_match_summary"):
+        if field in document:
+            expected = root / f"{field}.tsv"
+            if document[field] != str(expected) or f"{field}.tsv" not in declared:
+                raise InputValidationError(f"Evidence marker {field!r} is inconsistent.")
+            if f"{field}.xlsx" not in declared:
+                raise InputValidationError(f"Evidence bundle lacks {field}.xlsx.")
     analysis_domains = document.get("analysis_domains")
     if analysis_domains is not None:
         domains_path = root / "domains.for_signature_analysis.tsv"
@@ -1179,6 +1213,7 @@ def _parse_evidence_settings(*, value: Any) -> EvidenceSettings:
         "maximum_log2_length_difference",
         "maximum_domain_count_difference",
         "exclude_input_candidates_from_controls",
+        "matching_strategy",
     }
     _reject_unknown_fields(value=value, allowed=fields, field_name="evidence_rules.settings")
     numbers = {
@@ -1218,11 +1253,20 @@ def _parse_evidence_settings(*, value: Any) -> EvidenceSettings:
             "exclude_input_candidates_from_controls",
         )
     }
+    matching_strategy = value.get("matching_strategy", "TARGET_GREEDY")
+    if not isinstance(matching_strategy, str) or matching_strategy not in {
+        "TARGET_GREEDY",
+        "COVERAGE_FIRST_BOUNDED",
+    }:
+        raise InputValidationError(
+            "matching_strategy must be TARGET_GREEDY or COVERAGE_FIRST_BOUNDED."
+        )
     return EvidenceSettings(
         **numbers,
         **integers,
         maximum_domain_count_difference=maximum_domain_difference,
         **booleans,
+        matching_strategy=matching_strategy,
     )
 
 
@@ -2220,13 +2264,21 @@ def _match_background_units(
     candidates: tuple[ProteinEvidenceContext, ...],
     settings: EvidenceSettings,
 ) -> tuple[tuple[dict[str, Any], ...], frozenset[str]]:
-    """Greedily match one representative per target and control block."""
+    """Match one representative per block under the versioned allocation policy."""
 
     target_representatives = _unit_representatives(
         contexts=tuple(contexts[protein_id] for protein_id in target_ids)
     )
     candidate_representatives = _unit_representatives(contexts=candidates)
     index = _control_bucket_index(contexts=tuple(candidate_representatives.values()))
+    if settings.matching_strategy == "COVERAGE_FIRST_BOUNDED":
+        return _match_background_units_coverage_first(
+            background_label=background_label,
+            target_label_ids=target_label_ids,
+            target_representatives=target_representatives,
+            index=index,
+            settings=settings,
+        )
     used_units: set[str] = set()
     selected: set[str] = set()
     rows: list[dict[str, Any]] = []
@@ -2274,6 +2326,231 @@ def _match_background_units(
                 )
             )
     return tuple(rows), frozenset(selected)
+
+
+def _match_background_units_coverage_first(
+    *,
+    background_label: str,
+    target_label_ids: tuple[str, ...],
+    target_representatives: Mapping[str, ProteinEvidenceContext],
+    index: Mapping[tuple[str, bool, int], tuple[tuple[int, str, ProteinEvidenceContext], ...]],
+    settings: EvidenceSettings,
+) -> tuple[tuple[dict[str, Any], ...], frozenset[str]]:
+    """Give each target one control before allocating extra controls.
+
+    Maximum-cardinality augmentation operates on the same bounded, outcome-blind
+    candidate lists as the legacy matcher. The candidate cap means this method
+    must not be described as an exhaustive global optimum.
+
+    Args:
+        background_label: Named control stratum.
+        target_label_ids: Target classes sharing this background.
+        target_representatives: One representative per target independence unit.
+        index: Indexed clean control representatives.
+        settings: Versioned matching policy and calipers.
+
+    Returns:
+        Audit rows for every requested slot and selected control protein IDs.
+    """
+
+    preferences: dict[str, tuple[ProteinEvidenceContext, ...]] = {}
+    for unit_id, target in sorted(target_representatives.items()):
+        compatible = _nearby_control_candidates(
+            target=target,
+            index=index,
+            used_units=frozenset(),
+            settings=settings,
+        )
+        preferences[unit_id] = tuple(
+            sorted(
+                (
+                    control
+                    for control in compatible
+                    if _control_is_compatible(target=target, control=control, settings=settings)
+                ),
+                key=lambda control: (
+                    _control_distance(target=target, control=control),
+                    control.protein_id,
+                ),
+            )
+        )
+    allocations: dict[str, list[ProteinEvidenceContext]] = {
+        unit_id: [] for unit_id in target_representatives
+    }
+    used_units: set[str] = set()
+    for slot in range(settings.control_units_per_target_unit):
+        eligible = {
+            unit_id: tuple(
+                control
+                for control in preferences[unit_id]
+                if control.independence_unit not in used_units
+            )
+            for unit_id in allocations
+            if len(allocations[unit_id]) == slot
+        }
+        assigned = _maximum_coverage_assignment(preferences=eligible)
+        for unit_id, control in assigned.items():
+            allocations[unit_id].append(control)
+            used_units.add(control.independence_unit)
+        LOGGER.info(
+            "Control matching background=%s slot=%d targets_with_slot=%d total_targets=%d",
+            background_label,
+            slot + 1,
+            len(assigned),
+            len(target_representatives),
+        )
+    rows: list[dict[str, Any]] = []
+    selected: set[str] = set()
+    for unit_id, target in sorted(target_representatives.items()):
+        assigned_controls = allocations[unit_id]
+        for slot in range(settings.control_units_per_target_unit):
+            control = assigned_controls[slot] if slot < len(assigned_controls) else None
+            if control is not None:
+                selected.add(control.protein_id)
+            rows.append(
+                _control_match_row(
+                    background_label=background_label,
+                    target_label_ids=target_label_ids,
+                    target=target,
+                    control=control,
+                    score=(
+                        _control_distance(target=target, control=control)
+                        if control is not None
+                        else None
+                    ),
+                    status="MATCHED" if control is not None else "UNMATCHED",
+                    reason=(
+                        "Coverage-first bounded allocation within every configured caliper."
+                        if control is not None
+                        else "No unused compatible control in the bounded candidate lists."
+                    ),
+                )
+            )
+    return tuple(rows), frozenset(selected)
+
+
+def _maximum_coverage_assignment(
+    *, preferences: Mapping[str, tuple[ProteinEvidenceContext, ...]]
+) -> dict[str, ProteinEvidenceContext]:
+    """Find a deterministic maximum-cardinality assignment on candidate lists.
+
+    Args:
+        preferences: Target units with controls ordered by outcome-blind distance.
+
+    Returns:
+        At most one unused control per target and control unit.
+    """
+
+    owner_by_control: dict[str, str] = {}
+    control_by_target: dict[str, ProteinEvidenceContext] = {}
+    for root in sorted(preferences, key=lambda unit_id: (len(preferences[unit_id]), unit_id)):
+        queue = [root]
+        visited_targets = {root}
+        predecessor: dict[str, str] = {}
+        free_control: ProteinEvidenceContext | None = None
+        for target_id in queue:
+            for control in preferences[target_id]:
+                control_id = control.independence_unit
+                if control_id in predecessor:
+                    continue
+                predecessor[control_id] = target_id
+                owner = owner_by_control.get(control_id)
+                if owner is None:
+                    free_control = control
+                    break
+                if owner not in visited_targets:
+                    queue.append(owner)
+                    visited_targets.add(owner)
+            if free_control is not None:
+                break
+        if free_control is None:
+            continue
+        control = free_control
+        while True:
+            target_id = predecessor[control.independence_unit]
+            previous = control_by_target.get(target_id)
+            control_by_target[target_id] = control
+            owner_by_control[control.independence_unit] = target_id
+            if previous is None:
+                break
+            control = previous
+    return control_by_target
+
+
+def _summarise_control_coverage(
+    *, rows: tuple[dict[str, Any], ...], requested_control_count: int
+) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+    """Record target coverage explicitly without treating pooled controls as pairs.
+
+    Args:
+        rows: Full per-slot matched-control audit.
+        requested_control_count: Number of slots per target under the ruleset.
+
+    Returns:
+        Per-target-unit coverage and per-background summaries.
+
+    Raises:
+        InputValidationError: If the audit has missing slots or reused controls.
+    """
+
+    if requested_control_count < 1:
+        raise InputValidationError("requested_control_count must be positive.")
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[(str(row["background_label_id"]), str(row["target_unit_id"]))].append(row)
+    coverage: list[dict[str, Any]] = []
+    summary: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"targets": 0, "with_control": 0, "controls": 0}
+    )
+    used_by_background: dict[str, set[str]] = defaultdict(set)
+    for (background, unit_id), matches in sorted(grouped.items()):
+        if len(matches) != requested_control_count:
+            raise InputValidationError(
+                f"Incomplete matching audit slots for {background}, {unit_id}."
+            )
+        protein_ids = {str(row["target_protein_id"]) for row in matches}
+        if len(protein_ids) != 1:
+            raise InputValidationError(f"Target unit has inconsistent representatives: {unit_id}.")
+        matched = tuple(row for row in matches if row["status"] == "MATCHED")
+        if any(row["status"] not in {"MATCHED", "UNMATCHED"} for row in matches):
+            raise InputValidationError(f"Unknown matching status for {background}, {unit_id}.")
+        for row in matched:
+            control_id = str(row["control_unit_id"])
+            if not control_id or control_id in used_by_background[background]:
+                raise InputValidationError(f"Control unit reused in {background}: {control_id!r}")
+            used_by_background[background].add(control_id)
+        count = len(matched)
+        coverage.append(
+            {
+                "background_label_id": background,
+                "target_protein_id": next(iter(protein_ids)),
+                "target_unit_id": unit_id,
+                "requested_control_count": requested_control_count,
+                "matched_control_count": count,
+                "coverage_status": (
+                    "UNMATCHED"
+                    if count == 0
+                    else "FULL"
+                    if count == requested_control_count
+                    else "PARTIAL"
+                ),
+            }
+        )
+        summary[background]["targets"] += 1
+        summary[background]["with_control"] += int(count > 0)
+        summary[background]["controls"] += count
+    summaries = tuple(
+        {
+            "background_label_id": background,
+            "target_unit_count": counts["targets"],
+            "matched_control_unit_count": counts["controls"],
+            "target_with_control_count": counts["with_control"],
+            "target_without_control_count": counts["targets"] - counts["with_control"],
+            "target_coverage_fraction": counts["with_control"] / counts["targets"],
+        }
+        for background, counts in sorted(summary.items())
+    )
+    return tuple(coverage), summaries
 
 
 def _control_bucket_index(

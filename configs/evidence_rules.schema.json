@@ -55,6 +55,10 @@
         "orthology_propagation_enabled": {"type": "boolean"},
         "minimum_orthology_anchor_proteins": {"type": "integer", "minimum": 1},
         "control_units_per_target_unit": {"type": "integer", "minimum": 1},
+        "matching_strategy": {
+          "type": "string",
+          "enum": ["TARGET_GREEDY", "COVERAGE_FIRST_BOUNDED"]
+        },
         "minimum_control_units_per_background": {"type": "integer", "minimum": 1},
         "require_species_match": {"type": "boolean"},
         "require_structure_match": {"type": "boolean"},

@@ -240,9 +240,19 @@ requires:
 - absolute log2 length difference no greater than 0.75; and
 - domain-count difference no greater than 2.
 
-Among candidates passing every caliper, the closest is selected by a deterministic distance
-combining length, domain-count difference, domain-architecture Jaccard dissimilarity and
-scaled mean-confidence difference. The audit contains every successful or unmatched request.
+Among candidates passing every caliper, distance combines length, domain-count
+difference, domain-architecture Jaccard dissimilarity and scaled mean-confidence
+difference. The versioned `matching_strategy` chooses allocation:
+
+| Strategy | Allocation |
+|---|---|
+| `TARGET_GREEDY` | Legacy policy: fill each target's slots before moving to the next target. This remains the default for old custom rulesets. |
+| `COVERAGE_FIRST_BOUNDED` | Assign one unused control to as many target blocks as possible, then allocate second and later slots. It uses deterministic augmenting paths over at most 128 nearest-length candidates per compatible bucket. The built-in E3 rules version 1.1.0 and generic example select this policy. |
+
+The bounded candidate lists mean coverage-first matching is maximum-cardinality
+**on those lists**, not a global optimum over every control. Calipers and clean
+pool exclusions are unchanged. Both strategies emit a row for every successful
+or unmatched requested slot.
 
 No target class is analysed unless its profile-resolved background has the configured minimum
 number of independent control blocks.
@@ -271,6 +281,8 @@ Every table is emitted as machine-oriented TSV and formatted XLSX:
 | `label_assignments` | Complete downstream assignment authority |
 | `label_evidence_audit` | Every scored candidate, item, decision and conflict |
 | `control_matching_audit` | Target/control block matches and distances |
+| `control_match_coverage` | Requested versus filled slots and `FULL`/`PARTIAL`/`UNMATCHED` status per target block and background |
+| `control_match_summary` | Target blocks with and without at least one matched control for each background |
 | `label_definition_features` | Features excluded to prevent circular inference |
 | `class_labelling_summary` | Per-class target/control coverage |
 | `unresolved_assignments` | Proposed and ambiguous review queue |
@@ -278,6 +290,10 @@ Every table is emitted as machine-oriented TSV and formatted XLSX:
 
 `EVIDENCE_LABELS.json` records package/profile/rules versions, settings, counts, input
 checksums and every output checksum. Any modification invalidates verification.
+The new coverage tables expose unpaired targets; they do not change the pooled
+Fisher test into a paired analysis or automatically exclude unmatched targets
+from a downstream campaign. Review those rows before treating an association
+as a matched-control comparison.
 
 ## Generic execution
 

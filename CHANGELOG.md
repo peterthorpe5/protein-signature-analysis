@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Add a generic candidate-query command for frozen, held-out validated
+  signatures on new proteomes or overlapping orthogroups. Assess exact k-mers
+  from FASTA, combine explicit domain/structural feature calls, preserve unknown
+  assessments and publish checksum-bound TSV evidence without assigning class
+  probabilities.
+- Project supplied query-to-reference structure alignments onto original
+  discovery cluster members with frozen thresholds, tool and coverage scope;
+  emit positive evidence only and keep absent retained hits unknown.
+- Add a versioned, bounded coverage-first control allocation policy for new E3
+  evidence proposals, with per-target and per-background matching coverage
+  audits. Existing custom rules default to their original target-greedy policy.
+
 ## 0.2.0 - 2026-09-17
 
 - Add an atomic, checksum-bound analytical checkpoint after feature association
