@@ -15,6 +15,27 @@ _EXCEL_MAX_COLUMNS = 16_384
 _EXCEL_DATA_ROWS_PER_SHEET = 1_048_573
 _EXCEL_MAX_CELL_CHARACTERS = 32_767
 _EXCEL_LONG_TEXT_CHUNK = 32_000
+_IDENTIFIER_COLUMN = re.compile(r"(^|_)(accession|checksum|digest|identifier|id)(_|$)", re.I)
+_DESCRIPTION_COLUMN = re.compile(r"description|reason|interpretation|message|note", re.I)
+_COLUMN_DEFINITIONS = {
+    "protein_id": "Exact protein identifier in this completed result.",
+    "sequence": "Published amino-acid sequence; positions are 1-based.",
+    "start": "First residue in a 1-based inclusive sequence interval.",
+    "end": "Last residue in a 1-based inclusive sequence interval.",
+    "comparison_id": "Exact target-versus-background comparison identifier.",
+    "feature_type": "Evidence family of a tested protein feature.",
+    "feature_id": "Exact feature identifier within its evidence family.",
+    "discovery_q_value": "Discovery false-discovery-rate adjusted p-value within a comparison.",
+    "validation_q_value": "Held-out validation false-discovery-rate adjusted p-value.",
+    "discovery_study_q_value": "Discovery q-value adjusted across comparisons in the family.",
+    "validation_study_q_value": "Validation q-value adjusted across comparisons in the family.",
+    "prevalence_difference": "Target fraction minus background fraction.",
+    "q_value": "Adjusted p-value; consult the table's source and testing scope.",
+    "tm_score": "Normalised structural-similarity score for a whole-model comparison.",
+    "coverage_a": "Fraction of protein A included in its structural comparison.",
+    "coverage_b": "Fraction of protein B included in its structural comparison.",
+    "mean_confidence": "Source-reported model confidence, where supplied.",
+}
 
 
 def normalise_dataframe(*, value: Any) -> pd.DataFrame:
@@ -93,6 +114,11 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
             f"received {len(normalised.columns):,}."
         )
     excel_frame = normalised.copy(deep=True)
+    for column in excel_frame.columns:
+        if _IDENTIFIER_COLUMN.search(column):
+            excel_frame[column] = excel_frame[column].map(
+                lambda value: "" if pd.isna(value) else str(value)
+            )
     long_text_rows: list[dict[str, Any]] = []
     for column_index, column in enumerate(excel_frame.columns):
         if not (
@@ -141,7 +167,7 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
                     "subject": "Protein Signature Analysis table export",
                     "author": "protein-signature-analysis",
                     "company": "Protein Signature Analysis",
-                    "comments": "Generated from a checksum-verified result database.",
+                    "comments": "Exported displayed rows; inspect each source and its provenance.",
                     "created": datetime(1980, 1, 1, tzinfo=UTC),
                 }
             )
@@ -168,7 +194,10 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
             scientific_format = workbook.add_format(
                 {**cell_format_options, "num_format": "0.00E+00"}
             )
-            text_format = workbook.add_format(cell_format_options)
+            text_format = workbook.add_format({**cell_format_options, "text_wrap": True})
+            narrative_format = workbook.add_format(
+                {**cell_format_options, "text_wrap": True, "align": "left"}
+            )
             header_format = workbook.add_format(
                 {
                     "bold": True,
@@ -243,8 +272,12 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
                             else float_format
                         )
                     else:
-                        cell_format = text_format
+                        cell_format = (
+                            narrative_format if _DESCRIPTION_COLUMN.search(lower) else text_format
+                        )
                     worksheet.set_column(index, index, width, cell_format)
+                    if _DESCRIPTION_COLUMN.search(lower):
+                        worksheet.set_column(index, index, max(width, 40), cell_format)
                     if len(chunk) and (
                         "status" in lower or lower in {"evidence_class", "direction"}
                     ):
@@ -288,6 +321,47 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
                 worksheet.set_row(0, 28)
                 worksheet.set_row(2, 34)
                 worksheet.set_zoom(90)
+            definitions = workbook.add_worksheet("Column definitions")
+            definitions.hide_gridlines(0)
+            definitions.freeze_panes(1, 0)
+            definitions.set_zoom(90)
+            dictionary_columns = ("column_name", "declared_type", "definition", "source")
+            for index, (name, width) in enumerate(
+                zip(dictionary_columns, (34, 24, 78, 62), strict=True)
+            ):
+                definitions.set_column(index, index, width, narrative_format)
+                definitions.write(0, index, name, header_format)
+            for row_number, name in enumerate(normalised.columns, start=1):
+                definition = _COLUMN_DEFINITIONS.get(
+                    name,
+                    "Published value; consult the canonical table and result provenance.",
+                )
+                for index, value in enumerate(
+                    (
+                        name,
+                        str(normalised[name].dtype),
+                        definition,
+                        "Exported table rows; check the evidence source and result provenance.",
+                    )
+                ):
+                    definitions.write_string(row_number, index, value, narrative_format)
+                definitions.set_row(row_number, 34)
+            definitions.add_table(
+                0,
+                0,
+                len(normalised.columns),
+                len(dictionary_columns) - 1,
+                {
+                    "name": "ProteinSignatureColumnDictionary",
+                    "style": "Table Style Medium 2",
+                    "autofilter": True,
+                    "banded_rows": True,
+                    "columns": [
+                        {"header": name, "header_format": header_format}
+                        for name in dictionary_columns
+                    ],
+                },
+            )
             if long_text_rows:
                 long_text = pd.DataFrame.from_records(long_text_rows)
                 continuation_starts = range(0, len(long_text), _EXCEL_DATA_ROWS_PER_SHEET)

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a model and alignment explorer for comparison-ranked enrichment, positional
+  blue-to-red sequence and rotatable Cα views, exact-sequence model checks,
+  optional provenance-bearing pocket/residue TSV overlays, and linked external
+  protein/structural tools. Add searchable glossary and contextual page help.
+- Make all visible app tables downloadable as TSV and Excel with column
+  definitions and safe identifier formatting; export interactive plots as
+  PNG, PDF and standalone HTML on demand.
 - Expand coverage-first control searches until all caliper-compatible candidates
   have been considered when target blocks remain unmatched. Version the E3
   evidence rules at 1.2.0 without changing existing bounded-policy runs.

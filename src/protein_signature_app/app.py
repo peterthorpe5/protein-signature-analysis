@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 from pathlib import Path
 
+import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from protein_signature_app.backend import (
@@ -22,6 +25,23 @@ from protein_signature_app.backend import (
     resolve_database,
     table_count,
 )
+from protein_signature_app.structure_viewer import (
+    ANNOTATION_COLUMNS,
+    ModelTrace,
+    align_sequences,
+    alignment_fasta,
+    canonical_accession,
+    enrichment_track,
+    external_links,
+    feature_intervals,
+    fetch_alphafold_model,
+    pair_links,
+    parse_annotation_tsv,
+    parse_pdb_trace,
+    read_published_model,
+    significant_intervals,
+)
+from protein_signature_app.viewer_help import GLOSSARY, PAGE_HELP
 from protein_signatures.errors import InputValidationError, PublicationError
 from protein_signatures.exports import (
     dataframe_to_tsv_bytes,
@@ -80,11 +100,15 @@ def main() -> None:
             "Protein & Pfam",
             "Classes & roles",
             "Structures & folds",
+            "Model & alignment explorer",
             "Orthology & partitions",
             "Canonical data & downloads",
             "Data quality & provenance",
+            "Glossary & help",
         ),
     )
+    with st.sidebar.expander("How to use this page"):
+        st.markdown(PAGE_HELP[page])
     if page == "Overview":
         _render_overview(database=database, metadata=metadata)
     elif page == "Signature explorer":
@@ -97,12 +121,16 @@ def main() -> None:
         _render_classes(database=database)
     elif page == "Structures & folds":
         _render_structures(database=database)
+    elif page == "Model & alignment explorer":
+        _render_model_explorer(database=database)
     elif page == "Orthology & partitions":
         _render_orthology(database=database)
     elif page == "Canonical data & downloads":
         _render_canonical_data(database=database)
-    else:
+    elif page == "Data quality & provenance":
         _render_quality(database=database, metadata=metadata)
+    else:
+        _render_glossary()
 
 
 def _render_canonical_data(*, database: Path) -> None:
@@ -129,14 +157,14 @@ def _render_canonical_data(*, database: Path) -> None:
         limit=500,
         offset=0,
     )
-    st.dataframe(preview, use_container_width=True, hide_index=True)
+    _render_downloadable_table(frame=preview, download_name=f"{table_name}_visible_preview")
     try:
         storage = canonical_table_storage(database=database, table_name=table_name)
     except InputValidationError as error:
         st.error(f"Could not inspect canonical storage: {error}")
         return
     st.caption("Complete canonical storage (paths are relative to the result directory).")
-    st.dataframe(storage, use_container_width=True, hide_index=True)
+    _render_downloadable_table(frame=storage, download_name=f"{table_name}_storage_inventory")
     try:
         assets = load_canonical_table_assets(database=database, table_name=table_name)
     except InputValidationError as error:
@@ -707,7 +735,7 @@ def _render_downloadable_table(
 
 
 def _render_plotly_figure(*, figure: object, download_name: str) -> None:
-    """Render an interactive Plotly figure with an on-demand PDF download.
+    """Render an interactive figure with on-demand PDF, PNG and HTML exports.
 
     Args:
         figure: Plotly-compatible figure.
@@ -715,7 +743,56 @@ def _render_plotly_figure(*, figure: object, download_name: str) -> None:
     """
 
     stem = safe_download_stem(value=download_name)
+    signature = (
+        hashlib.sha256(figure.to_json().encode("utf-8")).hexdigest()
+        if hasattr(figure, "to_json")
+        else repr(figure)
+    )
+    if st.session_state.get(f"plot-signature-{stem}") != signature:
+        st.session_state.pop(f"plot-png-{stem}", None)
+        st.session_state.pop(f"plot-html-{stem}", None)
+        st.session_state[f"plot-signature-{stem}"] = signature
     st.plotly_chart(figure, width="stretch")
+    if st.button(
+        "Prepare plot image (PNG)",
+        key=f"plot-png-prepare-{stem}",
+        help="Render an image of the exact visible plot on demand.",
+    ):
+        try:
+            image = bytes(figure.to_image(format="png"))
+            if not image.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise PublicationError("The plot renderer returned an invalid PNG image.")
+            st.session_state[f"plot-png-{stem}"] = image
+        except Exception as error:
+            st.warning(f"Could not render this image; check the Kaleido/Chrome runtime: {error}")
+    if st.session_state.get(f"plot-png-{stem}") is not None:
+        st.download_button(
+            label="Download plot image (PNG)",
+            data=st.session_state[f"plot-png-{stem}"],
+            file_name=f"{stem}.png",
+            mime="image/png",
+            key=f"plot-png-download-{stem}",
+        )
+    if st.button(
+        "Prepare interactive plot (HTML)",
+        key=f"plot-html-prepare-{stem}",
+        help="Bundle Plotly into a standalone interactive HTML file.",
+    ):
+        try:
+            st.session_state[f"plot-html-{stem}"] = figure.to_html(
+                full_html=True,
+                include_plotlyjs=True,
+            ).encode("utf-8")
+        except (AttributeError, RuntimeError, ValueError) as error:
+            st.warning(f"Could not bundle this interactive plot: {error}")
+    if st.session_state.get(f"plot-html-{stem}") is not None:
+        st.download_button(
+            label="Download interactive plot (HTML)",
+            data=st.session_state[f"plot-html-{stem}"],
+            file_name=f"{stem}.html",
+            mime="text/html",
+            key=f"plot-html-download-{stem}",
+        )
     if not st.button(
         "Prepare plot PDF download",
         key=f"plot-pdf-prepare-{stem}",
@@ -1054,6 +1131,616 @@ def _render_structures(*, database: Path) -> None:
             download_name="imported_pocket_conservation",
             height=420,
         )
+
+
+def _render_model_explorer(*, database: Path) -> None:
+    """Explore enrichment on exact sequence positions, models and aligned pairs."""
+
+    st.title("Model & alignment explorer")
+    st.caption(
+        "White: no significant mapped enrichment; blue: weaker significant enrichment; "
+        "red: stronger enrichment. A white residue may simply have no localisable feature. "
+        "Colour represents target enrichment for one selected comparison, not pLDDT."
+    )
+    with st.expander("What can be mapped onto a model?", expanded=False):
+        st.markdown(
+            "Only recorded 1-based feature intervals and optional residue annotations can "
+            "be coloured. A full-length model must exactly match the published protein "
+            "sequence and residue numbering. Whole-model folds or Foldseek clusters do "
+            "not specify motif positions. The pair view is a **sequence** alignment; the "
+            "published structural comparisons contain scores and coverage, but no "
+            "residue-to-residue superposition."
+        )
+    proteins = distinct_values(database=database, table_name="proteins", column_name="protein_id")
+    comparisons = distinct_values(
+        database=database, table_name="signatures", column_name="comparison_id"
+    )
+    if not proteins or not comparisons:
+        st.info("This result has no proteins or comparison signatures to inspect.")
+        return
+    protein_id = st.selectbox("Protein to inspect", proteins)
+    comparison_id = st.selectbox("Enrichment comparison", comparisons)
+    st.subheader("Most significant association results")
+    st.caption(
+        "Ranked by discovery q-value for this comparison. Validation and study-wide "
+        "q-values remain visible; a highly ranked whole-model feature may have no "
+        "residue interval for colouring."
+    )
+    ranked = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT * FROM signatures WHERE comparison_id = ? "
+            "AND status = 'COMPLETE' AND discovery_prevalence_difference > 0 "
+            "ORDER BY discovery_q_value ASC NULLS LAST LIMIT 1000"
+        ),
+        parameters=(comparison_id,),
+    )
+    _render_downloadable_table(
+        frame=ranked,
+        download_name=f"{comparison_id}_top_enriched_signatures",
+        height=300,
+    )
+    protein = query_dataframe(
+        database=database,
+        sql="SELECT sequence FROM proteins WHERE protein_id = ?",
+        parameters=(protein_id,),
+    )
+    sequence = str(protein.iloc[0]["sequence"])
+    upload = st.file_uploader(
+        "Optional residue annotations (TSV; pockets or other regions)",
+        type=["tsv"],
+        help=(
+            "The file is held in this browser session. It must contain comparison_id, "
+            "protein_id, region_type, region_id, start, end, q_value, "
+            "prevalence_difference and evidence_source. Positions are 1-based inclusive."
+        ),
+    )
+    st.download_button(
+        "Download annotation template",
+        data=("\t".join(ANNOTATION_COLUMNS) + "\n").encode("utf-8"),
+        file_name="residue_annotations_template.tsv",
+        mime="text/tab-separated-values",
+    )
+    annotations = None
+    if upload is not None:
+        try:
+            annotations = parse_annotation_tsv(payload=upload.getvalue())
+        except InputValidationError as error:
+            st.warning(str(error))
+    mode_options = (
+        ("Published signatures", "Uploaded residue annotations")
+        if annotations is not None
+        else ("Published signatures",)
+    )
+    mode = st.radio("Enrichment colour source", mode_options, horizontal=True)
+    evidence_tier = (
+        st.selectbox(
+            "Published evidence tier",
+            (
+                "Discovery within comparison",
+                "Validated within comparison",
+                "Validated study-wide",
+            ),
+            help="Stronger tiers require positive held-out enrichment and the selected q-value.",
+        )
+        if mode == "Published signatures"
+        else "Uploaded annotations"
+    )
+    rows = _enriched_intervals(
+        database=database,
+        protein_id=protein_id,
+        comparison_id=comparison_id,
+        annotations=annotations if mode == "Uploaded residue annotations" else None,
+        evidence_tier=evidence_tier,
+    )
+    st.caption(
+        f"Showing positive target enrichment at {evidence_tier.lower()} q ≤ 0.05. "
+        "Overlaps use the smallest q-value; colours saturate at q ≤ 10⁻⁸. "
+        "Uploaded annotations form a separate source and are never combined "
+        "statistically with published q-values."
+    )
+    mapped = feature_intervals(rows=rows, sequence_length=len(sequence))
+    if len(mapped) != len(rows):
+        st.warning("Some interval positions are outside this protein sequence and were omitted.")
+    valid = significant_intervals(rows=mapped, sequence_length=len(sequence))
+    scores, descriptions = enrichment_track(rows=valid, sequence_length=len(sequence))
+    st.subheader("Most enriched mapped regions")
+    if valid:
+        _render_downloadable_table(
+            frame=pd.DataFrame(valid),
+            download_name=f"{comparison_id}_{protein_id}_mapped_regions_{mode}",
+            height=300,
+        )
+    else:
+        st.info("No localisable enriched regions are available for this selection.")
+    _render_enrichment_track(
+        protein_id=protein_id,
+        scores=scores,
+        descriptions=descriptions,
+        download_name=f"{comparison_id}_{protein_id}_enrichment_map",
+    )
+    st.subheader("3D Cα model and external views")
+    _render_model_for_protein(
+        database=database,
+        protein_id=protein_id,
+        sequence=sequence,
+        scores=scores,
+        descriptions=descriptions,
+        comparison_id=comparison_id,
+    )
+    st.subheader("Paired sequence alignment")
+    _render_pair_alignment(
+        database=database,
+        protein_id=protein_id,
+        comparison_id=comparison_id,
+        reference_sequence=sequence,
+        reference_scores=scores,
+        annotations=annotations if mode == "Uploaded residue annotations" else None,
+        evidence_tier=evidence_tier,
+    )
+
+
+def _enriched_intervals(
+    *,
+    database: Path,
+    protein_id: str,
+    comparison_id: str,
+    annotations: object = None,
+    evidence_tier: str = "Discovery within comparison",
+) -> list[dict[str, object]]:
+    """Find position-bearing published signatures or exact uploaded rows."""
+
+    if annotations is not None:
+        selected = annotations[
+            (annotations["protein_id"] == protein_id)
+            & (annotations["comparison_id"] == comparison_id)
+        ].copy()
+        selected = selected.rename(columns={"region_id": "feature_name"})
+        return selected.to_dict(orient="records")
+    frame = query_dataframe(
+        database=database,
+        sql=(
+            'SELECT f.feature_type, f.feature_id, f.feature_name, f."start", f."end", '
+            "f.evidence_source, s.discovery_q_value, s.discovery_prevalence_difference, "
+            "s.validation_q_value, s.validation_study_q_value, "
+            "s.validation_prevalence_difference, s.evidence_class "
+            "FROM features f JOIN signatures s ON f.feature_type = s.feature_type "
+            "AND f.feature_id = s.feature_id "
+            "WHERE f.protein_id = ? AND s.comparison_id = ? AND s.status = 'COMPLETE' "
+            'AND f."start" IS NOT NULL AND f."end" IS NOT NULL '
+            "ORDER BY s.discovery_q_value NULLS LAST, f.feature_id LIMIT 10000"
+        ),
+        parameters=(protein_id, comparison_id),
+    )
+    columns = {
+        "Discovery within comparison": ("discovery_q_value", "discovery_prevalence_difference"),
+        "Validated within comparison": ("validation_q_value", "validation_prevalence_difference"),
+        "Validated study-wide": ("validation_study_q_value", "validation_prevalence_difference"),
+    }
+    if evidence_tier not in columns:
+        raise InputValidationError("Unknown enrichment evidence tier.")
+    if evidence_tier != "Discovery within comparison":
+        accepted = "DECISION_CANDIDATE__VALIDATED_STUDY_WIDE"
+        if evidence_tier == "Validated within comparison":
+            accepted = (accepted, "DECISION_CANDIDATE__VALIDATED_WITHIN_COMPARISON")
+        frame = frame[
+            frame["evidence_class"].isin(accepted if isinstance(accepted, tuple) else (accepted,))
+        ].copy()
+    q_column, difference_column = columns[evidence_tier]
+    frame["q_value"] = frame[q_column]
+    frame["prevalence_difference"] = frame[difference_column]
+    return frame.to_dict(orient="records")
+
+
+def _render_enrichment_track(
+    *, protein_id: str, scores: list[float], descriptions: list[str], download_name: str
+) -> None:
+    """Render a downloadable positional heat map with exact hover evidence."""
+
+    figure = go.Figure(
+        go.Heatmap(
+            z=[scores],
+            x=list(range(1, len(scores) + 1)),
+            y=[protein_id],
+            text=[descriptions],
+            hovertemplate="Position %{x}<br>%{text}<extra></extra>",
+            zmin=0,
+            zmax=1,
+            colorscale=[
+                [0, "#ffffff"],
+                [0.099, "#ffffff"],
+                [0.1, "#2463c5"],
+                [1, "#b41821"],
+            ],
+            colorbar={
+                "title": "Enrichment",
+                "tickvals": [0, 0.1, 1],
+                "ticktext": ["No mapped hit", "q ≤ 0.05", "q ≤ 10⁻⁸"],
+            },
+        )
+    )
+    figure.update_layout(
+        title="2D enrichment along the protein sequence",
+        xaxis_title="1-based residue position",
+        height=270,
+    )
+    _render_plotly_figure(figure=figure, download_name=download_name)
+
+
+def _render_model_for_protein(
+    *,
+    database: Path,
+    protein_id: str,
+    sequence: str,
+    scores: list[float],
+    descriptions: list[str],
+    comparison_id: str,
+) -> None:
+    """Show a verified model, an opt-in AFDB fetch and its exact external links."""
+
+    models = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT structure_id, structure_source, coordinate_path, coordinate_sha256, "
+            "mean_confidence, analysis_eligibility_status FROM structures "
+            "WHERE protein_id = ? ORDER BY structure_id"
+        ),
+        parameters=(protein_id,),
+    )
+    acquisitions = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT uniprot_accession FROM alphafold_acquisitions "
+            "WHERE protein_id = ? AND sequence_match = true ORDER BY uniprot_accession"
+        ),
+        parameters=(protein_id,),
+    )
+    accession = next(
+        (
+            value
+            for raw in acquisitions["uniprot_accession"]
+            if (value := canonical_accession(value=raw)) is not None
+        ),
+        canonical_accession(value=protein_id),
+    )
+    for label, url in external_links(accession=accession).items():
+        st.link_button(f"Open {label}: {accession}", url)
+    if accession is None:
+        st.caption("External accession-specific links require a canonical UniProt ID.")
+    payload = None
+    filename = ""
+    if not models.empty:
+        choices = tuple(range(len(models)))
+        selected = st.selectbox(
+            "Published structure record",
+            choices,
+            format_func=lambda index: (
+                f"{models.iloc[index]['structure_id']} · {models.iloc[index]['structure_source']}"
+            ),
+        )
+        row = models.iloc[selected]
+        relative = str(row["coordinate_path"] or "")
+        if relative:
+            try:
+                payload = read_published_model(
+                    database=database,
+                    relative_path=relative,
+                    sha256=str(row["coordinate_sha256"]),
+                )
+                filename = Path(relative).name.removesuffix(".gz")
+                if relative.endswith(".gz"):
+                    st.caption("Published compressed model was decompressed for download.")
+            except InputValidationError as error:
+                st.warning(str(error))
+        else:
+            st.info("This published structure record has no packaged coordinates.")
+    cif_only = payload is not None and not filename.endswith(".pdb")
+    if cif_only:
+        st.download_button(
+            "Download published mmCIF model",
+            data=payload,
+            file_name=filename,
+            mime="chemical/x-cif",
+        )
+        st.link_button(
+            "Search published mmCIF with Foldseek",
+            "https://search.foldseek.com/search",
+        )
+        st.caption(
+            "The local model is mmCIF; fetch an exact AlphaFold PDB for the in-app "
+            "Cα view if one is available for this sequence."
+        )
+        payload = None
+    session_model_key = (
+        f"afdb-{accession}-{hashlib.sha256(sequence.encode('ascii')).hexdigest()}"
+        if accession is not None
+        else None
+    )
+    if payload is None and accession is not None and session_model_key is not None:
+        st.caption(
+            "Fetch a current AlphaFold DB PDB only if you need it; the bundle stays unchanged."
+        )
+        if st.button("Fetch exact AlphaFold model", key=f"fetch-{protein_id}"):
+            try:
+                st.session_state[session_model_key] = fetch_alphafold_model(
+                    accession=accession,
+                    sequence=sequence,
+                )
+            except InputValidationError as error:
+                st.warning(str(error))
+        payload = st.session_state.get(session_model_key)
+        if payload is not None:
+            filename = f"AF-{accession}-verified-session.pdb"
+    if payload is None:
+        if cif_only:
+            st.info("The published mmCIF remains available for download above.")
+        else:
+            st.info("No local coordinates are available for an in-app 3D view.")
+        return
+    st.download_button(
+        "Download selected coordinate model",
+        data=payload,
+        file_name=filename,
+        mime="chemical/x-pdb" if filename.endswith(".pdb") else "chemical/x-cif",
+    )
+    st.link_button(
+        "Search selected PDB with Foldseek",
+        "https://search.foldseek.com/search",
+    )
+    try:
+        trace = parse_pdb_trace(payload=payload)
+    except InputValidationError as error:
+        st.warning(str(error))
+        return
+    exact = trace.matches_sequence(sequence=sequence)
+    if not exact:
+        st.warning(
+            "This model does not match the full published sequence and residue numbering. "
+            "The grey 3D trace is shown without projected enrichment."
+        )
+    _render_trace_figure(
+        trace=trace,
+        scores=scores if exact else None,
+        descriptions=descriptions if exact else None,
+        download_name=f"{comparison_id}_{protein_id}_three_dimensional_model",
+    )
+
+
+def _render_trace_figure(
+    *,
+    trace: ModelTrace,
+    scores: list[float] | None,
+    descriptions: list[str] | None,
+    download_name: str,
+) -> None:
+    """Render a rotatable Cα backbone coloured only for exact mapping."""
+
+    residues = trace.residues
+    x, y, z = ([getattr(item, axis) for item in residues] for axis in ("x", "y", "z"))
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter3d(
+            x=x,
+            y=y,
+            z=z,
+            mode="lines",
+            line={"color": "#8293a1", "width": 4},
+            name="Cα backbone",
+            hoverinfo="skip",
+        )
+    )
+    text = (
+        [
+            f"{item.amino_acid}{item.position} · {descriptions[index]}"
+            for index, item in enumerate(residues)
+        ]
+        if descriptions is not None
+        else [f"{item.amino_acid}{item.position}" for item in residues]
+    )
+    figure.add_trace(
+        go.Scatter3d(
+            x=x,
+            y=y,
+            z=z,
+            mode="markers",
+            name="Residue enrichment",
+            text=text,
+            hovertemplate="%{text}<extra></extra>",
+            marker={
+                "size": 4,
+                "color": scores if scores is not None else "#8c9aa6",
+                "cmin": 0,
+                "cmax": 1,
+                "colorscale": [
+                    [0, "#ffffff"],
+                    [0.099, "#ffffff"],
+                    [0.1, "#2463c5"],
+                    [1, "#b41821"],
+                ],
+                "line": {"color": "#587086", "width": 0.4},
+                "showscale": scores is not None,
+            },
+        )
+    )
+    figure.update_layout(
+        title=f"Cα trace · chain {trace.chain} · drag to rotate",
+        height=700,
+        scene={"aspectmode": "data"},
+    )
+    _render_plotly_figure(figure=figure, download_name=download_name)
+
+
+def _render_pair_alignment(
+    *,
+    database: Path,
+    protein_id: str,
+    comparison_id: str,
+    reference_sequence: str,
+    reference_scores: list[float],
+    annotations: object,
+    evidence_tier: str,
+) -> None:
+    """Show structurally compared partners with a distinct sequence alignment."""
+
+    candidates = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT * FROM structure_comparisons WHERE protein_a_id = ? OR protein_b_id = ? "
+            "ORDER BY tm_score DESC NULLS LAST LIMIT 500"
+        ),
+        parameters=(protein_id, protein_id),
+    )
+    if candidates.empty:
+        st.info("No published pairwise structural comparison includes this protein.")
+        return
+    options = tuple(range(len(candidates)))
+    selected = st.selectbox(
+        "Published structural comparison",
+        options,
+        format_func=lambda index: (
+            f"{candidates.iloc[index]['protein_a_id']} ↔ "
+            f"{candidates.iloc[index]['protein_b_id']} · "
+            f"TM {_metric_text(candidates.iloc[index]['tm_score'])}"
+        ),
+    )
+    selected_pair = candidates.iloc[selected]
+    other_id = str(
+        selected_pair["protein_b_id"]
+        if selected_pair["protein_a_id"] == protein_id
+        else selected_pair["protein_a_id"]
+    )
+    _render_downloadable_table(
+        frame=candidates.iloc[[selected]],
+        download_name=f"{comparison_id}_{protein_id}_{other_id}_structural_comparison",
+    )
+    st.caption(
+        "The structural row gives aggregate TM-score and coverage. The alignment below "
+        "is a fresh global amino-acid alignment (+2 match, −1 substitution, −2 gap). "
+        "Its columns are not Foldseek superposed-residue coordinates."
+    )
+    other = query_dataframe(
+        database=database,
+        sql="SELECT sequence FROM proteins WHERE protein_id = ?",
+        parameters=(other_id,),
+    )
+    if other.empty:
+        st.warning("The partner sequence is missing from the published result.")
+        return
+    other_sequence = str(other.iloc[0]["sequence"])
+    try:
+        aligned = align_sequences(reference=reference_sequence, comparison=other_sequence)
+    except InputValidationError as error:
+        st.info(str(error))
+        return
+    other_rows = _enriched_intervals(
+        database=database,
+        protein_id=other_id,
+        comparison_id=comparison_id,
+        annotations=annotations,
+        evidence_tier=evidence_tier,
+    )
+    other_scores, _ = enrichment_track(rows=other_rows, sequence_length=len(other_sequence))
+    alignment_rows = []
+    for index, column in enumerate(aligned, start=1):
+        a, b = column.reference_position, column.comparison_position
+        alignment_rows.append(
+            {
+                "alignment_column": index,
+                "reference_position": a,
+                "reference_residue": column.reference,
+                "reference_enrichment": reference_scores[a - 1] if a else 0.0,
+                "comparison_position": b,
+                "comparison_residue": column.comparison,
+                "comparison_enrichment": other_scores[b - 1] if b else 0.0,
+                "identity": a is not None
+                and b is not None
+                and column.reference == column.comparison,
+            }
+        )
+    st.download_button(
+        "Download aligned pair FASTA",
+        data=alignment_fasta(
+            reference_id=protein_id,
+            comparison_id=other_id,
+            columns=aligned,
+        ),
+        file_name=f"{safe_download_stem(value=protein_id + '_' + other_id)}_aligned.fasta",
+        mime="text/plain",
+    )
+    window_start = (
+        st.slider(
+            "Alignment window start",
+            min_value=1,
+            max_value=len(aligned) - 99,
+            value=1,
+            help="Scroll through the sequence alignment in windows of 100 columns.",
+        )
+        if len(aligned) > 100
+        else 1
+    )
+    window = alignment_rows[window_start - 1 : window_start + 99]
+    figure = go.Figure(
+        go.Heatmap(
+            z=[
+                [row["reference_enrichment"] for row in window],
+                [row["comparison_enrichment"] for row in window],
+            ],
+            x=[row["alignment_column"] for row in window],
+            y=[protein_id, other_id],
+            zmin=0,
+            zmax=1,
+            colorscale=[[0, "#ffffff"], [0.099, "#ffffff"], [0.1, "#2463c5"], [1, "#b41821"]],
+            customdata=[
+                [
+                    f"{row['reference_residue']} {row['reference_position'] or 'gap'}"
+                    for row in window
+                ],
+                [
+                    f"{row['comparison_residue']} {row['comparison_position'] or 'gap'}"
+                    for row in window
+                ],
+            ],
+            hovertemplate="Column %{x}<br>%{y}: %{customdata}<extra></extra>",
+        )
+    )
+    figure.update_layout(title="Enrichment on aligned sequence columns", height=300)
+    _render_plotly_figure(
+        figure=figure,
+        download_name=f"{comparison_id}_{protein_id}_{other_id}_alignment_window_{window_start}",
+    )
+    _render_downloadable_table(
+        frame=pd.DataFrame(alignment_rows),
+        download_name=f"{comparison_id}_{protein_id}_{other_id}_full_sequence_alignment",
+        height=330,
+    )
+    accessions = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT protein_id, uniprot_accession FROM alphafold_acquisitions "
+            "WHERE protein_id IN (?, ?) AND sequence_match = true"
+        ),
+        parameters=(protein_id, other_id),
+    )
+    mapping = dict(zip(accessions["protein_id"], accessions["uniprot_accession"]))
+    for label, url in pair_links(
+        reference=mapping.get(protein_id, protein_id),
+        comparison=mapping.get(other_id, other_id),
+    ).items():
+        st.link_button(label, url)
+
+
+def _render_glossary() -> None:
+    """Show a searchable, downloadable dictionary for any protein profile."""
+
+    st.title("Glossary & help")
+    term = st.text_input("Search definitions", help="Search terms, categories and explanations.")
+    frame = pd.DataFrame(GLOSSARY, columns=["category", "term", "definition"])
+    if term.strip():
+        mask = frame.apply(
+            lambda column: column.astype(str).str.contains(term.strip(), case=False, regex=False)
+        ).any(axis=1)
+        frame = frame.loc[mask].reset_index(drop=True)
+    _render_downloadable_table(frame=frame, download_name="protein_signature_glossary")
 
 
 def _render_orthology(*, database: Path) -> None:

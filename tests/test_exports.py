@@ -50,10 +50,12 @@ def test_excel_download_has_formatting_filters_and_safe_text() -> None:
         names = set(archive.namelist())
         worksheet = archive.read("xl/worksheets/sheet1.xml")
         table = archive.read("xl/tables/table1.xml")
+        workbook = archive.read("xl/workbook.xml")
         assert "xl/tables/table1.xml" in names
         assert b"<pane" in worksheet
         assert b"<autoFilter" in table
         assert b"<f>unsafe</f>" not in worksheet
+        assert b"Column definitions" in workbook
     empty = dataframe_to_xlsx_bytes(
         frame=pd.DataFrame(columns=["protein_id", "status"]),
         title="Empty evidence",
@@ -63,6 +65,17 @@ def test_excel_download_has_formatting_filters_and_safe_text() -> None:
         dataframe_to_xlsx_bytes(frame=frame, title="")
     with pytest.raises(InputValidationError, match="at least one column"):
         dataframe_to_xlsx_bytes(frame=pd.DataFrame(), title="Missing columns")
+
+
+def test_excel_preserves_long_numeric_identifiers_as_literal_text() -> None:
+    """Excel must not round identifiers and should explain each exported column."""
+
+    frame = pd.DataFrame({"protein_id": [1234567890123456789], "q_value": [0.00003]})
+    payload = dataframe_to_xlsx_bytes(frame=frame, title="Identifiers")
+    with zipfile.ZipFile(BytesIO(payload)) as archive:
+        assert b"1234567890123456789" in archive.read("xl/sharedStrings.xml")
+        assert b"Adjusted p-value" in archive.read("xl/sharedStrings.xml")
+        assert b"ColumnDictionary" in archive.read("xl/tables/table2.xml")
 
 
 def test_excel_download_splits_rows_across_filterable_sheets(

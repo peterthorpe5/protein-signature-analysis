@@ -62,6 +62,11 @@ class _Sidebar:
 
         return self.page
 
+    def expander(self, *_args: object, **_kwargs: object) -> _Block:
+        """Accept contextual sidebar help."""
+
+        return _Block()
+
 
 class _FakeStreamlit:
     """Small Streamlit surface for direct branch coverage."""
@@ -73,6 +78,7 @@ class _FakeStreamlit:
         self.multiselect_empty = multiselect_empty
         self.button_result = False
         self.messages: list[str] = []
+        self.session_state: dict[str, object] = {}
 
     def __getattr__(self, name: str) -> Any:
         """Return a no-op renderer for ordinary output methods."""
@@ -161,9 +167,11 @@ def test_every_application_page_renders_and_stays_synchronised(
             ("Protein & Pfam", "Protein & Pfam explorer"),
             ("Classes & roles", "Classes & component roles"),
             ("Structures & folds", "Structures & folds"),
+            ("Model & alignment explorer", "Model & alignment explorer"),
             ("Orthology & partitions", "Orthology & partitions"),
             ("Canonical data & downloads", "Canonical data & downloads"),
             ("Data quality & provenance", "Data quality & provenance"),
+            ("Glossary & help", "Glossary & help"),
         ):
             test_app.sidebar.radio[0].set_value(page).run()
             assert not test_app.exception
@@ -518,7 +526,7 @@ def test_table_and_plot_renderers_always_offer_declared_downloads(
         download_name="Deferred association plot",
     )
     assert fake.messages.count("download_button") == 2
-    assert fake.messages.count("button") == 1
+    assert fake.messages.count("button") == 3
 
     fake.button_result = True
     monkeypatch.setattr(

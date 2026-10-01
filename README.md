@@ -670,16 +670,25 @@ See [Output contracts](docs/OUTPUT_CONTRACTS.md) for every table.
 ./run_protein_signature_app.sh --resource /data/signature_campaigns/e3_1000/result
 ```
 
-The nine pages cover campaign overview, candidate signatures, explainable prediction and
-SHAP graphics, protein/Pfam evidence, class roles, structures/folds, orthology/partitions, a
-complete canonical-data browser and data quality/provenance. Explicit feature-assessment
+The eleven pages cover campaign overview, candidate signatures, explainable prediction and
+SHAP graphics, protein/Pfam evidence, class roles, structures/folds, a model and alignment
+explorer, orthology/partitions, a complete canonical-data browser, data quality/provenance,
+and a searchable glossary. Explicit feature-assessment
 states, association denominators and structure eligibility/comparison-universe fields remain
 browsable. Every canonical dataset has a bounded preview and complete Parquet plus TSV or
 TSV.GZ storage. Manageable tables also have complete formatted Excel downloads. The feature
 page can export a filtered subset of up to 250,000 rows as matching TSV and formatted Excel,
-without loading the complete feature relation into application memory. Every interactive or
-displayed static plot has a PDF download. The app performs no scientific recomputation,
-opens only checksum-verified results, and restricts read-only queries to canonical tables.
+without loading the complete feature relation into application memory. Visible tables have
+matching TSV and formatted Excel downloads with a column dictionary. Interactive plots can
+be downloaded as PNG, vector PDF or standalone HTML; published static plots retain their
+original PNG/SVG/PDF files. The model explorer colours exact 1-based intervals from
+significant, positively enriched features on 2D sequence tracks and exact-matching PDB Cα
+traces. It can accept optional provenance-bearing residue annotations such as future pocket
+results without modifying the completed bundle. Pairwise sequence alignment is clearly
+separate from the published aggregate structural-alignment scores. See
+[Model explorer and annotation format](docs/APP_STRUCTURE_EXPLORER.md) for limitations and
+portable model instructions. The app opens only checksum-verified results and restricts
+read-only queries to canonical tables.
 
 ## Custom protein types
 
