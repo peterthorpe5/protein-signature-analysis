@@ -44,11 +44,24 @@ one related block still contribute one vote.
 
 Configured k-mers are enumerated as exact, overlapping uppercase amino-acid strings. A k-mer
 is retained only when it occurs in at least `minimum_feature_proteins` proteins assigned to
-the frozen discovery partition, subject to the deterministic `maximum_kmer_features` limit
-over discovery candidates. The retained vocabulary is then scanned unchanged across every
-FASTA protein, including held-out validation proteins. Each feature records the exact
-discovery sequence-cohort digest and a deterministic definition digest. The feature states
-that a string is present, not how many times it occurs.
+the frozen discovery partition. By default, `kmer_vocabulary_policy: strict` stops when
+the number of distinct discovery candidates exceeds `maximum_kmer_features`. For an
+explicitly bounded longer-pattern trial, `prevalence_ranked` instead counts candidates
+under a separate `maximum_kmer_candidates` safeguard, then retains at most
+`maximum_kmer_features`. It shares the budget as evenly as possible across configured
+lengths, allocating any remainder to longer lengths. Unused slots are filled across
+lengths. Within each selection step, strings are ranked by the number of discovery
+proteins containing them, then lexically to break ties. Selection does not use class
+labels or held-out sequences. The retained vocabulary is scanned unchanged across every
+FASTA protein, including held-out validation proteins. Each feature records the discovery
+sequence-cohort digest and a deterministic definition digest. The feature states that a
+string is present, not how often it occurs.
+
+The ranked policy intentionally omits eligible strings after the budget is full.
+It cannot support a claim that unselected motifs are absent from a protein class. The
+selection count by length and any truncation are logged; the policy, candidate safeguard
+and retained-feature budget appear in campaign metadata. Both modes apply the same
+per-feature inferential tests and held-out validation to the retained vocabulary.
 
 Every retained k-mer is assessed against every authoritative FASTA protein. Computationally,
 the implementation represents that fact with one immutable campaign-protein universe shared

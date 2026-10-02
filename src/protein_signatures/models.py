@@ -381,6 +381,8 @@ class AnalysisSettings:
     random_seed: int
     structural_tm_score_threshold: float
     structural_minimum_coverage: float
+    kmer_vocabulary_policy: str = "strict"
+    maximum_kmer_candidates: int | None = None
 
 
 @dataclass(frozen=True)

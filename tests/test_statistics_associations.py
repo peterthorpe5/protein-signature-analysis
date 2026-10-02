@@ -172,6 +172,90 @@ def test_kmer_vocabulary_is_discovery_only_and_projects_to_validation() -> None:
     assert repeated == rows
 
 
+def test_ranked_kmer_vocabulary_is_bounded_and_label_blind() -> None:
+    """Ranked selection covers lengths and never consults held-out sequences."""
+
+    sequences = (
+        _sequence(protein_id="d1", sequence="AAAAACCCCC"),
+        _sequence(protein_id="d2", sequence="AAAAGGGGG"),
+        _sequence(protein_id="d3", sequence="CCCCCGGGGG"),
+        _sequence(protein_id="v1", sequence="GGGGGTTTTT"),
+    )
+    options = {
+        "discovery_protein_ids": frozenset({"d1", "d2", "d3"}),
+        "lengths": (3, 4, 5),
+        "minimum_proteins": 2,
+        "maximum_features": 7,
+        "vocabulary_policy": "prevalence_ranked",
+        "maximum_candidates": 100,
+    }
+    rows = build_kmer_features(sequences=sequences, **options)
+    assert {row.feature_id for row in rows} == {
+        "k3:AAA",
+        "k3:CCC",
+        "k3:GGG",
+        "k4:AAAA",
+        "k4:CCCC",
+        "k5:CCCCC",
+        "k5:GGGGG",
+    }
+    assert all(row.feature_id != "k4:GGGG" for row in rows)
+    assert {(row.protein_id, row.feature_id) for row in rows if row.protein_id == "v1"} == {
+        ("v1", "k3:GGG"),
+        ("v1", "k5:GGGGG"),
+    }
+    assert rows == build_kmer_features(sequences=tuple(reversed(sequences)), **options)
+    all_rows = build_kmer_features(
+        sequences=sequences, **{**options, "maximum_features": 20}
+    )
+    assert {row.feature_id for row in all_rows} == {
+        "k3:AAA",
+        "k3:CCC",
+        "k3:GGG",
+        "k4:AAAA",
+        "k4:CCCC",
+        "k4:GGGG",
+        "k5:CCCCC",
+        "k5:GGGGG",
+    }
+
+
+def test_ranked_kmer_selection_rejects_excess_candidates_and_invalid_limits() -> None:
+    """The raw vocabulary limit remains an independent memory safeguard."""
+
+    sequences = (_sequence(protein_id="d1", sequence="AAAAACCCCC"),)
+    options = {
+        "sequences": sequences,
+        "discovery_protein_ids": frozenset({"d1"}),
+        "lengths": (5,),
+        "minimum_proteins": 1,
+        "maximum_features": 2,
+        "vocabulary_policy": "prevalence_ranked",
+    }
+    with pytest.raises(InputValidationError, match="maximum_kmer_candidates"):
+        build_kmer_features(maximum_candidates=2, **options)
+    with pytest.raises(InputValidationError, match="maximum_candidates >= maximum_features"):
+        build_kmer_features(maximum_candidates=1, **options)
+    with pytest.raises(InputValidationError, match="Unknown k-mer vocabulary policy"):
+        build_kmer_features(
+            sequences=sequences,
+            discovery_protein_ids=frozenset({"d1"}),
+            lengths=(5,),
+            minimum_proteins=1,
+            maximum_features=2,
+            vocabulary_policy="unknown",
+        )
+    with pytest.raises(InputValidationError, match="only to ranked"):
+        build_kmer_features(
+            sequences=sequences,
+            discovery_protein_ids=frozenset({"d1"}),
+            lengths=(5,),
+            minimum_proteins=1,
+            maximum_features=10,
+            maximum_candidates=100,
+        )
+
+
 def test_kmer_generation_rejects_invalid_discovery_sets() -> None:
     """Discovery IDs must be non-empty, known and backed by unique records."""
 

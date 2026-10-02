@@ -310,11 +310,31 @@ def test_configuration_defaults_and_serialisation(example_dir: Path, tmp_path: P
     assert config.comparisons == ()
     record = config_to_record(config=config)
     assert record["analysis"]["kmer_lengths"] == [3, 4]
+    assert record["analysis"]["kmer_vocabulary_policy"] == "strict"
+    assert record["analysis"]["maximum_kmer_candidates"] is None
     assert record["campaign"]["profile"] == "e3"
     assert Path(record["inputs"]["sequences_fasta"]).is_absolute()
     assert _resolve_profile_source(value="e3", base=tmp_path) == "e3"
     custom = _resolve_profile_source(value="custom.yaml", base=tmp_path)
     assert custom == str((tmp_path / "custom.yaml").resolve())
+
+
+def test_configuration_accepts_bounded_ranked_kmers(example_dir: Path, tmp_path: Path) -> None:
+    """An explicit candidate limit and ranked policy survive configuration loading."""
+
+    document = _example_document(example_dir=example_dir)
+    document["analysis"].update(
+        kmer_lengths=[3, 4, 5],
+        kmer_vocabulary_policy="prevalence_ranked",
+        maximum_kmer_candidates=5_000_000,
+    )
+    config = load_config(
+        path=_write_config(path=tmp_path / "ranked.yaml", document=document)
+    )
+    assert config.analysis.kmer_lengths == (3, 4, 5)
+    assert config.analysis.kmer_vocabulary_policy == "prevalence_ranked"
+    assert config.analysis.maximum_kmer_candidates == 5_000_000
+    assert config_to_record(config=config)["analysis"]["maximum_kmer_candidates"] == 5_000_000
 
 
 @pytest.mark.parametrize(
@@ -325,6 +345,25 @@ def test_configuration_defaults_and_serialisation(example_dir: Path, tmp_path: P
         (lambda row: row["analysis"].update(kmer_lengths=[]), "kmer_lengths"),
         (lambda row: row["analysis"].update(kmer_lengths=[3, 3]), "duplicates"),
         (lambda row: row["analysis"].update(kmer_lengths=[13]), "kmer_lengths"),
+        (
+            lambda row: row["analysis"].update(kmer_vocabulary_policy="unknown"),
+            "kmer_vocabulary_policy",
+        ),
+        (
+            lambda row: row["analysis"].update(kmer_vocabulary_policy="prevalence_ranked"),
+            "maximum_kmer_candidates",
+        ),
+        (
+            lambda row: row["analysis"].update(maximum_kmer_candidates=500_000),
+            "only used with prevalence_ranked",
+        ),
+        (
+            lambda row: row["analysis"].update(
+                kmer_vocabulary_policy="prevalence_ranked",
+                maximum_kmer_candidates=1,
+            ),
+            "at least maximum_kmer_features",
+        ),
         (lambda row: row["alphafold"].update(enabled="yes"), "enabled"),
         (lambda row: row["foldseek"].update(enabled="yes"), "enabled"),
         (lambda row: row["foldseek"].update(executable="relative/path"), "executable"),

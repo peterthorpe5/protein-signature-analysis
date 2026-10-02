@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add optional discovery-only, prevalence-ranked k-mer vocabulary selection for
+  longer exact strings with balanced length budgets, deterministic tie-breaking
+  and a separate raw-candidate safeguard. Preserve strict selection by default
+  and log the retained counts and excluded eligible candidates.
 - Add a model and alignment explorer for comparison-ranked enrichment, positional
   blue-to-red sequence and rotatable Cα views, exact-sequence model checks,
   optional provenance-bearing pocket/residue TSV overlays, and linked external

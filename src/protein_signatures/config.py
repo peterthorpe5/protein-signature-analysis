@@ -324,6 +324,8 @@ def _parse_analysis(*, value: Any) -> AnalysisSettings:
                 "minimum_background_proteins",
                 "minimum_feature_proteins",
                 "maximum_kmer_features",
+                "kmer_vocabulary_policy",
+                "maximum_kmer_candidates",
                 "validation_fraction",
                 "fdr_threshold",
                 "random_seed",
@@ -344,6 +346,44 @@ def _parse_analysis(*, value: Any) -> AnalysisSettings:
     integer_lengths = tuple(int(length) for length in lengths)
     if len(integer_lengths) != len(set(integer_lengths)):
         raise ConfigurationError("analysis.kmer_lengths must not contain duplicates.")
+    kmer_policy = row.get("kmer_vocabulary_policy", "strict")
+    if not isinstance(kmer_policy, str) or kmer_policy not in {
+        "strict",
+        "prevalence_ranked",
+    }:
+        raise ConfigurationError(
+            "analysis.kmer_vocabulary_policy must be 'strict' or 'prevalence_ranked'."
+        )
+    maximum_kmer_features = int(
+        parse_optional_integer(
+            value=row.get("maximum_kmer_features", 250_000),
+            field_name="analysis.maximum_kmer_features",
+            minimum=1,
+        )
+    )
+    candidate_value = row.get("maximum_kmer_candidates")
+    if kmer_policy == "prevalence_ranked":
+        if candidate_value is None:
+            raise ConfigurationError(
+                "analysis.maximum_kmer_candidates is required for prevalence_ranked selection."
+            )
+        maximum_candidates = int(
+            parse_optional_integer(
+                value=candidate_value,
+                field_name="analysis.maximum_kmer_candidates",
+                minimum=1,
+            )
+        )
+        if maximum_candidates < maximum_kmer_features:
+            raise ConfigurationError(
+                "analysis.maximum_kmer_candidates must be at least maximum_kmer_features."
+            )
+    else:
+        if candidate_value is not None:
+            raise ConfigurationError(
+                "analysis.maximum_kmer_candidates is only used with prevalence_ranked selection."
+            )
+        maximum_candidates = None
     validation_fraction = parse_optional_float(
         value=row.get("validation_fraction", 0.20),
         field_name="analysis.validation_fraction",
@@ -379,13 +419,7 @@ def _parse_analysis(*, value: Any) -> AnalysisSettings:
                 minimum=1,
             )
         ),
-        maximum_kmer_features=int(
-            parse_optional_integer(
-                value=row.get("maximum_kmer_features", 250_000),
-                field_name="analysis.maximum_kmer_features",
-                minimum=1,
-            )
-        ),
+        maximum_kmer_features=maximum_kmer_features,
         validation_fraction=float(validation_fraction),
         fdr_threshold=float(fdr_threshold),
         random_seed=int(
@@ -411,6 +445,8 @@ def _parse_analysis(*, value: Any) -> AnalysisSettings:
                 maximum=1.0,
             )
         ),
+        kmer_vocabulary_policy=kmer_policy,
+        maximum_kmer_candidates=maximum_candidates,
     )
 
 

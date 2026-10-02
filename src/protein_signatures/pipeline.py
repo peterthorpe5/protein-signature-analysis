@@ -93,7 +93,7 @@ from .tables import (
 )
 
 LOGGER = logging.getLogger(__name__)
-ANALYSIS_SEMANTICS_VERSION = "matched_comparison_cohorts_v1"
+ANALYSIS_SEMANTICS_VERSION = "matched_comparison_cohorts_bounded_kmers_v2"
 
 
 def run_campaign(
@@ -778,6 +778,8 @@ def _prepare_campaign(
         lengths=config.analysis.kmer_lengths,
         minimum_proteins=config.analysis.minimum_feature_proteins,
         maximum_features=config.analysis.maximum_kmer_features,
+        vocabulary_policy=config.analysis.kmer_vocabulary_policy,
+        maximum_candidates=config.analysis.maximum_kmer_candidates,
     )
     features = _merge_features(
         external_features=prepared_external.confirmatory_features,
