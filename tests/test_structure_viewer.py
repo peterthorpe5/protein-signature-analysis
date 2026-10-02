@@ -19,7 +19,9 @@ from protein_signature_app.structure_viewer import (
     fetch_alphafold_model,
     pair_links,
     parse_annotation_tsv,
+    parse_mmcif_trace,
     parse_pdb_trace,
+    project_kmer_intervals,
     read_published_model,
     significant_intervals,
 )
@@ -36,6 +38,71 @@ def _pdb() -> bytes:
         "ATOM      3  CA  GLY A   3       3.000   2.000   3.000  1.00 70.00           C\n"
         "END\n"
     ).encode("ascii")
+
+
+def _mmcif() -> bytes:
+    """Return a three-residue mmCIF with a skipped alternative conformation."""
+
+    return (
+        "data_test\n#\nloop_\n"
+        "_atom_site.group_PDB\n_atom_site.label_atom_id\n"
+        "_atom_site.label_alt_id\n_atom_site.label_comp_id\n"
+        "_atom_site.label_asym_id\n_atom_site.label_seq_id\n"
+        "_atom_site.pdbx_PDB_ins_code\n_atom_site.Cartn_x\n"
+        "_atom_site.Cartn_y\n_atom_site.Cartn_z\n"
+        "_atom_site.B_iso_or_equiv\n_atom_site.pdbx_PDB_model_num\n"
+        "ATOM CA . ALA A 1 ? 1.0 2.0 3.0 90.0 1\n"
+        "ATOM CA B CYS A 2 ? 2.0 2.0 3.0 50.0 1\n"
+        "ATOM CA . CYS A 2 ? 2.0 2.0 3.0 80.0 1\n"
+        "ATOM CA . GLY A 3 ? 3.0 2.0 3.0 70.0 1\n"
+        "ATOM CA . ALA A 1 ? 9.0 2.0 3.0 10.0 2\n#\n"
+    ).encode("ascii")
+
+
+def test_mmcif_trace_maps_exact_residues_and_rejects_malformed_loops() -> None:
+    """Packaged mmCIF models support exact full-length colouring like PDB models."""
+
+    trace = parse_mmcif_trace(payload=_mmcif())
+    assert trace.matches_sequence(sequence="ACG")
+    assert trace.residues[1].confidence == 80.0
+    assert trace.residues[0].x == 1.0
+    assert not trace.matches_sequence(sequence="AGG")
+    with pytest.raises(InputValidationError, match="required coordinate columns"):
+        parse_mmcif_trace(payload=b"data_bad\nloop_\n_atom_site.group_PDB\nATOM\n#\n")
+    with pytest.raises(InputValidationError, match="incomplete columns"):
+        parse_mmcif_trace(payload=_mmcif().replace(b"80.0 1\n", b"80.0\n"))
+
+
+def test_published_kmer_membership_projects_exact_overlapping_positions() -> None:
+    """K-mer enrichment can be displayed where the sequence actually contains it."""
+
+    rows = [
+        {
+            "feature_type": "AMINO_ACID_KMER",
+            "feature_id": "k3:AAA",
+            "start": None,
+            "q_value": 0.001,
+            "prevalence_difference": 0.25,
+        },
+        {
+            "feature_type": "AMINO_ACID_KMER",
+            "feature_id": "k2:AA",
+            "start": pd.NA,
+            "q_value": 0.002,
+            "prevalence_difference": 0.2,
+        },
+        {"feature_type": "AMINO_ACID_KMER", "feature_id": "k4:AAA", "start": None},
+        {"feature_type": "FOLD", "feature_id": "fold", "start": None},
+    ]
+    projected = project_kmer_intervals(rows=rows, sequence="AAAA")
+    assert [(row["start"], row["end"]) for row in projected if pd.notna(row["start"])] == [
+        (1, 3),
+        (2, 4),
+        (1, 2),
+        (2, 3),
+        (3, 4),
+    ]
+    assert projected[-1]["feature_type"] == "FOLD"
 
 
 def test_model_is_checksum_bound_and_exactly_numbered(tmp_path: Path) -> None:
@@ -160,6 +227,47 @@ def test_held_out_tiers_use_their_own_q_values_and_direction(
         evidence_tier="Validated study-wide",
     )
     assert [row["q_value"] for row in wide] == [0.04]
+
+
+def test_explorer_projects_published_kmers_and_suggests_target_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The app links an enriched motif and packaged models to the selected target class."""
+
+    seen_parameters: list[tuple[str, ...]] = []
+
+    def query(*, sql: str, parameters: tuple[str, ...] = (), **_kwargs: object) -> pd.DataFrame:
+        """Return relevant published membership rows for the two queries."""
+
+        if "FROM structures s JOIN label_memberships" in sql:
+            assert "IN (?,?)" in sql
+            assert "coordinate_path <> ''" in sql
+            return pd.DataFrame({"protein_id": ["p1", "p2"]})
+        seen_parameters.append(tuple(parameters))
+        return pd.DataFrame(
+            [
+                {
+                    "feature_type": "AMINO_ACID_KMER",
+                    "feature_id": "k3:AAA",
+                    "feature_name": "k3:AAA",
+                    "start": None,
+                    "end": None,
+                    "discovery_q_value": 0.001,
+                    "discovery_prevalence_difference": 0.2,
+                    "evidence_class": "DISCOVERY_ONLY",
+                }
+            ]
+        )
+
+    monkeypatch.setattr(app, "query_dataframe", query)
+    assert app._target_model_proteins(
+        database=Path("unused"), target_label_ids="target:one|target:two"
+    ) == ("p1", "p2")
+    intervals = app._enriched_intervals(
+        database=Path("unused"), protein_id="p1", comparison_id="cmp", sequence="AAAA"
+    )
+    assert [(row["start"], row["end"]) for row in intervals] == [(1, 3), (2, 4)]
+    assert seen_parameters == [("p1", "cmp", 50)]
 
 
 def test_3d_trace_uses_the_same_enrichment_scale_as_the_sequence_track(

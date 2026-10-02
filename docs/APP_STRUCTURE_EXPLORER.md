@@ -4,6 +4,9 @@ The completed result already packages the database, figures, and any available c
 files under `result/assets/structures/`. Keep the **whole** `result/` directory together: the
 application checks `COMPLETED.json`, `manifest.json`, and every declared file size and checksum on
 opening. A lone DuckDB file is insufficient.
+During an open session, file names, types, sizes and change times are checked on each interaction;
+full checksum verification is repeated when that inventory changes. The explicit
+`protein-signatures verify --resource /path/to/result` command always checks every byte.
 Finder's `.DS_Store` and `._*` AppleDouble sidecars may appear anywhere under the copied
 result without blocking the app. All declared outputs still need valid checksums, and other
 unexpected files remain an error.
@@ -22,18 +25,32 @@ rsync -avP HPC_LOGIN:/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_prota
 
 Navigate to **Model & alignment explorer**. Select a protein and target-versus-background
 comparison. The ranked mapped-region table, a 2D sequence heat map, and a rotatable 3D Cα
-backbone show positional evidence. Only features with an explicit `start` and `end` and a
-positive target-minus-background prevalence difference and q-value ≤ 0.05 at the chosen
-evidence tier can colour a residue. Select discovery, held-out within-comparison validation,
+backbone show positional evidence. Recorded feature intervals and exact k-mer occurrences
+require a positive target-minus-background prevalence difference and q-value ≤ 0.05 at the
+chosen evidence tier before they colour a residue. Select discovery, held-out within-comparison validation,
 or held-out study-wide validation. The stronger tiers require the corresponding validated
 evidence class and q-value.
+The comparison chooser shows completed positive significant signatures first and flags
+comparisons with none. The suggested protein list contains target-class members with packaged
+coordinates, ranked by model confidence; an exact protein ID box can inspect any other member.
+Published k-mer memberships do not carry residue coordinates, so the viewer finds each exact
+overlapping occurrence in the chosen protein sequence. These are **sequence occurrences of an
+enriched feature**, not individually measured residue-level q-values. Whole-model structural
+clusters still have no positional interval to project.
+The positional view starts with the 50 most significant positive feature memberships for the
+chosen evidence tier; the control can show 10 to 1,000. This prevents thousands of overlapping
+short k-mers from making an entire sequence uniformly red. The ranked signature table above
+remains separately available for broader inspection.
+The **Structures & folds** page separately charts model eligibility and reports when named
+fold assignments are absent; alignment-derived structural clusters remain browsable without
+implying that they are curated fold names.
 At overlapping positions, the smallest q-value wins. White means **no significant mapped
 evidence**, not an assessed absence; blue marks weaker significant evidence, and red stronger
 evidence. The colour scale saturates at q ≤ 10⁻⁸. The view identifies positional intervals
 of enriched features; it does not assign residue-level p-values to individual residues.
 
-The in-app renderer displays PDB Cα traces. A packaged mmCIF can be downloaded for use
-in a molecular viewer. A PDB model gets positional colours only when one model chain has
+The in-app renderer displays PDB and mmCIF Cα traces. A model gets positional colours only
+when one model chain has
 exactly the published full-length amino-acid sequence and residues numbered 1 through N
 without insertion codes. Partial models, mismatches, and renumbered models are shown in
 grey to prevent a false residue assignment. Coordinate assets stay in the verified bundle.
@@ -74,7 +91,8 @@ held in memory and does not alter the checksum-verified result; the displayed an
 and plots have downloads.
 
 The sidebar **How to use this page** menu and **Glossary & help** page explain evidence
-states, structural terms, colour mapping and interpretation. Every visible table exports
-TSV and formatted Excel (frozen headings, filters, types, readable widths and a column
-dictionary). Interactive plots export PNG, PDF and self-contained HTML on demand. The
+states, structural terms, colour mapping and interpretation. Every visible table offers
+an immediate TSV download and a **Prepare formatted Excel workbook** button; prepared
+workbooks have frozen headings, filters, types, readable widths and a column dictionary.
+Interactive plots export PNG, PDF and self-contained HTML on demand. The
 published SHAP images can be downloaded in their original formats.

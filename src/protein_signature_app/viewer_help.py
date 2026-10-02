@@ -97,7 +97,8 @@ GLOSSARY = (
         "Coordinate projection",
         (
             "A recorded 1-based sequence interval mapped to the same positions in an exact "
-            "full-length model."
+            "full-length PDB or mmCIF model. Published k-mers can also be projected onto "
+            "their exact sequence occurrences."
         ),
     ),
     (
@@ -184,7 +185,9 @@ PAGE_HELP = {
         "specify aligned residue positions."
     ),
     "Model & alignment explorer": (
-        "Select a protein and comparison to colour exact residue intervals by target "
+        "Comparisons with significant results appear first. Suggested target proteins have "
+        "packaged models; enter an exact ID to inspect any other protein. Colour recorded "
+        "intervals and exact enriched k-mer occurrences by target "
         "enrichment (blue to red); white means no significant mapped enrichment. Choose "
         "a structural pair for an exploratory sequence alignment. Pocket intervals may "
         "be supplied separately with a provenance-labelled TSV."
@@ -195,7 +198,8 @@ PAGE_HELP = {
     ),
     "Canonical data & downloads": (
         "Browse bounded previews and download the complete verified datasets. Excel "
-        "workbooks have filters, fixed headings and a column dictionary."
+        "workbooks can be prepared on demand and have filters, fixed headings and a "
+        "column dictionary."
     ),
     "Data quality & provenance": (
         "Inspect input coverage, exclusions, statuses, evidence provenance and "

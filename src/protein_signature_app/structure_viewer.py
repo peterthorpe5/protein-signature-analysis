@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -83,7 +84,7 @@ class Residue:
 
 @dataclass(frozen=True)
 class ModelTrace:
-    """The longest protein chain in one bounded PDB model."""
+    """The longest protein chain in one bounded coordinate model."""
 
     residues: tuple[Residue, ...]
     chain: str
@@ -218,6 +219,194 @@ def parse_pdb_trace(*, payload: bytes) -> ModelTrace:
     if len(residues) > 20_000:
         raise InputValidationError("Model has too many residues for the interactive viewer.")
     return ModelTrace(residues=residues, chain=chain)
+
+
+def parse_mmcif_trace(*, payload: bytes) -> ModelTrace:
+    """Read the first model's C-alpha atoms from a bounded mmCIF atom-site loop.
+
+    Args:
+        payload: Uncompressed, checksum-verified mmCIF bytes.
+
+    Returns:
+        Longest protein chain with original sequence positions and confidence.
+
+    Raises:
+        InputValidationError: If the atom-site loop is malformed or has no protein trace.
+    """
+
+    if not 0 < len(payload) <= MAX_MODEL_BYTES:
+        raise InputValidationError("mmCIF model is empty or exceeds the size limit.")
+    try:
+        lines = io.StringIO(payload.decode("utf-8"))
+    except UnicodeDecodeError as error:
+        raise InputValidationError("mmCIF model is not UTF-8 text.") from error
+    chains: dict[str, dict[tuple[int, str], Residue]] = {}
+    headers: list[str] = []
+    columns: dict[str, int] = {}
+    tokens: list[str] = []
+    residue_count = 0
+    in_loop = False
+    in_atom_site = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "loop_":
+            if in_atom_site:
+                break
+            in_loop = True
+            headers = []
+            continue
+        if in_loop and stripped.startswith("_") and not in_atom_site:
+            headers.append(stripped)
+            continue
+        if not in_loop or not stripped or stripped.startswith("#"):
+            if in_atom_site and stripped.startswith("#"):
+                break
+            continue
+        if not in_atom_site:
+            if not headers or not headers[0].startswith("_atom_site."):
+                in_loop = False
+                continue
+            columns = {
+                name.removeprefix("_atom_site."): index for index, name in enumerate(headers)
+            }
+            required = {
+                "group_PDB",
+                "label_atom_id",
+                "label_comp_id",
+                "label_asym_id",
+                "Cartn_x",
+                "Cartn_y",
+                "Cartn_z",
+                "B_iso_or_equiv",
+            }
+            if not required.issubset(columns) or not (
+                {"label_seq_id", "auth_seq_id"} & columns.keys()
+            ):
+                raise InputValidationError(
+                    "mmCIF atom-site loop lacks required coordinate columns."
+                )
+            in_atom_site = True
+        if stripped.startswith("_"):
+            break
+        try:
+            parts = (
+                shlex.split(stripped, comments=False, posix=True)
+                if "'" in stripped or '"' in stripped
+                else stripped.split()
+            )
+            tokens.extend(parts)
+        except ValueError as error:
+            raise InputValidationError("mmCIF atom-site row has invalid quoting.") from error
+        while len(tokens) >= len(headers):
+            row, tokens = tokens[: len(headers)], tokens[len(headers) :]
+            if _mmcif_value(row=row, columns=columns, name="group_PDB") != "ATOM" or (
+                _mmcif_value(row=row, columns=columns, name="label_atom_id") != "CA"
+            ):
+                continue
+            if _mmcif_value(row=row, columns=columns, name="label_alt_id") not in {".", "?", "A"}:
+                continue
+            if _mmcif_value(
+                row=row, columns=columns, name="pdbx_PDB_model_num", default="1"
+            ) not in {"1", ".", "?"}:
+                continue
+            amino_acid = _AMINO_ACIDS.get(
+                _mmcif_value(row=row, columns=columns, name="label_comp_id")
+            )
+            if amino_acid is None:
+                continue
+            try:
+                sequence_token = _mmcif_value(row=row, columns=columns, name="label_seq_id")
+                if sequence_token in {".", "?"}:
+                    sequence_token = _mmcif_value(row=row, columns=columns, name="auth_seq_id")
+                position = int(sequence_token)
+                x, y, z = (
+                    float(_mmcif_value(row=row, columns=columns, name=name))
+                    for name in ("Cartn_x", "Cartn_y", "Cartn_z")
+                )
+                confidence = float(_mmcif_value(row=row, columns=columns, name="B_iso_or_equiv"))
+            except ValueError:
+                continue
+            if not all(math.isfinite(number) for number in (x, y, z, confidence)):
+                continue
+            chain = _mmcif_value(row=row, columns=columns, name="label_asym_id")
+            if chain in {".", "?"}:
+                continue
+            insertion = _mmcif_value(row=row, columns=columns, name="pdbx_PDB_ins_code")
+            insertion = "" if insertion in {".", "?"} else insertion
+            key = position, insertion
+            chain_residues = chains.setdefault(chain, {})
+            if key in chain_residues:
+                continue
+            chain_residues[key] = Residue(
+                chain, position, insertion, amino_acid, x, y, z, confidence
+            )
+            residue_count += 1
+            if residue_count > 20_000:
+                raise InputValidationError(
+                    "Model has too many residues for the interactive viewer."
+                )
+    if tokens:
+        raise InputValidationError("mmCIF atom-site row has incomplete columns.")
+    if not chains:
+        raise InputValidationError("No protein C-alpha atoms were found in the mmCIF model.")
+    chain = max(sorted(chains), key=lambda name: len(chains[name]))
+    return ModelTrace(residues=tuple(chains[chain].values()), chain=chain)
+
+
+def _mmcif_value(*, row: list[str], columns: dict[str, int], name: str, default: str = ".") -> str:
+    """Read one optional atom-site value from a validated mmCIF row.
+
+    Args:
+        row: Tokenised atom-site row.
+        columns: Header names mapped to token offsets.
+        name: Requested atom-site field.
+        default: Value used when the field is absent.
+
+    Returns:
+        Original token or the supplied default.
+    """
+
+    return row[columns[name]] if name in columns else default
+
+
+def project_kmer_intervals(
+    *, rows: list[dict[str, object]], sequence: str
+) -> list[dict[str, object]]:
+    """Locate published k-mer memberships on their exact source sequence.
+
+    Args:
+        rows: Positive feature memberships joined to published association results.
+        sequence: Authoritative amino-acid sequence for the selected protein.
+
+    Returns:
+        Positional occurrences for k-mers plus unchanged non-k-mer features.
+        Overlapping occurrences are retained and are labelled as projections.
+    """
+
+    projected: list[dict[str, object]] = []
+    for row in rows:
+        if row.get("feature_type") != "AMINO_ACID_KMER" or not pd.isna(row.get("start")):
+            projected.append(row)
+            continue
+        feature_id = str(row.get("feature_id", ""))
+        match = re.fullmatch(r"k([1-9][0-9]*):([A-Z]+)", feature_id)
+        if match is None:
+            continue
+        motif = match.group(2)
+        if len(motif) != int(match.group(1)):
+            continue
+        position = sequence.find(motif)
+        while position >= 0:
+            projected.append(
+                {
+                    **row,
+                    "start": position + 1,
+                    "end": position + len(motif),
+                    "feature_name": f"{feature_id} (sequence occurrence)",
+                }
+            )
+            position = sequence.find(motif, position + 1)
+    return projected
 
 
 def feature_intervals(

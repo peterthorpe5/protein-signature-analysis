@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import re
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from protein_signature_app.backend import (
     load_report_inventory_assets,
     query_dataframe,
     resolve_database,
+    result_inventory_identity,
     table_count,
 )
 from protein_signature_app.structure_viewer import (
@@ -37,7 +39,9 @@ from protein_signature_app.structure_viewer import (
     fetch_alphafold_model,
     pair_links,
     parse_annotation_tsv,
+    parse_mmcif_trace,
     parse_pdb_trace,
+    project_kmer_intervals,
     read_published_model,
     significant_intervals,
 )
@@ -57,6 +61,24 @@ _ASSET_FORMATS = {
     "SVG": (".svg", "image/svg+xml"),
     "PDF": (".pdf", "application/pdf"),
 }
+
+
+@st.cache_resource(show_spinner="Verifying the completed result")
+def _verified_app_database(*, resource: str, inventory_identity: str) -> Path:
+    """Verify once per immutable result snapshot across interactive reruns.
+
+    Args:
+        resource: Completed result path supplied to the application.
+        inventory_identity: File metadata digest that invalidates the cache
+            whenever the result inventory changes.
+
+    Returns:
+        Fully verified read-only DuckDB path.
+    """
+
+    if not inventory_identity:
+        raise InputValidationError("Could not identify the result inventory.")
+    return resolve_database(resource=Path(resource))
 
 
 def main() -> None:
@@ -82,7 +104,11 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     try:
-        database = resolve_database(resource=arguments.resource)
+        inventory_identity = result_inventory_identity(resource=arguments.resource)
+        database = _verified_app_database(
+            resource=str(arguments.resource.expanduser().resolve()),
+            inventory_identity=inventory_identity,
+        )
         metadata = load_metadata(database=database)
     except Exception as error:
         st.error(f"Could not open the result: {error}")
@@ -324,12 +350,37 @@ def _render_signatures(*, database: Path) -> None:
     if not comparisons:
         st.info("No comparisons are present in this result.")
         return
+    completed = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT comparison_id, count(*) AS enriched_count FROM signatures "
+            "WHERE status = 'COMPLETE' AND discovery_prevalence_difference > 0 "
+            "AND discovery_q_value <= 0.05 GROUP BY comparison_id "
+            "ORDER BY enriched_count DESC, comparison_id"
+        ),
+    )
+    counts = (
+        {
+            str(row.comparison_id): int(row.enriched_count)
+            for row in completed.itertuples(index=False)
+        }
+        if {"comparison_id", "enriched_count"}.issubset(completed.columns)
+        else {}
+    )
+    comparisons = tuple(counts) + tuple(value for value in comparisons if value not in counts)
     st.caption(
         "Target prevalence describes how common a feature is. The q-value controls FDR "
         "within this comparison and evidence family; study q-value also corrects across "
-        "all configured comparisons in the same evidence family."
+        "all configured comparisons in the same evidence family. "
+        f"{len(counts)} of {len(comparisons)} comparisons have completed enriched signatures."
     )
-    selected_comparison = st.selectbox("Comparison", comparisons)
+    selected_comparison = st.selectbox(
+        "Comparison",
+        comparisons,
+        format_func=lambda value: (
+            f"{value} · {counts[value]:,} enriched" if value in counts else value
+        ),
+    )
     selected_types = st.multiselect("Feature types", feature_types, default=feature_types)
     if not selected_types:
         st.info("Select at least one feature type.")
@@ -349,6 +400,8 @@ def _render_signatures(*, database: Path) -> None:
         download_name=f"{selected_comparison}_signatures",
         height=480,
     )
+    if not counts.get(selected_comparison):
+        st.info("No completed positive enriched signature is available for this comparison.")
     chart_data = frame.dropna(subset=["discovery_prevalence_difference"])
     if not chart_data.empty:
         figure = px.scatter(
@@ -692,7 +745,7 @@ def _read_result_asset(
 def _render_downloadable_table(
     *, frame: object, download_name: str, height: int | None = None
 ) -> None:
-    """Render one table with matching TSV and formatted Excel downloads.
+    """Render one table with TSV and on-demand formatted Excel downloads.
 
     Args:
         frame: Pandas-like tabular value.
@@ -710,13 +763,13 @@ def _render_downloadable_table(
     stem = safe_download_stem(value=download_name)
     try:
         tsv = dataframe_to_tsv_bytes(frame=normalised)
-        workbook = dataframe_to_xlsx_bytes(
-            frame=normalised,
-            title=str(download_name).replace("_", " ").title(),
-        )
     except (InputValidationError, PublicationError) as error:
         st.warning(f"Could not prepare table downloads: {error}")
         return
+    fingerprint = hashlib.sha256(tsv).hexdigest()
+    workbook_key = f"table-xlsx-payload-{stem}"
+    if st.session_state.get(workbook_key, (None, None))[0] != fingerprint:
+        st.session_state.pop(workbook_key, None)
     st.dataframe(normalised, **display_options)
     st.download_button(
         label="Download table as TSV",
@@ -725,13 +778,24 @@ def _render_downloadable_table(
         mime="text/tab-separated-values",
         key=f"table-tsv-{stem}",
     )
-    st.download_button(
-        label="Download formatted Excel workbook",
-        data=workbook,
-        file_name=f"{stem}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key=f"table-xlsx-{stem}",
-    )
+    if st.button("Prepare formatted Excel workbook", key=f"table-xlsx-prepare-{stem}"):
+        try:
+            workbook = dataframe_to_xlsx_bytes(
+                frame=normalised,
+                title=str(download_name).replace("_", " ").title(),
+            )
+            st.session_state[workbook_key] = (fingerprint, workbook)
+        except (InputValidationError, PublicationError) as error:
+            st.warning(f"Could not prepare formatted Excel workbook: {error}")
+    cached = st.session_state.get(workbook_key)
+    if cached is not None and cached[0] == fingerprint:
+        st.download_button(
+            label="Download formatted Excel workbook",
+            data=cached[1],
+            file_name=f"{stem}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"table-xlsx-{stem}",
+        )
 
 
 def _render_plotly_figure(*, figure: object, download_name: str) -> None:
@@ -1041,6 +1105,24 @@ def _render_structures(*, database: Path) -> None:
         frame=source_counts,
         download_name="structure_source_coverage",
     )
+    if not source_counts.empty and {
+        "analysis_eligibility_status",
+        "models",
+        "fold_evidence_status",
+        "structure_source",
+        "availability_status",
+        "mean_confidence",
+    }.issubset(source_counts.columns):
+        figure = px.bar(
+            source_counts,
+            x="analysis_eligibility_status",
+            y="models",
+            color="fold_evidence_status",
+            hover_data=["structure_source", "availability_status", "mean_confidence"],
+            labels={"analysis_eligibility_status": "Model eligibility", "models": "Models"},
+        )
+        figure.update_layout(title="Published model coverage and eligibility", height=400)
+        _render_plotly_figure(figure=figure, download_name="structure_eligibility_summary")
     with st.expander("Structure model records and comparison universes", expanded=False):
         _render_downloadable_table(
             frame=query_dataframe(
@@ -1063,11 +1145,17 @@ def _render_structures(*, database: Path) -> None:
     left, right = st.columns(2)
     with left:
         st.subheader("Fold assignments")
-        _render_downloadable_table(
-            frame=fold_counts,
-            download_name="fold_assignments",
-            height=380,
-        )
+        if fold_counts.empty:
+            st.info(
+                "No named fold assignments were published. The alignment-derived "
+                "clusters alongside are whole-model similarity evidence, not fold names."
+            )
+        else:
+            _render_downloadable_table(
+                frame=fold_counts,
+                download_name="fold_assignments",
+                height=380,
+            )
     with right:
         st.subheader("Alignment-derived clusters")
         clusters = query_dataframe(
@@ -1144,22 +1232,61 @@ def _render_model_explorer(*, database: Path) -> None:
     )
     with st.expander("What can be mapped onto a model?", expanded=False):
         st.markdown(
-            "Only recorded 1-based feature intervals and optional residue annotations can "
-            "be coloured. A full-length model must exactly match the published protein "
-            "sequence and residue numbering. Whole-model folds or Foldseek clusters do "
-            "not specify motif positions. The pair view is a **sequence** alignment; the "
+            "Recorded 1-based feature intervals, exact occurrences of enriched published "
+            "k-mers, and optional residue annotations can be coloured. A full-length model "
+            "must exactly match the published protein sequence and residue numbering. "
+            "Whole-model folds or Foldseek clusters do not specify motif positions. "
+            "The pair view is a **sequence** alignment; the "
             "published structural comparisons contain scores and coverage, but no "
             "residue-to-residue superposition."
         )
-    proteins = distinct_values(database=database, table_name="proteins", column_name="protein_id")
-    comparisons = distinct_values(
-        database=database, table_name="signatures", column_name="comparison_id"
+    overview = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT c.comparison_id, c.display_name, c.target_label_ids, "
+            "coalesce(count_if(s.status = 'COMPLETE' AND "
+            "s.discovery_prevalence_difference > 0 "
+            "AND s.discovery_q_value <= 0.05), 0) AS enriched_count "
+            "FROM comparisons c LEFT JOIN signatures s USING (comparison_id) "
+            "GROUP BY c.comparison_id, c.display_name, c.target_label_ids "
+            "ORDER BY enriched_count DESC, c.display_name"
+        ),
     )
-    if not proteins or not comparisons:
-        st.info("This result has no proteins or comparison signatures to inspect.")
+    if overview.empty:
+        st.info("This result has no comparisons to inspect.")
         return
-    protein_id = st.selectbox("Protein to inspect", proteins)
-    comparison_id = st.selectbox("Enrichment comparison", comparisons)
+    descriptions = {
+        str(row.comparison_id): f"{row.display_name} · {int(row.enriched_count):,} enriched"
+        for row in overview.itertuples(index=False)
+    }
+    comparison_id = st.selectbox(
+        "Enrichment comparison",
+        tuple(descriptions),
+        format_func=lambda value: descriptions[value],
+    )
+    selected = overview.loc[overview["comparison_id"] == comparison_id].iloc[0]
+    if int(selected["enriched_count"]) == 0:
+        st.info("This comparison has no completed positive significant signatures.")
+    target_labels = selected["target_label_ids"]
+    proteins = _target_model_proteins(
+        database=database,
+        target_label_ids=str(target_labels) if pd.notna(target_labels) else "",
+    )
+    if not proteins:
+        proteins = distinct_values(
+            database=database, table_name="proteins", column_name="protein_id"
+        )
+        st.info("No target proteins have a packaged model; search any published protein ID.")
+    if not proteins:
+        st.info("This result has no protein sequences to inspect.")
+        return
+    st.caption(
+        f"{len(proteins):,} suggested proteins are available. Select one below "
+        "or enter an exact published protein ID."
+    )
+    suggested_id = st.selectbox("Protein to inspect", proteins)
+    typed_id = st.text_input("Exact protein ID (optional; overrides selection)").strip()
+    protein_id = typed_id or suggested_id
     st.subheader("Most significant association results")
     st.caption(
         "Ranked by discovery q-value for this comparison. Validation and study-wide "
@@ -1180,11 +1307,39 @@ def _render_model_explorer(*, database: Path) -> None:
         download_name=f"{comparison_id}_top_enriched_signatures",
         height=300,
     )
+    strongest = ranked.head(20).dropna(subset=["discovery_q_value"]).copy()
+    if not strongest.empty:
+        strongest["strength"] = strongest["discovery_q_value"].map(
+            lambda value: -math.log10(max(float(value), 1e-300))
+        )
+        strongest["label"] = (
+            strongest["feature_type"].astype(str)
+            + ": "
+            + strongest["feature_id"].astype(str).str.slice(0, 45)
+        )
+        figure = px.bar(
+            strongest,
+            x="strength",
+            y="label",
+            color="feature_type",
+            orientation="h",
+            hover_data=["feature_name", "discovery_q_value", "evidence_class"],
+            labels={"strength": "−log₁₀(discovery q-value)", "label": "Enriched feature"},
+        )
+        figure.update_yaxes(autorange="reversed")
+        figure.update_layout(title="Strongest enriched features", height=600)
+        _render_plotly_figure(
+            figure=figure,
+            download_name=f"{comparison_id}_top_enriched_features",
+        )
     protein = query_dataframe(
         database=database,
         sql="SELECT sequence FROM proteins WHERE protein_id = ?",
         parameters=(protein_id,),
     )
+    if protein.empty:
+        st.warning(f"Protein {protein_id!r} is not in this completed result.")
+        return
     sequence = str(protein.iloc[0]["sequence"])
     upload = st.file_uploader(
         "Optional residue annotations (TSV; pockets or other regions)",
@@ -1226,15 +1381,36 @@ def _render_model_explorer(*, database: Path) -> None:
         if mode == "Published signatures"
         else "Uploaded annotations"
     )
+    maximum_features = (
+        st.selectbox(
+            "Most significant feature memberships to colour",
+            (10, 25, 50, 100, 250, 500, 1_000),
+            index=2,
+            help=(
+                "Limits published membership rows before mapping exact occurrences; "
+                "avoids covering the whole protein with many weaker overlapping k-mers."
+            ),
+        )
+        if mode == "Published signatures"
+        else 50
+    )
     rows = _enriched_intervals(
         database=database,
         protein_id=protein_id,
         comparison_id=comparison_id,
+        sequence=sequence,
         annotations=annotations if mode == "Uploaded residue annotations" else None,
         evidence_tier=evidence_tier,
+        maximum_features=maximum_features,
+    )
+    limit_caption = (
+        f"At most {maximum_features:,} published feature memberships are mapped. "
+        if mode == "Published signatures"
+        else "Uploaded annotations are mapped separately. "
     )
     st.caption(
         f"Showing positive target enrichment at {evidence_tier.lower()} q ≤ 0.05. "
+        f"{limit_caption}"
         "Overlaps use the smallest q-value; colours saturate at q ≤ 10⁻⁸. "
         "Uploaded annotations form a separate source and are never combined "
         "statistically with published q-values."
@@ -1277,7 +1453,38 @@ def _render_model_explorer(*, database: Path) -> None:
         reference_scores=scores,
         annotations=annotations if mode == "Uploaded residue annotations" else None,
         evidence_tier=evidence_tier,
+        maximum_features=maximum_features,
     )
+
+
+def _target_model_proteins(*, database: Path, target_label_ids: str) -> tuple[str, ...]:
+    """Suggest model-bearing members of the selected comparison's target class.
+
+    Args:
+        database: Verified result database.
+        target_label_ids: Pipe-delimited target labels from the comparison table.
+
+    Returns:
+        At most 5,000 protein IDs with published coordinates, prioritised by
+        recorded mean model confidence.
+    """
+
+    labels = tuple(label for label in target_label_ids.split("|") if label)
+    if not labels:
+        return ()
+    placeholders = ",".join("?" for _ in labels)
+    frame = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT s.protein_id, max(s.mean_confidence) AS model_confidence "
+            "FROM structures s JOIN label_memberships l USING (protein_id) "
+            f"WHERE l.label_id IN ({placeholders}) AND s.coordinate_path <> '' "
+            "GROUP BY s.protein_id ORDER BY model_confidence DESC NULLS LAST, "
+            "s.protein_id LIMIT 5000"
+        ),
+        parameters=labels,
+    )
+    return tuple(str(value) for value in frame["protein_id"])
 
 
 def _enriched_intervals(
@@ -1285,8 +1492,10 @@ def _enriched_intervals(
     database: Path,
     protein_id: str,
     comparison_id: str,
+    sequence: str | None = None,
     annotations: object = None,
     evidence_tier: str = "Discovery within comparison",
+    maximum_features: int = 50,
 ) -> list[dict[str, object]]:
     """Find position-bearing published signatures or exact uploaded rows."""
 
@@ -1297,6 +1506,26 @@ def _enriched_intervals(
         ].copy()
         selected = selected.rename(columns={"region_id": "feature_name"})
         return selected.to_dict(orient="records")
+    if maximum_features < 1 or maximum_features > 10_000:
+        raise InputValidationError("Mapped feature limit must be between 1 and 10,000.")
+    columns = {
+        "Discovery within comparison": ("discovery_q_value", "discovery_prevalence_difference"),
+        "Validated within comparison": ("validation_q_value", "validation_prevalence_difference"),
+        "Validated study-wide": ("validation_study_q_value", "validation_prevalence_difference"),
+    }
+    if evidence_tier not in columns:
+        raise InputValidationError("Unknown enrichment evidence tier.")
+    q_column, difference_column = columns[evidence_tier]
+    accepted_classes = {
+        "Discovery within comparison": "",
+        "Validated within comparison": (
+            "AND s.evidence_class IN ('DECISION_CANDIDATE__VALIDATED_STUDY_WIDE', "
+            "'DECISION_CANDIDATE__VALIDATED_WITHIN_COMPARISON') "
+        ),
+        "Validated study-wide": (
+            "AND s.evidence_class = 'DECISION_CANDIDATE__VALIDATED_STUDY_WIDE' "
+        ),
+    }
     frame = query_dataframe(
         database=database,
         sql=(
@@ -1307,18 +1536,14 @@ def _enriched_intervals(
             "FROM features f JOIN signatures s ON f.feature_type = s.feature_type "
             "AND f.feature_id = s.feature_id "
             "WHERE f.protein_id = ? AND s.comparison_id = ? AND s.status = 'COMPLETE' "
-            'AND f."start" IS NOT NULL AND f."end" IS NOT NULL '
-            "ORDER BY s.discovery_q_value NULLS LAST, f.feature_id LIMIT 10000"
+            "AND (f.feature_type = 'AMINO_ACID_KMER' OR "
+            '(f."start" IS NOT NULL AND f."end" IS NOT NULL)) '
+            f"AND s.{difference_column} > 0 AND s.{q_column} <= 0.05 "
+            f"{accepted_classes[evidence_tier]}"
+            f"ORDER BY s.{q_column}, f.feature_id LIMIT ?"
         ),
-        parameters=(protein_id, comparison_id),
+        parameters=(protein_id, comparison_id, maximum_features),
     )
-    columns = {
-        "Discovery within comparison": ("discovery_q_value", "discovery_prevalence_difference"),
-        "Validated within comparison": ("validation_q_value", "validation_prevalence_difference"),
-        "Validated study-wide": ("validation_study_q_value", "validation_prevalence_difference"),
-    }
-    if evidence_tier not in columns:
-        raise InputValidationError("Unknown enrichment evidence tier.")
     if evidence_tier != "Discovery within comparison":
         accepted = "DECISION_CANDIDATE__VALIDATED_STUDY_WIDE"
         if evidence_tier == "Validated within comparison":
@@ -1326,10 +1551,10 @@ def _enriched_intervals(
         frame = frame[
             frame["evidence_class"].isin(accepted if isinstance(accepted, tuple) else (accepted,))
         ].copy()
-    q_column, difference_column = columns[evidence_tier]
     frame["q_value"] = frame[q_column]
     frame["prevalence_difference"] = frame[difference_column]
-    return frame.to_dict(orient="records")
+    rows = frame.to_dict(orient="records")
+    return project_kmer_intervals(rows=rows, sequence=sequence) if sequence else rows
 
 
 def _render_enrichment_track(
@@ -1383,7 +1608,9 @@ def _render_model_for_protein(
         sql=(
             "SELECT structure_id, structure_source, coordinate_path, coordinate_sha256, "
             "mean_confidence, analysis_eligibility_status FROM structures "
-            "WHERE protein_id = ? ORDER BY structure_id"
+            "WHERE protein_id = ? ORDER BY (coordinate_path <> '') DESC, "
+            "(analysis_eligibility_status = 'ELIGIBLE') DESC, "
+            "mean_confidence DESC NULLS LAST, structure_id"
         ),
         parameters=(protein_id,),
     )
@@ -1434,23 +1661,6 @@ def _render_model_for_protein(
                 st.warning(str(error))
         else:
             st.info("This published structure record has no packaged coordinates.")
-    cif_only = payload is not None and not filename.endswith(".pdb")
-    if cif_only:
-        st.download_button(
-            "Download published mmCIF model",
-            data=payload,
-            file_name=filename,
-            mime="chemical/x-cif",
-        )
-        st.link_button(
-            "Search published mmCIF with Foldseek",
-            "https://search.foldseek.com/search",
-        )
-        st.caption(
-            "The local model is mmCIF; fetch an exact AlphaFold PDB for the in-app "
-            "Cα view if one is available for this sequence."
-        )
-        payload = None
     session_model_key = (
         f"afdb-{accession}-{hashlib.sha256(sequence.encode('ascii')).hexdigest()}"
         if accession is not None
@@ -1472,10 +1682,7 @@ def _render_model_for_protein(
         if payload is not None:
             filename = f"AF-{accession}-verified-session.pdb"
     if payload is None:
-        if cif_only:
-            st.info("The published mmCIF remains available for download above.")
-        else:
-            st.info("No local coordinates are available for an in-app 3D view.")
+        st.info("No local coordinates are available for an in-app 3D view.")
         return
     st.download_button(
         "Download selected coordinate model",
@@ -1484,11 +1691,15 @@ def _render_model_for_protein(
         mime="chemical/x-pdb" if filename.endswith(".pdb") else "chemical/x-cif",
     )
     st.link_button(
-        "Search selected PDB with Foldseek",
+        "Search selected model with Foldseek",
         "https://search.foldseek.com/search",
     )
     try:
-        trace = parse_pdb_trace(payload=payload)
+        trace = (
+            parse_pdb_trace(payload=payload)
+            if filename.endswith(".pdb")
+            else parse_mmcif_trace(payload=payload)
+        )
     except InputValidationError as error:
         st.warning(str(error))
         return
@@ -1579,6 +1790,7 @@ def _render_pair_alignment(
     reference_scores: list[float],
     annotations: object,
     evidence_tier: str,
+    maximum_features: int,
 ) -> None:
     """Show structurally compared partners with a distinct sequence alignment."""
 
@@ -1636,8 +1848,10 @@ def _render_pair_alignment(
         database=database,
         protein_id=other_id,
         comparison_id=comparison_id,
+        sequence=other_sequence,
         annotations=annotations,
         evidence_tier=evidence_tier,
+        maximum_features=maximum_features,
     )
     other_scores, _ = enrichment_track(rows=other_rows, sequence_length=len(other_sequence))
     alignment_rows = []

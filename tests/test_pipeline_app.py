@@ -227,6 +227,9 @@ def test_app_backend_reads_only_canonical_tables(completed_result: Path) -> None
 
     database = backend.resolve_database(resource=completed_result)
     assert backend.resolve_database(resource=database) == database
+    assert backend.result_inventory_identity(resource=completed_result) == (
+        backend.result_inventory_identity(resource=database)
+    )
     assert backend.table_count(database=database, table_name="proteins") == 24
     assert backend.distinct_values(
         database=database, table_name="signatures", column_name="comparison_id"
@@ -254,6 +257,17 @@ def test_app_backend_reads_only_canonical_tables(completed_result: Path) -> None
         backend.table_count(database=database, table_name="missing")
     with pytest.raises(InputValidationError, match="Unknown canonical"):
         backend.distinct_values(database=database, table_name="proteins", column_name="missing")
+
+
+def test_interactive_verification_key_tracks_result_mutations(completed_result: Path) -> None:
+    """An edited published file invalidates the cached full verification."""
+
+    before = backend.result_inventory_identity(resource=completed_result)
+    table = completed_result / "tables" / "proteins.tsv"
+    table.write_text(table.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
+    assert backend.result_inventory_identity(resource=completed_result) != before
+    with pytest.raises(InputValidationError, match="not a valid completed result"):
+        backend.resolve_database(resource=completed_result)
 
 
 def test_app_backend_exposes_every_complete_canonical_download(

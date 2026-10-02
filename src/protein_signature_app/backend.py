@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +45,45 @@ class DownloadAsset:
     payload: bytes
     mime_type: str
     complete: bool = True
+
+
+def result_inventory_identity(*, resource: Path) -> str:
+    """Fingerprint result file metadata for interactive verification caching.
+
+    The fingerprint is deliberately cheap to calculate. A new or modified file
+    changes the key and triggers a fresh full checksum verification; the CLI's
+    explicit ``verify`` command continues to verify every byte on every call.
+
+    Args:
+        resource: Completed result directory or physical DuckDB path.
+
+    Returns:
+        Deterministic digest of path names, types, sizes and change times.
+
+    Raises:
+        InputValidationError: If the result directory cannot be inspected.
+    """
+
+    candidate = Path(resource).expanduser().resolve()
+    root = candidate.parent if candidate.is_file() else candidate
+    digest = hashlib.sha256()
+    walk_errors: list[OSError] = []
+    try:
+        for directory, names, files in os.walk(root, followlinks=False, onerror=walk_errors.append):
+            names.sort()
+            for name in sorted((*names, *files)):
+                path = Path(directory) / name
+                stat = path.lstat()
+                digest.update(str(path.relative_to(root)).encode("utf-8"))
+                identity = (
+                    f"\0{stat.st_mode}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ctime_ns}\n"
+                )
+                digest.update(identity.encode("ascii"))
+    except (OSError, ValueError) as error:
+        raise InputValidationError(f"Could not inspect result file inventory: {error}") from error
+    if walk_errors:
+        raise InputValidationError(f"Could not inspect result file inventory: {walk_errors[0]}")
+    return digest.hexdigest()
 
 
 def resolve_database(*, resource: Path) -> Path:

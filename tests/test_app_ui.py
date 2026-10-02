@@ -90,6 +90,7 @@ class _FakeStreamlit:
             "info",
             "image",
             "json",
+            "link_button",
             "markdown",
             "plotly_chart",
             "set_page_config",
@@ -118,7 +119,7 @@ class _FakeStreamlit:
 
         return _Block()
 
-    def selectbox(self, _label: str, options: tuple[str, ...]) -> str:
+    def selectbox(self, _label: str, options: tuple[str, ...], **_kwargs: object) -> str:
         """Select the first deterministic option."""
 
         return options[0]
@@ -496,7 +497,7 @@ def test_shap_assets_require_safe_content_and_a_pdf_companion(
 def test_table_and_plot_renderers_always_offer_declared_downloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every rendered table and interactive plot should expose its portable downloads."""
+    """TSV is immediate; formatted workbooks and plot files are prepared on demand."""
 
     fake = _FakeStreamlit()
     monkeypatch.setattr(application_module, "st", fake)
@@ -505,8 +506,15 @@ def test_table_and_plot_renderers_always_offer_declared_downloads(
         download_name="Protein table",
         height=250,
     )
-    assert fake.messages.count("download_button") == 2
+    assert fake.messages.count("download_button") == 1
     assert any("protein_id" in message and "score" in message for message in fake.messages)
+    fake.button_result = True
+    application_module._render_downloadable_table(
+        frame=pd.DataFrame({"protein_id": ["p1"], "score": [0.8]}),
+        download_name="Protein table",
+    )
+    assert fake.messages.count("download_button") == 3
+    fake.button_result = False
 
     class Figure:
         """Minimal interactive-figure test double."""
@@ -525,8 +533,8 @@ def test_table_and_plot_renderers_always_offer_declared_downloads(
         figure=Figure(),
         download_name="Deferred association plot",
     )
-    assert fake.messages.count("download_button") == 2
-    assert fake.messages.count("button") == 3
+    assert fake.messages.count("download_button") == 3
+    assert fake.messages.count("button") == 5
 
     fake.button_result = True
     monkeypatch.setattr(
@@ -538,7 +546,7 @@ def test_table_and_plot_renderers_always_offer_declared_downloads(
         figure=Figure(),
         download_name="Association plot",
     )
-    assert fake.messages.count("download_button") == 3
+    assert fake.messages.count("download_button") == 4
     rendered_plot_count = sum("Figure object" in message for message in fake.messages)
     assert rendered_plot_count == 2
 
@@ -554,6 +562,106 @@ def test_table_and_plot_renderers_always_offer_declared_downloads(
     )
     assert any("PDF runtime unavailable" in message for message in fake.messages)
     assert sum("Figure object" in message for message in fake.messages) == rendered_plot_count + 1
+
+
+def test_packaged_mmcif_model_reaches_the_interactive_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified local mmCIF should render without requiring an AFDB download."""
+
+    fake = _FakeStreamlit()
+    monkeypatch.setattr(application_module, "st", fake)
+
+    def records(*, sql: str, **_kwargs: object) -> pd.DataFrame:
+        """Return the selected local structure and no remote acquisition."""
+
+        if "FROM structures" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "structure_id": "s1",
+                        "structure_source": "packaged",
+                        "coordinate_path": "assets/structures/digest.cif",
+                        "coordinate_sha256": "digest",
+                        "mean_confidence": 90.0,
+                        "analysis_eligibility_status": "ELIGIBLE",
+                    }
+                ]
+            )
+        return pd.DataFrame(columns=("uniprot_accession",))
+
+    monkeypatch.setattr(application_module, "query_dataframe", records)
+    monkeypatch.setattr(application_module, "read_published_model", lambda **_kwargs: b"CIF")
+    parsed = []
+
+    class Trace:
+        """Record exact-sequence validation on the locally parsed model."""
+
+        def matches_sequence(self, *, sequence: str) -> bool:
+            """Accept the fixture's full-length protein sequence."""
+
+            return sequence == "ACG"
+
+    def parse(*, payload: bytes) -> Trace:
+        """Record use of the mmCIF parser for packaged coordinates."""
+
+        parsed.append(payload)
+        return Trace()
+
+    monkeypatch.setattr(application_module, "parse_mmcif_trace", parse)
+    rendered = []
+    monkeypatch.setattr(
+        application_module, "_render_trace_figure", lambda **kwargs: rendered.append(kwargs)
+    )
+    application_module._render_model_for_protein(
+        database=Path("unused"),
+        protein_id="local-p1",
+        sequence="ACG",
+        scores=[0.1, 0.2, 0.3],
+        descriptions=["one", "two", "three"],
+        comparison_id="cmp",
+    )
+    assert parsed == [b"CIF"]
+    assert rendered[0]["scores"] == [0.1, 0.2, 0.3]
+    assert any("Download selected coordinate model" in message for message in fake.messages)
+
+
+def test_structure_summary_distinguishes_absent_named_folds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty fold vocabulary should not hide published model coverage."""
+
+    fake = _FakeStreamlit()
+    monkeypatch.setattr(application_module, "st", fake)
+    monkeypatch.setattr(application_module, "_render_downloadable_table", lambda **_kwargs: None)
+    figures = []
+    monkeypatch.setattr(
+        application_module, "_render_plotly_figure", lambda **kwargs: figures.append(kwargs)
+    )
+
+    def records(*, sql: str, **_kwargs: object) -> pd.DataFrame:
+        """Return model availability and no explicit named fold assignments."""
+
+        if "count(*) AS models" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "structure_source": "packaged",
+                        "availability_status": "AVAILABLE",
+                        "analysis_eligibility_status": "ELIGIBLE",
+                        "fold_evidence_status": "NOT_ASSESSED",
+                        "models": 12,
+                        "mean_confidence": 80.0,
+                    }
+                ]
+            )
+        return pd.DataFrame()
+
+    monkeypatch.setattr(application_module, "query_dataframe", records)
+    application_module._render_structures(database=Path("unused"))
+    assert any("No named fold assignments" in message for message in fake.messages)
+    assert len(figures) == 1
+    assert figures[0]["figure"].layout.title.text == "Published model coverage and eligibility"
 
 
 def test_page_renderers_cover_sparse_and_imported_evidence_branches(
@@ -716,6 +824,7 @@ def test_page_renderers_cover_sparse_and_imported_evidence_branches(
         "dataframe_to_xlsx_bytes",
         lambda **_kwargs: (_ for _ in ()).throw(PublicationError("Excel failed")),
     )
+    fake.button_result = True
     application_module._render_downloadable_table(
         frame=pd.DataFrame({"protein_id": ["p1"]}),
         download_name="failed_table",
