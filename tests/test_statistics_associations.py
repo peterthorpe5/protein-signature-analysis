@@ -205,9 +205,7 @@ def test_ranked_kmer_vocabulary_is_bounded_and_label_blind() -> None:
         ("v1", "k5:GGGGG"),
     }
     assert rows == build_kmer_features(sequences=tuple(reversed(sequences)), **options)
-    all_rows = build_kmer_features(
-        sequences=sequences, **{**options, "maximum_features": 20}
-    )
+    all_rows = build_kmer_features(sequences=sequences, **{**options, "maximum_features": 20})
     assert {row.feature_id for row in all_rows} == {
         "k3:AAA",
         "k3:CCC",

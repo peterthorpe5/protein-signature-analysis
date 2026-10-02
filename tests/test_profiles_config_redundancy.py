@@ -328,9 +328,7 @@ def test_configuration_accepts_bounded_ranked_kmers(example_dir: Path, tmp_path:
         kmer_vocabulary_policy="prevalence_ranked",
         maximum_kmer_candidates=5_000_000,
     )
-    config = load_config(
-        path=_write_config(path=tmp_path / "ranked.yaml", document=document)
-    )
+    config = load_config(path=_write_config(path=tmp_path / "ranked.yaml", document=document))
     assert config.analysis.kmer_lengths == (3, 4, 5)
     assert config.analysis.kmer_vocabulary_policy == "prevalence_ranked"
     assert config.analysis.maximum_kmer_candidates == 5_000_000

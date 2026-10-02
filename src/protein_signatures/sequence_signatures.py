@@ -91,9 +91,7 @@ def build_kmer_features(
     )
 
     prevalence: Counter[str] = Counter()
-    candidate_limit = (
-        maximum_features if vocabulary_policy == "strict" else maximum_candidates
-    )
+    candidate_limit = maximum_features if vocabulary_policy == "strict" else maximum_candidates
     for record in sequences:
         if record.protein_id not in discovery_protein_ids:
             continue
