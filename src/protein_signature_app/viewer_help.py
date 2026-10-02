@@ -186,7 +186,10 @@ PAGE_HELP = {
     ),
     "Model & alignment explorer": (
         "Comparisons with significant results appear first. Suggested target proteins have "
-        "packaged models; enter an exact ID to inspect any other protein. Colour recorded "
+        "packaged models; enter an exact ID to inspect any other protein. The ranked "
+        "association table can show several significant classes together, independently "
+        "of the comparison used to colour the selected model. All comparison outcomes "
+        "are downloadable, including insufficient-sample statuses. Colour recorded "
         "intervals and exact enriched k-mer occurrences by target "
         "enrichment (blue to red); white means no significant mapped enrichment. Choose "
         "a structural pair for an exploratory sequence alignment. Pocket intervals may "

@@ -33,6 +33,15 @@ evidence class and q-value.
 The comparison chooser shows completed positive significant signatures first and flags
 comparisons with none. The suggested protein list contains target-class members with packaged
 coordinates, ranked by model confidence; an exact protein ID box can inspect any other member.
+The **All comparison outcomes** expander lists every configured comparison and its
+published status. **Comparison for protein and model mapping** controls the positional
+colours and alignment. The **Most significant association results** table has a separate
+multi-select, initially including every comparison with positive significant signatures
+(up to ten). Its balanced preview shows 20 rows per comparison by default, ranked by
+discovery q-value then target prevalence difference; increase the per-comparison limit
+when needed. The table and cross-class plot can be downloaded. The **Signature explorer**
+provides the complete feature table for an individual comparison, including rows that
+do not pass the positive significance filter.
 Published k-mer memberships do not carry residue coordinates, so the viewer finds each exact
 overlapping occurrence in the chosen protein sequence. These are **sequence occurrences of an
 enriched feature**, not individually measured residue-level q-values. Whole-model structural

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+import duckdb
 import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -125,7 +126,12 @@ class _FakeStreamlit:
         return options[0]
 
     def multiselect(
-        self, _label: str, options: tuple[str, ...], *, default: tuple[str, ...]
+        self,
+        _label: str,
+        options: tuple[str, ...],
+        *,
+        default: tuple[str, ...],
+        **_kwargs: object,
     ) -> tuple[str, ...]:
         """Return all defaults or an explicit empty selection."""
 
@@ -624,6 +630,83 @@ def test_packaged_mmcif_model_reaches_the_interactive_trace(
     assert parsed == [b"CIF"]
     assert rendered[0]["scores"] == [0.1, 0.2, 0.3]
     assert any("Download selected coordinate model" in message for message in fake.messages)
+
+
+def test_ranked_associations_shows_fbox_u_box_and_ring_together(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-comparison ranking must include every selected enriched class."""
+
+    database = tmp_path / "signatures.duckdb"
+    with duckdb.connect(str(database)) as connection:
+        connection.execute(
+            "CREATE TABLE signatures (comparison_id VARCHAR, feature_type VARCHAR, "
+            "feature_id VARCHAR, feature_name VARCHAR, discovery_q_value DOUBLE, "
+            "discovery_prevalence_difference DOUBLE, evidence_class VARCHAR, "
+            "status VARCHAR)"
+        )
+        rows = [
+            ("FBOX", "AMINO_ACID_KMER", f"f{i}", f"F-box {i}", 0.001, 0.3, "DISCOVERY", "COMPLETE")
+            for i in range(25)
+        ]
+        rows += [
+            ("UBOX", "AMINO_ACID_KMER", "u1", "U-box", 0.002, 0.2, "DISCOVERY", "COMPLETE"),
+            ("RING", "AMINO_ACID_KMER", "r1", "RING", 0.003, 0.1, "DISCOVERY", "COMPLETE"),
+            ("RING", "AMINO_ACID_KMER", "r2", "Not significant", 0.5, 0.2, "DISCOVERY", "COMPLETE"),
+            ("UBOX", "AMINO_ACID_KMER", "u2", "Depleted", 0.001, -0.2, "DISCOVERY", "COMPLETE"),
+        ]
+        connection.executemany("INSERT INTO signatures VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+
+    fake = _FakeStreamlit()
+    monkeypatch.setattr(application_module, "st", fake)
+    tables: list[pd.DataFrame] = []
+    figures: list[object] = []
+    monkeypatch.setattr(
+        application_module,
+        "_render_downloadable_table",
+        lambda *, frame, **_kwargs: tables.append(frame),
+    )
+    monkeypatch.setattr(
+        application_module,
+        "_render_plotly_figure",
+        lambda *, figure, **_kwargs: figures.append(figure),
+    )
+    application_module._render_ranked_associations(
+        database=database,
+        enriched_comparisons=("FBOX", "UBOX", "RING"),
+        descriptions={"FBOX": "F-box", "UBOX": "U-box", "RING": "RING"},
+    )
+    assert tables[0].groupby("comparison_id").size().to_dict() == {
+        "FBOX": 20,
+        "UBOX": 1,
+        "RING": 1,
+    }
+    assert tables[0]["within_comparison_rank"].max() == 20
+    assert len(figures) == 1
+
+    fake.multiselect_empty = True
+    application_module._render_ranked_associations(
+        database=database,
+        enriched_comparisons=("FBOX", "UBOX", "RING"),
+        descriptions={"FBOX": "F-box", "UBOX": "U-box", "RING": "RING"},
+    )
+    assert len(tables) == 1
+    assert any("Select one or more comparisons" in message for message in fake.messages)
+
+
+def test_comparison_choices_use_display_values_and_disambiguate_names() -> None:
+    """Visible widget options must map back to unique published IDs."""
+
+    assert application_module._comparison_choices(
+        descriptions={"fbox": "F-box · 97 enriched", "ring": "RING · 30 enriched"}
+    ) == {"F-box · 97 enriched": "fbox", "RING · 30 enriched": "ring"}
+    assert application_module._comparison_choices(
+        descriptions={"first": "Shared label", "second": "Shared label"}
+    ) == {
+        "Shared label [first]": "first",
+        "Shared label [second]": "second",
+    }
 
 
 def test_structure_summary_distinguishes_absent_named_folds(

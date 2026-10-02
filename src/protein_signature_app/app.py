@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import math
 import re
 from pathlib import Path
 
@@ -1246,7 +1245,12 @@ def _render_model_explorer(*, database: Path) -> None:
             "SELECT c.comparison_id, c.display_name, c.target_label_ids, "
             "coalesce(count_if(s.status = 'COMPLETE' AND "
             "s.discovery_prevalence_difference > 0 "
-            "AND s.discovery_q_value <= 0.05), 0) AS enriched_count "
+            "AND s.discovery_q_value <= 0.05), 0) AS enriched_count, "
+            "coalesce(count_if(s.status = 'COMPLETE'), 0) AS complete_count, "
+            "coalesce(count_if(s.status = 'INSUFFICIENT_SAMPLE_SIZE'), 0) "
+            "AS insufficient_count, "
+            "coalesce(count_if(s.status = 'NO_SIGNIFICANT_SIGNATURE'), 0) "
+            "AS no_signature_count "
             "FROM comparisons c LEFT JOIN signatures s USING (comparison_id) "
             "GROUP BY c.comparison_id, c.display_name, c.target_label_ids "
             "ORDER BY enriched_count DESC, c.display_name"
@@ -1259,11 +1263,50 @@ def _render_model_explorer(*, database: Path) -> None:
         str(row.comparison_id): f"{row.display_name} · {int(row.enriched_count):,} enriched"
         for row in overview.itertuples(index=False)
     }
-    comparison_id = st.selectbox(
-        "Enrichment comparison",
-        tuple(descriptions),
-        format_func=lambda value: descriptions[value],
+    enriched_comparisons = tuple(
+        str(row.comparison_id)
+        for row in overview.itertuples(index=False)
+        if int(row.enriched_count) > 0
     )
+    st.caption(
+        f"{len(enriched_comparisons):,} of {len(overview):,} configured comparisons "
+        "have significant positive discovery results in this completed run. "
+        "All comparison outcomes are available below."
+    )
+    with st.expander("All comparison outcomes", expanded=False):
+        outcomes = overview[
+            [
+                "comparison_id",
+                "display_name",
+                "enriched_count",
+                "complete_count",
+                "insufficient_count",
+                "no_signature_count",
+            ]
+        ].copy()
+        outcomes["analysis_status"] = outcomes.apply(
+            lambda row: (
+                "SIGNIFICANT_POSITIVE"
+                if row["enriched_count"]
+                else "COMPLETE_NO_POSITIVE_ENRICHMENT"
+                if row["complete_count"]
+                else "INSUFFICIENT_SAMPLE_SIZE"
+                if row["insufficient_count"]
+                else "NO_SIGNIFICANT_SIGNATURE"
+                if row["no_signature_count"]
+                else "NO_PUBLISHED_SIGNATURE"
+            ),
+            axis=1,
+        )
+        _render_downloadable_table(
+            frame=outcomes,
+            download_name="all_comparison_outcomes",
+            height=350,
+        )
+    comparison_choices = _comparison_choices(descriptions=descriptions)
+    comparison_id = comparison_choices[
+        st.selectbox("Comparison for protein and model mapping", tuple(comparison_choices))
+    ]
     selected = overview.loc[overview["comparison_id"] == comparison_id].iloc[0]
     if int(selected["enriched_count"]) == 0:
         st.info("This comparison has no completed positive significant signatures.")
@@ -1287,51 +1330,11 @@ def _render_model_explorer(*, database: Path) -> None:
     suggested_id = st.selectbox("Protein to inspect", proteins)
     typed_id = st.text_input("Exact protein ID (optional; overrides selection)").strip()
     protein_id = typed_id or suggested_id
-    st.subheader("Most significant association results")
-    st.caption(
-        "Ranked by discovery q-value for this comparison. Validation and study-wide "
-        "q-values remain visible; a highly ranked whole-model feature may have no "
-        "residue interval for colouring."
-    )
-    ranked = query_dataframe(
+    _render_ranked_associations(
         database=database,
-        sql=(
-            "SELECT * FROM signatures WHERE comparison_id = ? "
-            "AND status = 'COMPLETE' AND discovery_prevalence_difference > 0 "
-            "ORDER BY discovery_q_value ASC NULLS LAST LIMIT 1000"
-        ),
-        parameters=(comparison_id,),
+        enriched_comparisons=enriched_comparisons,
+        descriptions=descriptions,
     )
-    _render_downloadable_table(
-        frame=ranked,
-        download_name=f"{comparison_id}_top_enriched_signatures",
-        height=300,
-    )
-    strongest = ranked.head(20).dropna(subset=["discovery_q_value"]).copy()
-    if not strongest.empty:
-        strongest["strength"] = strongest["discovery_q_value"].map(
-            lambda value: -math.log10(max(float(value), 1e-300))
-        )
-        strongest["label"] = (
-            strongest["feature_type"].astype(str)
-            + ": "
-            + strongest["feature_id"].astype(str).str.slice(0, 45)
-        )
-        figure = px.bar(
-            strongest,
-            x="strength",
-            y="label",
-            color="feature_type",
-            orientation="h",
-            hover_data=["feature_name", "discovery_q_value", "evidence_class"],
-            labels={"strength": "−log₁₀(discovery q-value)", "label": "Enriched feature"},
-        )
-        figure.update_yaxes(autorange="reversed")
-        figure.update_layout(title="Strongest enriched features", height=600)
-        _render_plotly_figure(
-            figure=figure,
-            download_name=f"{comparison_id}_top_enriched_features",
-        )
     protein = query_dataframe(
         database=database,
         sql="SELECT sequence FROM proteins WHERE protein_id = ?",
@@ -1455,6 +1458,139 @@ def _render_model_explorer(*, database: Path) -> None:
         evidence_tier=evidence_tier,
         maximum_features=maximum_features,
     )
+
+
+def _comparison_choices(*, descriptions: dict[str, str]) -> dict[str, str]:
+    """Map distinct visible comparison labels back to their published IDs.
+
+    Args:
+        descriptions: Display labels keyed by comparison ID.
+
+    Returns:
+        Ordered labels mapped to their comparison IDs.
+
+    Raises:
+        InputValidationError: If the generated labels are not unique.
+    """
+
+    labels = tuple(descriptions.values())
+    if len(set(labels)) == len(labels):
+        return {label: comparison_id for comparison_id, label in descriptions.items()}
+    choices = {
+        f"{label} [{comparison_id}]": comparison_id for comparison_id, label in descriptions.items()
+    }
+    if len(choices) != len(descriptions):
+        raise InputValidationError("Comparison display labels must be unique.")
+    return choices
+
+
+def _render_ranked_associations(
+    *,
+    database: Path,
+    enriched_comparisons: tuple[str, ...],
+    descriptions: dict[str, str],
+) -> None:
+    """Render balanced positive associations across selected target classes.
+
+    Args:
+        database: Verified result database.
+        enriched_comparisons: Comparison IDs with significant positive discovery rows.
+        descriptions: Human-readable comparison labels keyed by ID.
+    """
+
+    st.subheader("Most significant association results")
+    st.caption(
+        "This table can compare classes independently of the protein and model selection. "
+        "It includes positive discovery enrichment at q ≤ 0.05, balanced by comparison; "
+        "validation and study-wide q-values remain visible. The Signature explorer "
+        "shows the full set for any one comparison."
+    )
+    choices = _comparison_choices(descriptions=descriptions)
+    available_labels = tuple(
+        label for label, comparison_id in choices.items() if comparison_id in enriched_comparisons
+    )
+    selected_labels = st.multiselect(
+        "Comparisons in ranked association table",
+        available_labels,
+        default=available_labels[:10],
+    )
+    selected_results = tuple(choices[label] for label in selected_labels)
+    if selected_results:
+        rows_per_comparison = st.selectbox("Maximum results per comparison", (20, 100, 500, 1_000))
+        placeholders = ",".join("?" for _ in selected_results)
+        ranked = query_dataframe(
+            database=database,
+            sql=(
+                "SELECT s.*, row_number() OVER (PARTITION BY s.comparison_id "
+                "ORDER BY s.discovery_q_value ASC NULLS LAST, "
+                "s.discovery_prevalence_difference DESC, s.feature_type, s.feature_id) "
+                "AS within_comparison_rank FROM signatures s "
+                f"WHERE s.comparison_id IN ({placeholders}) "
+                "AND s.status = 'COMPLETE' "
+                "AND s.discovery_prevalence_difference > 0 "
+                "AND s.discovery_q_value <= 0.05 "
+                "QUALIFY within_comparison_rank <= ? "
+                "ORDER BY within_comparison_rank, s.comparison_id LIMIT 5000"
+            ),
+            parameters=(*selected_results, rows_per_comparison),
+        )
+        _render_downloadable_table(
+            frame=ranked,
+            download_name="selected_comparisons_top_enriched_signatures",
+            height=300,
+        )
+        st.caption(
+            f"Up to {rows_per_comparison:,} rows per comparison and 5,000 total "
+            "are shown here. The selected protein's mapped regions below still use "
+            "only the protein/model comparison."
+        )
+        strongest = (
+            ranked.dropna(subset=["discovery_q_value"])
+            .groupby("comparison_id", sort=False)
+            .head(5)
+            .copy()
+        )
+    else:
+        st.info("Select one or more comparisons to review association results.")
+        strongest = pd.DataFrame()
+    if not strongest.empty:
+        strongest["comparison"] = strongest["comparison_id"].map(
+            lambda value: descriptions[str(value)].split(" · ")[0]
+        )
+        strongest["label"] = (
+            strongest["comparison"].astype(str).str.slice(0, 30)
+            + " · "
+            + strongest["feature_type"].astype(str)
+            + ": "
+            + strongest["feature_id"].astype(str).str.slice(0, 45)
+        )
+        figure = px.bar(
+            strongest,
+            x="discovery_prevalence_difference",
+            y="label",
+            color="comparison",
+            orientation="h",
+            hover_data=[
+                "feature_name",
+                "feature_type",
+                "discovery_q_value",
+                "evidence_class",
+            ],
+            labels={
+                "discovery_prevalence_difference": "Target − background prevalence",
+                "label": "Enriched feature",
+                "comparison": "Comparison",
+            },
+        )
+        figure.update_yaxes(autorange="reversed")
+        figure.update_layout(
+            title="Top ranked enriched features across selected comparisons",
+            height=max(450, 30 * len(strongest)),
+        )
+        _render_plotly_figure(
+            figure=figure,
+            download_name="selected_comparisons_top_enriched_features",
+        )
 
 
 def _target_model_proteins(*, database: Path, target_label_ids: str) -> tuple[str, ...]:
@@ -1637,14 +1773,11 @@ def _render_model_for_protein(
     payload = None
     filename = ""
     if not models.empty:
-        choices = tuple(range(len(models)))
-        selected = st.selectbox(
-            "Published structure record",
-            choices,
-            format_func=lambda index: (
-                f"{models.iloc[index]['structure_id']} · {models.iloc[index]['structure_source']}"
-            ),
+        model_options = tuple(
+            f"{row.structure_id} · {row.structure_source} · record {index + 1}"
+            for index, row in enumerate(models.itertuples(index=False))
         )
+        selected = model_options.index(st.selectbox("Published structure record", model_options))
         row = models.iloc[selected]
         relative = str(row["coordinate_path"] or "")
         if relative:
@@ -1805,16 +1938,12 @@ def _render_pair_alignment(
     if candidates.empty:
         st.info("No published pairwise structural comparison includes this protein.")
         return
-    options = tuple(range(len(candidates)))
-    selected = st.selectbox(
-        "Published structural comparison",
-        options,
-        format_func=lambda index: (
-            f"{candidates.iloc[index]['protein_a_id']} ↔ "
-            f"{candidates.iloc[index]['protein_b_id']} · "
-            f"TM {_metric_text(candidates.iloc[index]['tm_score'])}"
-        ),
+    pair_options = tuple(
+        f"{row.protein_a_id} ↔ {row.protein_b_id} · "
+        f"TM {_metric_text(row.tm_score)} · record {index + 1}"
+        for index, row in enumerate(candidates.itertuples(index=False))
     )
+    selected = pair_options.index(st.selectbox("Published structural comparison", pair_options))
     selected_pair = candidates.iloc[selected]
     other_id = str(
         selected_pair["protein_b_id"]
