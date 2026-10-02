@@ -413,6 +413,8 @@ def test_app_backend_rejects_missing_database_and_wrong_result_file(
     """A verified root still requires its one canonical database path."""
 
     monkeypatch.setattr(backend, "verify_completed_result", lambda **_kwargs: None)
+    (tmp_path / "COMPLETED.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "manifest.json").write_text("{}", encoding="utf-8")
     with pytest.raises(InputValidationError, match="lacks its DuckDB"):
         backend.resolve_database(resource=tmp_path)
     wrong = tmp_path / "other.duckdb"
@@ -421,6 +423,83 @@ def test_app_backend_rejects_missing_database_and_wrong_result_file(
     canonical.write_bytes(b"canonical")
     with pytest.raises(InputValidationError, match="Unsupported resource file"):
         backend.resolve_database(resource=wrong)
+
+
+def test_app_reuses_verification_only_for_an_unchanged_inventory(
+    completed_result: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persistent cache saves repeated hashes but never masks changed data."""
+
+    identity = backend.result_inventory_identity(resource=completed_result)
+    cache_dir = tmp_path / "verification-cache"
+    original_verify = backend.verify_completed_result
+    verified: list[Path] = []
+
+    def counted_verify(*, result_dir: Path) -> None:
+        """Record each full verification while retaining real integrity checks."""
+
+        verified.append(result_dir)
+        original_verify(result_dir=result_dir)
+
+    monkeypatch.setattr(backend, "verify_completed_result", counted_verify)
+    first = backend.resolve_database_for_app(
+        resource=completed_result, inventory_identity=identity, cache_dir=cache_dir
+    )
+    second = backend.resolve_database_for_app(
+        resource=first, inventory_identity=identity, cache_dir=cache_dir
+    )
+    assert first == second
+    assert verified == [completed_result]
+
+    corrupted = completed_result / "run_metadata.json"
+    corrupted.write_text(corrupted.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    changed_identity = backend.result_inventory_identity(resource=completed_result)
+    assert changed_identity != identity
+    with pytest.raises(InputValidationError, match="App resource is not a valid"):
+        backend.resolve_database_for_app(
+            resource=completed_result,
+            inventory_identity=changed_identity,
+            cache_dir=cache_dir,
+        )
+    assert verified == [completed_result, completed_result]
+
+
+def test_app_verification_cache_rejects_stale_identity_and_corrupt_record(
+    completed_result: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale inventory or malformed cache record requires full verification."""
+
+    cache_dir = tmp_path / "verification-cache"
+    identity = backend.result_inventory_identity(resource=completed_result)
+    with pytest.raises(InputValidationError, match="changed during checksum verification"):
+        backend.resolve_database_for_app(
+            resource=completed_result,
+            inventory_identity="0" * 64,
+            cache_dir=cache_dir,
+        )
+    verified = backend.resolve_database_for_app(
+        resource=completed_result, inventory_identity=identity, cache_dir=cache_dir
+    )
+    assert verified.is_file()
+    cache_record = next(cache_dir.glob("*.json"))
+    cache_record.write_text("invalid json", encoding="utf-8")
+    observed: list[Path] = []
+    original_verify = backend.verify_completed_result
+
+    def counted_verify(*, result_dir: Path) -> None:
+        """Track a full recheck after cache corruption."""
+
+        observed.append(result_dir)
+        original_verify(result_dir=result_dir)
+
+    monkeypatch.setattr(backend, "verify_completed_result", counted_verify)
+    assert (
+        backend.resolve_database_for_app(
+            resource=completed_result, inventory_identity=identity, cache_dir=cache_dir
+        )
+        == verified
+    )
+    assert observed == [completed_result]
 
 
 def test_app_launcher_builds_safe_argv_and_runs(
@@ -439,7 +518,11 @@ def test_app_launcher_builds_safe_argv_and_runs(
         return SimpleNamespace(returncode=7)
 
     monkeypatch.setattr(launcher.subprocess, "run", fake_run)
-    monkeypatch.setattr(launcher, "check_pdf_export_runtime", lambda: None)
+    monkeypatch.setattr(
+        backend,
+        "verify_completed_result",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("No launcher checksum pass")),
+    )
     assert launcher.main(["--resource", str(completed_result), "--port", "8123"]) == 7
     assert observed["check"] is False
     with pytest.raises(ValueError):
@@ -447,48 +530,6 @@ def test_app_launcher_builds_safe_argv_and_runs(
     with pytest.raises(ValueError):
         launcher.build_streamlit_command(database=database, port=80, address="bad address")
     assert launcher.main(["--resource", str(completed_result), "--port", "0"]) == 2
-    monkeypatch.setattr(
-        launcher,
-        "check_pdf_export_runtime",
-        lambda: (_ for _ in ()).throw(PublicationError("missing Chrome")),
-    )
-    assert launcher.main(["--resource", str(completed_result)]) == 2
-
-
-def test_app_launcher_preflights_pdf_download_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The normal launcher should prove PDF export works before exposing the app."""
-
-    observed: list[object] = []
-    monkeypatch.setattr(
-        launcher,
-        "plotly_figure_to_pdf_bytes",
-        lambda *, figure: observed.append(figure) or b"%PDF-1.7\n%%EOF\n",
-    )
-    launcher.check_pdf_export_runtime()
-    assert len(observed) == 1
-
-
-def test_app_launcher_reports_a_missing_plotly_dependency(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The PDF pre-flight should contextualise an unavailable Plotly installation."""
-
-    import builtins
-
-    original_import = builtins.__import__
-
-    def blocked_import(name: str, *args: object, **kwargs: object) -> object:
-        """Reject only the lazy Plotly import used by the pre-flight."""
-
-        if name == "plotly.graph_objects":
-            raise ImportError("blocked")
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", blocked_import)
-    with pytest.raises(PublicationError, match="Plotly dependency"):
-        launcher.check_pdf_export_runtime()
 
 
 def test_shell_app_launcher_preserves_argument_boundaries(

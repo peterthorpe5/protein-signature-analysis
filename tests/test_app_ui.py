@@ -256,7 +256,63 @@ def test_direct_renderers_cover_controlled_empty_states(
     empty_features = pd.DataFrame(columns=("feature_type", "feature_count", "protein_count"))
     monkeypatch.setattr(application_module, "query_dataframe", lambda **_kwargs: empty_features)
     application_module._render_overview(database=database, metadata={"evidence_availability": []})
-    assert any("No positive feature" in message for message in fake.messages)
+    assert any("No completed signature" in message for message in fake.messages)
+
+
+def test_overview_uses_published_counts_and_defers_full_feature_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Opening the landing page must not scan a very large feature table."""
+
+    fake = _FakeStreamlit()
+    monkeypatch.setattr(application_module, "st", fake)
+    monkeypatch.setattr(
+        application_module,
+        "table_count",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Unexpected count query")),
+    )
+    queries: list[str] = []
+
+    def query(*, sql: str, **_kwargs: object) -> pd.DataFrame:
+        """Return only the small signature summary unless coverage is requested."""
+
+        queries.append(sql)
+        if "FROM signatures" in sql:
+            return pd.DataFrame({"feature_type": ["AMINO_ACID_KMER"], "signature_count": [97]})
+        return pd.DataFrame(
+            {"feature_type": ["AMINO_ACID_KMER"], "feature_count": [120], "protein_count": [24]}
+        )
+
+    monkeypatch.setattr(application_module, "query_dataframe", query)
+    figures: list[object] = []
+    monkeypatch.setattr(
+        application_module,
+        "_render_plotly_figure",
+        lambda *, figure, **_kwargs: figures.append(figure),
+    )
+    monkeypatch.setattr(application_module, "_render_downloadable_table", lambda **_kwargs: None)
+    metadata: dict[str, object] = {
+        "counts": {"proteins": 24, "signatures": 97, "structures": 12, "domain_hits": 28},
+        "evidence_availability": {},
+    }
+    application_module._render_overview(
+        database=Path("example.duckdb"), metadata=metadata, inventory_identity="snapshot"
+    )
+    assert len(queries) == 1 and "FROM signatures" in queries[0]
+    assert len(figures) == 1
+    assert (
+        application_module._overview_count(
+            database=Path("unused"), metadata=metadata, table_name="proteins"
+        )
+        == 24
+    )
+
+    fake.button_result = True
+    application_module._render_overview(
+        database=Path("example.duckdb"), metadata=metadata, inventory_identity="snapshot"
+    )
+    assert len(queries) == 3 and "FROM features" in queries[-1]
+    assert len(figures) == 3
 
 
 def test_explainable_page_renders_complete_and_non_fitted_models(

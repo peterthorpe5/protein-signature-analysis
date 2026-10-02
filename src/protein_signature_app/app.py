@@ -22,7 +22,7 @@ from protein_signature_app.backend import (
     load_metadata,
     load_report_inventory_assets,
     query_dataframe,
-    resolve_database,
+    resolve_database_for_app,
     result_inventory_identity,
     table_count,
 )
@@ -68,8 +68,8 @@ def _verified_app_database(*, resource: str, inventory_identity: str) -> Path:
 
     Args:
         resource: Completed result path supplied to the application.
-        inventory_identity: File metadata digest that invalidates the cache
-            whenever the result inventory changes.
+        inventory_identity: File metadata and inode digest that invalidates
+            the cache whenever the result inventory changes.
 
     Returns:
         Fully verified read-only DuckDB path.
@@ -77,7 +77,7 @@ def _verified_app_database(*, resource: str, inventory_identity: str) -> Path:
 
     if not inventory_identity:
         raise InputValidationError("Could not identify the result inventory.")
-    return resolve_database(resource=Path(resource))
+    return resolve_database_for_app(resource=Path(resource), inventory_identity=inventory_identity)
 
 
 def main() -> None:
@@ -135,7 +135,9 @@ def main() -> None:
     with st.sidebar.expander("How to use this page"):
         st.markdown(PAGE_HELP[page])
     if page == "Overview":
-        _render_overview(database=database, metadata=metadata)
+        _render_overview(
+            database=database, metadata=metadata, inventory_identity=inventory_identity
+        )
     elif page == "Signature explorer":
         _render_signatures(database=database)
     elif page == "Explainable prediction":
@@ -275,12 +277,35 @@ def _render_filtered_feature_export(*, database: Path) -> None:
         )
 
 
-def _render_overview(*, database: Path, metadata: dict[str, object]) -> None:
+def _overview_count(*, database: Path, metadata: dict[str, object], table_name: str) -> int:
+    """Use verified published counts without rescanning a large physical table.
+
+    Args:
+        database: Verified result database.
+        metadata: Published run metadata.
+        table_name: Canonical table whose count is requested.
+
+    Returns:
+        Published non-negative row count, or the queried count when unavailable.
+    """
+
+    counts = metadata.get("counts")
+    if isinstance(counts, dict):
+        value = counts.get(table_name)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return table_count(database=database, table_name=table_name)
+
+
+def _render_overview(
+    *, database: Path, metadata: dict[str, object], inventory_identity: str = ""
+) -> None:
     """Render campaign metrics and evidence composition.
 
     Args:
         database: Verified result database.
         metadata: Run metadata.
+        inventory_identity: Current verified inventory for optional full coverage.
     """
 
     st.title("Protein signature analysis")
@@ -290,38 +315,47 @@ def _render_overview(*, database: Path, metadata: dict[str, object]) -> None:
         "Discovery and held-out validation are kept separate."
     )
     columns = st.columns(4)
-    columns[0].metric("Proteins", f"{table_count(database=database, table_name='proteins'):,}")
+    columns[0].metric(
+        "Proteins",
+        f"{_overview_count(database=database, metadata=metadata, table_name='proteins'):,}",
+    )
     columns[1].metric(
-        "Candidate signatures", f"{table_count(database=database, table_name='signatures'):,}"
+        "Candidate signatures",
+        f"{_overview_count(database=database, metadata=metadata, table_name='signatures'):,}",
     )
     columns[2].metric(
-        "Structure models", f"{table_count(database=database, table_name='structures'):,}"
+        "Structure models",
+        f"{_overview_count(database=database, metadata=metadata, table_name='structures'):,}",
     )
     columns[3].metric(
-        "Domain hits", f"{table_count(database=database, table_name='domain_hits'):,}"
+        "Domain hits",
+        f"{_overview_count(database=database, metadata=metadata, table_name='domain_hits'):,}",
     )
-    feature_counts = query_dataframe(
+    signature_counts = query_dataframe(
         database=database,
         sql=(
-            "SELECT feature_type, count(DISTINCT feature_id) AS feature_count, "
-            "count(DISTINCT protein_id) AS protein_count FROM features "
-            "GROUP BY feature_type ORDER BY protein_count DESC, feature_type"
+            "SELECT feature_type, count(*) AS signature_count FROM signatures "
+            "WHERE status = 'COMPLETE' GROUP BY feature_type "
+            "ORDER BY signature_count DESC, feature_type"
         ),
     )
     left, right = st.columns((3, 2))
     with left:
-        st.subheader("Evidence coverage")
-        if feature_counts.empty:
-            st.info("No positive feature evidence was available.")
+        st.subheader("Completed signatures by feature type")
+        if signature_counts.empty:
+            st.info("No completed signature evidence was available.")
         else:
             figure = px.bar(
-                feature_counts,
+                signature_counts,
                 x="feature_type",
-                y="protein_count",
-                color="feature_count",
-                labels={"protein_count": "Proteins", "feature_type": "Feature type"},
+                y="signature_count",
+                color="feature_type",
+                labels={
+                    "signature_count": "Completed signatures",
+                    "feature_type": "Feature type",
+                },
             )
-            _render_plotly_figure(figure=figure, download_name="overview_evidence_coverage")
+            _render_plotly_figure(figure=figure, download_name="overview_signature_types")
     with right:
         st.subheader("Availability states")
         availability = metadata.get("evidence_availability", {})
@@ -330,6 +364,41 @@ def _render_overview(*, database: Path, metadata: dict[str, object]) -> None:
                 frame={"evidence": list(availability), "status": list(availability.values())},
                 download_name="overview_availability_states",
             )
+    with st.expander("Exact feature coverage (large calculation)", expanded=False):
+        st.caption(
+            "Calculating distinct features and proteins for each feature type scans "
+            "the complete feature table and may take several minutes."
+        )
+        cache_key = f"overview-feature-coverage-{database}-{inventory_identity}"
+        if st.button("Calculate exact feature coverage"):
+            try:
+                st.session_state[cache_key] = query_dataframe(
+                    database=database,
+                    sql=(
+                        "SELECT feature_type, count(DISTINCT feature_id) AS feature_count, "
+                        "count(DISTINCT protein_id) AS protein_count FROM features "
+                        "GROUP BY feature_type ORDER BY protein_count DESC, feature_type"
+                    ),
+                )
+            except InputValidationError as error:
+                st.warning(f"Could not calculate full feature coverage: {error}")
+        coverage = st.session_state.get(cache_key)
+        if coverage is not None:
+            _render_downloadable_table(
+                frame=coverage,
+                download_name="overview_exact_feature_coverage",
+            )
+            if not coverage.empty:
+                figure = px.bar(
+                    coverage,
+                    x="feature_type",
+                    y="protein_count",
+                    color="feature_count",
+                    labels={"protein_count": "Proteins", "feature_type": "Feature type"},
+                )
+                _render_plotly_figure(
+                    figure=figure, download_name="overview_exact_feature_coverage_chart"
+                )
 
 
 def _render_signatures(*, database: Path) -> None:

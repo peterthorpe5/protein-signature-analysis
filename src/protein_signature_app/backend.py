@@ -5,8 +5,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import logging
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,8 @@ _RELATION_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 _MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+_VERIFICATION_CACHE_VERSION = 1
+LOGGER = logging.getLogger(__name__)
 _DUCKDB_READ_ONLY_CONFIG = {
     "allow_community_extensions": "false",
     "allow_persistent_secrets": "false",
@@ -76,7 +80,8 @@ def result_inventory_identity(*, resource: Path) -> str:
                 stat = path.lstat()
                 digest.update(str(path.relative_to(root)).encode("utf-8"))
                 identity = (
-                    f"\0{stat.st_mode}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ctime_ns}\n"
+                    f"\0{stat.st_dev}:{stat.st_ino}:{stat.st_mode}:{stat.st_size}:"
+                    f"{stat.st_mtime_ns}:{stat.st_ctime_ns}\n"
                 )
                 digest.update(identity.encode("ascii"))
     except (OSError, ValueError) as error:
@@ -86,8 +91,36 @@ def result_inventory_identity(*, resource: Path) -> str:
     return digest.hexdigest()
 
 
+def app_database_path(*, resource: Path) -> Path:
+    """Check the local result paths before starting the viewer.
+
+    Args:
+        resource: Completed result directory or its physical DuckDB file.
+
+    Returns:
+        Canonical DuckDB path; file contents are not verified at this step.
+
+    Raises:
+        InputValidationError: If required paths are missing or unsupported.
+    """
+
+    candidate = Path(resource).expanduser().resolve()
+    root = candidate.parent if candidate.is_file() else candidate
+    if not root.is_dir():
+        raise InputValidationError(f"Completed result directory does not exist: {root}")
+    for filename in ("COMPLETED.json", "manifest.json"):
+        if not (root / filename).is_file():
+            raise InputValidationError(f"Result lacks completion marker or manifest: {root}")
+    database = root / "protein_signatures.duckdb"
+    if not database.is_file() or database.stat().st_size == 0:
+        raise InputValidationError(f"Completed result lacks its DuckDB database: {database}")
+    if candidate.is_file() and candidate != database:
+        raise InputValidationError(f"Unsupported resource file; expected {database}")
+    return database
+
+
 def resolve_database(*, resource: Path) -> Path:
-    """Resolve and verify a completed result's DuckDB database.
+    """Verify every published output and resolve the result database.
 
     Args:
         resource: Completed result directory or its physical DuckDB file.
@@ -96,23 +129,95 @@ def resolve_database(*, resource: Path) -> Path:
         Verified DuckDB path.
 
     Raises:
-        InputValidationError: If the resource is invalid.
+        InputValidationError: If any completion invariant fails.
     """
 
-    candidate = Path(resource).expanduser().resolve()
-    root = candidate.parent if candidate.is_file() else candidate
     try:
-        verify_completed_result(result_dir=root)
+        database = app_database_path(resource=resource)
+        verify_completed_result(result_dir=database.parent)
     except Exception as error:
         raise InputValidationError(
             f"App resource is not a valid completed result: {error}"
         ) from error
-    database = root / "protein_signatures.duckdb"
-    if not database.is_file() or database.stat().st_size == 0:
-        raise InputValidationError(f"Completed result lacks its DuckDB database: {database}")
-    if candidate.is_file() and candidate != database:
-        raise InputValidationError(f"Unsupported resource file; expected {database}")
     return database
+
+
+def resolve_database_for_app(
+    *, resource: Path, inventory_identity: str, cache_dir: Path | None = None
+) -> Path:
+    """Reuse a full verification only while every result file remains unchanged.
+
+    The cache lives outside the immutable result. A change to a file name,
+    inode, type, size, modification time or change time invalidates its entry. The
+    explicit CLI verify command always performs a full checksum verification.
+
+    Args:
+        resource: Completed result directory or canonical database file.
+        inventory_identity: Fresh metadata fingerprint of the entire result.
+        cache_dir: Optional verification-cache directory for isolated tests.
+
+    Returns:
+        Verified result database path.
+
+    Raises:
+        InputValidationError: If verification fails or the result changes
+            while its checksums are being checked.
+    """
+
+    database = app_database_path(resource=resource)
+    if not inventory_identity:
+        raise InputValidationError("The result inventory fingerprint is missing.")
+    cache_root = (
+        Path(cache_dir)
+        if cache_dir is not None
+        else Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+        / "protein_signature_analysis"
+    )
+    cache_path = cache_root / (
+        hashlib.sha256(str(database.parent).encode("utf-8")).hexdigest() + ".json"
+    )
+    expected = {
+        "version": _VERIFICATION_CACHE_VERSION,
+        "result_dir": str(database.parent),
+        "inventory_identity": inventory_identity,
+    }
+    try:
+        if not cache_root.is_symlink() and not cache_path.is_symlink():
+            if cache_path.is_file() and cache_path.stat().st_size <= 4096:
+                if json.loads(cache_path.read_text(encoding="utf-8")) == expected:
+                    if result_inventory_identity(resource=database) == inventory_identity:
+                        LOGGER.debug("Reused unchanged result verification for %s", database.parent)
+                        return database
+    except (OSError, UnicodeError, ValueError) as error:
+        LOGGER.debug("Ignored unusable result verification cache: %s", error)
+
+    verified = resolve_database(resource=resource)
+    if result_inventory_identity(resource=verified) != inventory_identity:
+        raise InputValidationError("Result files changed during checksum verification.")
+    try:
+        if cache_root.is_symlink():
+            raise OSError(f"Verification cache directory is a symbolic link: {cache_root}")
+        cache_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=cache_root,
+                prefix=".verification-",
+                suffix=".json",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                os.chmod(temporary_path, 0o600)
+                json.dump(expected, handle, sort_keys=True)
+            os.replace(temporary_path, cache_path)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+    except OSError as error:
+        LOGGER.warning("Could not save reusable result verification: %s", error)
+    return verified
 
 
 def query_dataframe(*, database: Path, sql: str, parameters: tuple[Any, ...] = ()) -> pd.DataFrame:

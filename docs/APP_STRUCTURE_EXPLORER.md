@@ -4,9 +4,14 @@ The completed result already packages the database, figures, and any available c
 files under `result/assets/structures/`. Keep the **whole** `result/` directory together: the
 application checks `COMPLETED.json`, `manifest.json`, and every declared file size and checksum on
 opening. A lone DuckDB file is insufficient.
-During an open session, file names, types, sizes and change times are checked on each interaction;
-full checksum verification is repeated when that inventory changes. The explicit
-`protein-signatures verify --resource /path/to/result` command always checks every byte.
+During an open session, file names, inodes, types, sizes and change times are checked on
+each interaction.
+The app remembers a successful checksum verification outside the completed result and reuses it
+across launches only when the complete file inventory has the same paths and metadata. A changed
+inventory triggers full checksum verification. The initial app opening verifies every declared
+file once. The explicit `protein-signatures verify --resource /path/to/result` command always
+checks every byte. The launcher checks only required file paths; PDF rendering is prepared when
+the user requests a PDF download.
 Finder's `.DS_Store` and `._*` AppleDouble sidecars may appear anywhere under the copied
 result without blocking the app. All declared outputs still need valid checksums, and other
 unexpected files remain an error.
@@ -15,6 +20,11 @@ unexpected files remain an error.
 # On the Mac, from the repository after copying the completed result:
 ./run_protein_signature_app.sh --resource /absolute/path/to/completed/result
 ```
+
+The **Overview** page reads published row counts and charts completed signatures by feature
+type without scanning the full feature table. If an exact count of distinct features and
+proteins by type is needed, expand **Exact feature coverage** and request the calculation;
+this can take several minutes on large campaigns.
 
 For the current HPC test, copy the result directory recursively after it has completed:
 

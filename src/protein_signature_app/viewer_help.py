@@ -158,8 +158,10 @@ GLOSSARY = (
 
 PAGE_HELP = {
     "Overview": (
-        "Start with campaign scope, data coverage and the published evidence inventory. "
-        "Select another page for detailed tables and downloadable plots."
+        "Start with campaign scope, published counts and completed signatures. Exact "
+        "feature coverage across every source row is available on request and can take "
+        "several minutes for a large campaign. Select another page for detailed tables "
+        "and downloadable plots."
     ),
     "Signature explorer": (
         "Choose a comparison and feature family. Positive prevalence difference means "
