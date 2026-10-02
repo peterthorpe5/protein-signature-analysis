@@ -3,6 +3,9 @@
 A result is valid only when `COMPLETED.json` points to the exact checksum of
 `manifest.json`. The manifest records every input authority and every published file with
 its size and SHA-256. `protein-signature-app` verifies the result before opening it.
+Undeclared regular `.DS_Store` and `._*` macOS metadata files are ignored during result
+inventory verification; declared files retain their checksum checks, and other extra files
+still invalidate the result.
 
 ## Storage forms
 

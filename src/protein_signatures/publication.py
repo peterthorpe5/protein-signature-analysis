@@ -272,9 +272,13 @@ def verify_completed_result(*, result_dir: Path) -> None:
         for path in root.rglob("*")
         if path.is_file() or path.is_symlink()
     }
-    if actual_paths != expected_paths:
-        undeclared = sorted(actual_paths - expected_paths)
-        missing = sorted(expected_paths - actual_paths)
+    undeclared = sorted(
+        relative_path
+        for relative_path in actual_paths - expected_paths
+        if not _is_ignored_macos_metadata(path=root / relative_path)
+    )
+    missing = sorted(expected_paths - actual_paths)
+    if undeclared or missing:
         raise PublicationError(
             "Result file inventory differs from the manifest; "
             f"undeclared={undeclared[:10]}, missing={missing[:10]}."
@@ -522,7 +526,7 @@ def _create_duckdb(*, path: Path, table_dir: Path) -> None:
 
 
 def _manifest_files(*, root: Path) -> list[dict[str, Any]]:
-    """Describe every current file beneath a staging result.
+    """Describe every non-metadata file beneath a staging result.
 
     Args:
         root: Staging result directory.
@@ -537,5 +541,30 @@ def _manifest_files(*, root: Path) -> list[dict[str, Any]]:
             "size_bytes": path.stat().st_size,
             "sha256": sha256_file(path=path),
         }
-        for path in sorted((item for item in root.rglob("*") if item.is_file()), key=str)
+        for path in sorted(
+            (
+                item
+                for item in root.rglob("*")
+                if item.is_file() and not _is_ignored_macos_metadata(path=item)
+            ),
+            key=str,
+        )
     ]
+
+
+def _is_ignored_macos_metadata(*, path: Path) -> bool:
+    """Recognise regular Finder metadata and AppleDouble sidecar files.
+
+    Args:
+        path: Candidate file within a result directory.
+
+    Returns:
+        Whether the path is a regular ``.DS_Store`` or ``._*`` file.
+        Symlinks and other hidden files are never ignored.
+    """
+
+    return (
+        (path.name == ".DS_Store" or path.name.startswith("._"))
+        and path.is_file()
+        and not path.is_symlink()
+    )

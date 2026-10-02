@@ -2,8 +2,11 @@
 
 The completed result already packages the database, figures, and any available coordinate
 files under `result/assets/structures/`. Keep the **whole** `result/` directory together: the
-application checks `COMPLETED.json`, `manifest.json`, every file size and every checksum on
+application checks `COMPLETED.json`, `manifest.json`, and every declared file size and checksum on
 opening. A lone DuckDB file is insufficient.
+Finder's `.DS_Store` and `._*` AppleDouble sidecars may appear anywhere under the copied
+result without blocking the app. All declared outputs still need valid checksums, and other
+unexpected files remain an error.
 
 ```bash
 # On the Mac, from the repository after copying the completed result:

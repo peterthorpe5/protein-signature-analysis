@@ -83,6 +83,49 @@ def test_completed_result_rejects_undeclared_and_duplicate_paths(
         verify_completed_result(result_dir=completed_result)
 
 
+def test_completed_result_ignores_only_undeclared_macos_metadata(
+    completed_result: Path,
+) -> None:
+    """Finder and AppleDouble files may coexist with a verified result."""
+
+    (completed_result / ".DS_Store").write_bytes(b"Finder metadata")
+    (completed_result / "tables" / ".DS_Store").write_bytes(b"Finder metadata")
+    (completed_result / "tables" / "._proteins.tsv").write_bytes(b"AppleDouble metadata")
+    verify_completed_result(result_dir=completed_result)
+
+    (completed_result / ".unexpected_hidden_file").write_text("extra", encoding="utf-8")
+    with pytest.raises(PublicationError, match=".unexpected_hidden_file"):
+        verify_completed_result(result_dir=completed_result)
+
+
+def test_completed_result_rejects_macos_metadata_symlink_and_declared_corruption(
+    completed_result: Path,
+) -> None:
+    """Metadata exemptions must not bypass path or checksum verification."""
+
+    sidecar = completed_result / "._unexpected"
+    sidecar.symlink_to(completed_result / "run_metadata.json")
+    with pytest.raises(PublicationError, match="._unexpected"):
+        verify_completed_result(result_dir=completed_result)
+    sidecar.unlink()
+
+    metadata = completed_result / ".DS_Store"
+    metadata.write_bytes(b"original")
+    manifest = json.loads((completed_result / "manifest.json").read_text(encoding="utf-8"))
+    manifest["outputs"].append(
+        {
+            "relative_path": metadata.name,
+            "size_bytes": metadata.stat().st_size,
+            "sha256": sha256_file(path=metadata),
+        }
+    )
+    _replace_manifest(result_dir=completed_result, value=manifest)
+    verify_completed_result(result_dir=completed_result)
+    metadata.write_bytes(b"corrupt!")
+    with pytest.raises(PublicationError, match="checksum mismatch"):
+        verify_completed_result(result_dir=completed_result)
+
+
 def test_input_authorities_reject_structure_missing_size_and_checksum(
     completed_result: Path,
 ) -> None:
@@ -268,14 +311,17 @@ def test_top_level_publication_wraps_unexpected_failure_and_cleans_staging(
 
 
 def test_manifest_file_inventory_is_sorted_and_checksummed(tmp_path: Path) -> None:
-    """Manifest enumeration should include only files in deterministic path order."""
+    """Manifest enumeration excludes only recognised macOS metadata files."""
 
     (tmp_path / "b").mkdir()
     (tmp_path / "b" / "two.txt").write_text("two", encoding="utf-8")
     (tmp_path / "one.txt").write_text("one", encoding="utf-8")
+    (tmp_path / ".hidden.txt").write_text("hidden", encoding="utf-8")
+    (tmp_path / ".DS_Store").write_bytes(b"Finder metadata")
+    (tmp_path / "b" / "._two.txt").write_bytes(b"AppleDouble metadata")
     rows = _manifest_files(root=tmp_path)
-    assert [row["relative_path"] for row in rows] == ["b/two.txt", "one.txt"]
-    assert rows[1]["sha256"] == sha256_file(path=tmp_path / "one.txt")
+    assert [row["relative_path"] for row in rows] == [".hidden.txt", "b/two.txt", "one.txt"]
+    assert rows[2]["sha256"] == sha256_file(path=tmp_path / "one.txt")
 
 
 def _replace_manifest(*, result_dir: Path, value: object) -> None:
