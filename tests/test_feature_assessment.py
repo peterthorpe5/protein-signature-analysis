@@ -150,10 +150,11 @@ def test_composer_uses_sequence_domain_and_explicit_assessment_ledgers(
     assert universes[("UNSUPPORTED", "presence_only")] == frozenset({"p1"})
     assert "1 feature assessment universes contain observed positives only" in caplog.text
     caplog.clear()
-    compose_feature_assessment_universes(
-        protein_ids={"p1"},
-        features=(_feature("p1", "AMINO_ACID_KMER", "k3:ALL"),),
-    )
+    with caplog.at_level(logging.WARNING):
+        compose_feature_assessment_universes(
+            protein_ids={"p1"},
+            features=(_feature("p1", "AMINO_ACID_KMER", "k3:ALL"),),
+        )
     assert not caplog.records
     with pytest.raises(InputValidationError, match="Universal feature types"):
         compose_feature_assessment_universes(

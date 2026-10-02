@@ -367,9 +367,10 @@ def test_prepare_campaign_covers_acquisition_foldseek_and_structural_import(
     assert data["imported_structural_alignment"]["reference_membership_row_count"] == 2
     assert raw_output not in data["input_paths"]
     assert coordinate not in data["input_paths"]
-    assert data["asset_sources"]["assets/foldseek/key/foldseek_all_vs_all.tsv"] == raw_output
-    assert data["asset_sources"]["assets/foldseek/key/COMPLETED.json"] == manifest
+    assert data["base_asset_sources"]["assets/foldseek/key/foldseek_all_vs_all.tsv"] == raw_output
+    assert data["base_asset_sources"]["assets/foldseek/key/COMPLETED.json"] == manifest
     assert data["foldseek"]["raw_output_path"] == ("assets/foldseek/key/foldseek_all_vs_all.tsv")
+    assert data["foldseek"]["completion_manifest_path"] == "assets/foldseek/key/COMPLETED.json"
 
 
 def test_explainable_ml_publishes_through_end_to_end_pipeline(
