@@ -11,11 +11,13 @@ from typing import Any
 import duckdb
 import pandas as pd
 import pytest
+import streamlit
 from streamlit.testing.v1 import AppTest
 
 import protein_signature_app.app as application_module
 from protein_signature_app.viewer_help import PAGE_HELP, PAGE_METHODS
-from protein_signatures.errors import PublicationError
+from protein_signatures.errors import InputValidationError, PublicationError
+from protein_signatures.result_help import column_definition
 
 APP_TEST_TIMEOUT_SECONDS = max(
     60,
@@ -81,6 +83,7 @@ class _FakeStreamlit:
         self.button_result = False
         self.messages: list[str] = []
         self.session_state: dict[str, object] = {}
+        self.column_config = streamlit.column_config
 
     def __getattr__(self, name: str) -> Any:
         """Return a no-op renderer for ordinary output methods."""
@@ -102,7 +105,9 @@ class _FakeStreamlit:
             "warning",
             "download_button",
         }:
-            return lambda *args, **_kwargs: self.messages.append(str(args[0]) if args else name)
+            return lambda *args, **kwargs: self.messages.append(
+                str(args[0]) if args else str(kwargs.get("body", name))
+            )
         raise AttributeError(name)
 
     def columns(self, specification: int | tuple[int, ...]) -> tuple[_Block, ...]:
@@ -121,7 +126,7 @@ class _FakeStreamlit:
 
         return _Block()
 
-    def selectbox(self, _label: str, options: tuple[str, ...], **_kwargs: object) -> str:
+    def selectbox(self, label: str, options: tuple[str, ...], **_kwargs: object) -> str:
         """Select the first deterministic option."""
 
         return options[0]
@@ -182,8 +187,15 @@ def test_every_application_page_renders_and_stays_synchronised(
         assert [item.value for item in test_app.title if item.value == "Protein signature analysis"]
         assert [(item.label, item.value) for item in test_app.metric][:2] == [
             ("Proteins", "24"),
-            ("Signature records", "195"),
+            ("Signature outcome rows", "195"),
         ]
+        common_help = {
+            "❓ What can I answer on this page?",
+            "❓ Methods, evidence and limitations",
+            "❓ Terms used on this page",
+            "❓ Sample-size limits and thresholds for this result",
+        }
+        assert common_help.issubset({item.label for item in test_app.expander})
         for page, title in (
             ("Signature explorer", "Signature explorer"),
             ("Explainable prediction", "Explainable prediction"),
@@ -199,6 +211,7 @@ def test_every_application_page_renders_and_stays_synchronised(
             test_app.sidebar.radio[0].set_value(page).run()
             assert not test_app.exception
             assert title in [item.value for item in test_app.title]
+            assert common_help.issubset({item.label for item in test_app.expander})
         test_app.sidebar.radio[0].set_value("Signature explorer").run()
         test_app.multiselect[0].set_value([]).run()
         assert any("Select at least one" in item.value for item in test_app.info)
@@ -1347,3 +1360,432 @@ def test_main_error_boundary_stops_after_reporting(
     with pytest.raises(RuntimeError, match="STREAMLIT_STOP"):
         application_module.main()
     assert any("Could not open" in message for message in fake.messages)
+
+
+def test_contextual_help_rejects_unknown_pages_and_explains_status_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Help must use saved model and association limits instead of hard-coded defaults."""
+    fake = _FakeStreamlit()
+    fake.session_state["help-result-metadata"] = {
+        "campaign": {
+            "analysis": {"minimum_target_proteins": 7, "minimum_background_proteins": 9},
+            "explainable_ml": {"minimum_samples_per_class": 17, "minimum_groups_per_class": 6},
+        }
+    }
+    monkeypatch.setattr(application_module, "st", fake)
+    application_module._render_page_help(page="Signature explorer")
+    assert any("Association target minimum: 7" in message for message in fake.messages)
+    with pytest.raises(InputValidationError, match="No contextual help"):
+        application_module._render_page_help(page="Unknown page")
+    application_module._render_table_help(
+        frame=pd.DataFrame({"status": ["INSUFFICIENT_SAMPLE_SIZE", None]})
+    )
+    assert any("7 target and 9 background" in message for message in fake.messages)
+    application_module._render_table_help(
+        frame=pd.DataFrame(
+            {"status": ["INSUFFICIENT_SAMPLE_SIZE"], "model_type": ["ELASTIC_NET_LOGISTIC"]}
+        )
+    )
+    assert any("17 protein samples AND 6 pure" in message for message in fake.messages)
+    application_module._render_graph_help(graph_name="SHAP_GLOBAL_BAR")
+    assert any("not a single discovered motif" in message for message in fake.messages)
+
+
+def test_table_headers_preserve_small_values_and_define_all_column_types() -> None:
+    """Question-mark headings must preserve useful q-values and probability precision."""
+    frame = pd.DataFrame(
+        {
+            "q_value": [1e-12],
+            "discovery_p_value": [1e-8],
+            "e_value": [1e-20],
+            "predicted_probability": [0.9999],
+            "protein_id": ["p1"],
+            "species_match": [True],
+            "target_blocks": [7],
+        }
+    )
+    columns = application_module._table_column_configuration(frame=frame)
+    for name in frame.columns:
+        assert columns[name]["help"] == f"{name}: {column_definition(column_name=name)}"
+        assert columns[name]["label"] == name.replace("_", " ")
+    for name in ("q_value", "discovery_p_value", "e_value"):
+        assert columns[name]["type_config"]["format"] == "%.3g"
+    assert columns["predicted_probability"]["type_config"]["format"] == "%.6f"
+    assert columns["species_match"].get("type_config") is None
+    assert columns["target_blocks"]["type_config"]["format"] is None
+
+
+def test_feature_explanation_table_is_detached_and_preserves_producer_text() -> None:
+    """Feature descriptions may be added without changing the published rows."""
+    source = pd.DataFrame(
+        {
+            "feature_type": ["AMINO_ACID_KMER", "AMINO_ACID_KMER", "STRUCTURE_CLUSTER", None],
+            "feature_id": ["k3:LPD", "k3:LPD", "SC_123", ""],
+        }
+    )
+    augmented = application_module._with_feature_explanations(frame=source)
+    assert "feature_explanation" not in source.columns
+    assert augmented.loc[0, "feature_explanation"] == augmented.loc[1, "feature_explanation"]
+    assert "3-residue" in augmented.loc[0, "feature_explanation"]
+    assert "no named fold" in augmented.loc[2, "feature_explanation"]
+    assert "No feature identifier" in augmented.loc[3, "feature_explanation"]
+    authoritative = source.assign(feature_explanation="Producer definition")
+    assert application_module._with_feature_explanations(frame=authoritative).equals(authoritative)
+    plain = pd.DataFrame({"protein_id": ["p1"]})
+    detached = application_module._with_feature_explanations(frame=plain)
+    detached.loc[0, "protein_id"] = "changed"
+    assert plain.loc[0, "protein_id"] == "p1"
+
+
+def test_metric_guide_counts_pure_blocks_and_handles_no_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AP reference counts must exclude mixed blocks and duplicate protein predictions."""
+    database = tmp_path / "metrics.duckdb"
+    with duckdb.connect(database=str(database)) as connection:
+        connection.execute(
+            "CREATE TABLE ml_predictions (comparison_id TEXT, partition TEXT, "
+            "partition_key TEXT, true_class TEXT)"
+        )
+        connection.executemany(
+            query="INSERT INTO ml_predictions VALUES (?, ?, ?, ?)",
+            parameters=[
+                ("cmp", "VALIDATION", "t1", "TARGET"),
+                ("cmp", "VALIDATION", "t1", "TARGET"),
+                ("cmp", "VALIDATION", "b1", "BACKGROUND"),
+                ("cmp", "VALIDATION", "b2", "BACKGROUND"),
+                ("cmp", "VALIDATION", "b3", "BACKGROUND"),
+                ("cmp", "VALIDATION", "mixed", "TARGET"),
+                ("cmp", "VALIDATION", "mixed", "BACKGROUND"),
+                ("cmp", "DISCOVERY", "d1", "TARGET"),
+            ],
+        )
+    fake = _FakeStreamlit()
+    monkeypatch.setattr(application_module, "st", fake)
+    record = {"validation_roc_auc": 0.875, "validation_average_precision": 0.9}
+    application_module._render_metric_guide(database=database, comparison_id="cmp", record=record)
+    assert any("**1 target**, **3 background**" in message for message in fake.messages)
+    assert any("0.250 target prevalence" in message for message in fake.messages)
+    assert any("87.5%" in message for message in fake.messages)
+    fake.messages.clear()
+    application_module._render_metric_guide(database=database, comparison_id="absent", record={})
+    assert any("Not calculated" in message for message in fake.messages)
+    assert not any("Held-out pure blocks:" in message for message in fake.messages)
+
+
+@pytest.mark.parametrize(
+    "selection, table_name",
+    [
+        ("Decisions", "label_evidence_audit"),
+        ("Matched controls", "control_matching_audit"),
+        ("Excluded label features", "label_definition_features"),
+        ("Abstentions", "unresolved_assignments"),
+    ],
+)
+def test_audit_preview_queries_only_the_selected_bounded_dataset(
+    selection: str,
+    table_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hidden audits must not be loaded or offered as falsely complete downloads."""
+    fake = _FakeStreamlit()
+    monkeypatch.setattr(application_module, "st", fake)
+    monkeypatch.setattr(fake, "selectbox", lambda **_kwargs: selection)
+    queries = []
+    rendered = []
+
+    def query(*, sql: str, **_kwargs: object) -> pd.DataFrame:
+        """Record the exact query while returning a minimal preview."""
+        queries.append(sql)
+        return pd.DataFrame({"protein_id": ["p1"]})
+
+    monkeypatch.setattr(application_module, "query_dataframe", query)
+    monkeypatch.setattr(
+        application_module, "_render_downloadable_table", lambda **kwargs: rendered.append(kwargs)
+    )
+    application_module._render_label_evidence_audit(database=Path("unused"))
+    assert queries == rendered == []
+    fake.button_result = True
+    application_module._render_label_evidence_audit(database=Path("unused"))
+    assert len(queries) == 1
+    assert queries[0].startswith(f"SELECT * FROM {table_name} ORDER BY ")
+    assert queries[0].endswith("LIMIT 5000")
+    assert rendered[0]["download_name"] == f"{table_name}_preview"
+    assert any("at most 5,000 rows" in message for message in fake.messages)
+
+
+def test_matching_coverage_counts_distinct_targets_and_handles_empty_pools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Coverage must measure matched targets, including targets with multiple controls."""
+    database = tmp_path / "matching.duckdb"
+    with duckdb.connect(database=str(database)) as connection:
+        connection.execute(
+            "CREATE TABLE control_matching_audit (background_label_id TEXT, "
+            "target_unit_id TEXT, control_unit_id TEXT, status TEXT)"
+        )
+        connection.executemany(
+            query="INSERT INTO control_matching_audit VALUES (?, ?, ?, ?)",
+            parameters=[
+                ("pool", "t1", "c1", "MATCHED"),
+                ("pool", "t1", "c2", "MATCHED"),
+                ("pool", "t2", "", "UNMATCHED"),
+                ("pool", "t3", "", "UNMATCHED"),
+            ],
+        )
+    fake = _FakeStreamlit()
+    monkeypatch.setattr(application_module, "st", fake)
+    tables = []
+    figures = []
+    monkeypatch.setattr(
+        application_module,
+        "_render_downloadable_table",
+        lambda **kwargs: tables.append(kwargs["frame"]),
+    )
+    monkeypatch.setattr(
+        application_module,
+        "_render_plotly_figure",
+        lambda **kwargs: figures.append(kwargs["figure"]),
+    )
+    application_module._render_control_matching_coverage(database=database)
+    record = tables[0].iloc[0]
+    assert record["target_units"] == 3
+    assert record["covered_target_units"] == 1
+    assert record["matched_control_units"] == 2
+    assert record["target_coverage_fraction"] == pytest.approx(expected=1 / 3)
+    assert len(figures) == 1
+    assert any("not test denominators" in message for message in fake.messages)
+    with duckdb.connect(database=str(database)) as connection:
+        connection.execute("DELETE FROM control_matching_audit")
+    application_module._render_control_matching_coverage(database=database)
+    assert tables[-1].empty
+    assert len(figures) == 1
+
+
+def test_help_query_failures_preserve_the_backend_error_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unreadable dataset must not be substituted with invented zero coverage."""
+    fake = _FakeStreamlit()
+    fake.button_result = True
+    monkeypatch.setattr(application_module, "st", fake)
+    with pytest.raises(InputValidationError, match="DuckDB query failed"):
+        application_module._render_label_evidence_audit(database=Path("missing.duckdb"))
+    with pytest.raises(InputValidationError, match="DuckDB query failed"):
+        application_module._render_control_matching_coverage(database=Path("missing.duckdb"))
+
+
+@pytest.mark.parametrize(
+    "near_count, availability, expected",
+    [(0, "INPUT_UNAVAILABLE", "Not assessed"), (0, "COMPLETE", "0"), (2, "COMPLETE", "2")],
+)
+def test_orthology_distinguishes_unassessed_redundancy_and_plots_blocks(
+    near_count: int,
+    availability: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero imported rows must not imply an absence assessment when the stage was unavailable."""
+    fake = _FakeStreamlit()
+    fake.session_state["help-result-metadata"] = {
+        "evidence_availability": {"near_redundancy": availability}
+    }
+    metrics = []
+    figures = []
+
+    class MetricBlock(_Block):
+        """Capture metric values while preserving rendering context semantics."""
+
+        def metric(self, *args: object, **_kwargs: object) -> None:
+            """Capture the displayed label and value."""
+            metrics.append(args)
+
+    def records(*, sql: str, **_kwargs: object) -> pd.DataFrame:
+        """Return distinct count authorities and a valid partition allocation."""
+        if "FROM redundancy_clusters" in sql:
+            return pd.DataFrame({"n": [near_count]})
+        if "SELECT count(DISTINCT" in sql:
+            return pd.DataFrame({"n": [2]})
+        if "GROUP BY ALL" in sql:
+            return pd.DataFrame(
+                {
+                    "partition": ["DISCOVERY", "VALIDATION"],
+                    "partition_unit": ["ORTHOFINDER_GROUP", "ORTHOFINDER_GROUP"],
+                    "proteins": [20, 5],
+                    "blocks": [2, 1],
+                }
+            )
+        return pd.DataFrame()
+
+    monkeypatch.setattr(application_module, "st", fake)
+    monkeypatch.setattr(fake, "columns", lambda _count: tuple(MetricBlock() for _ in range(4)))
+    monkeypatch.setattr(application_module, "query_dataframe", records)
+    monkeypatch.setattr(application_module, "table_count", lambda **_kwargs: 25)
+    monkeypatch.setattr(application_module, "_render_downloadable_table", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        application_module, "_render_plotly_figure", lambda **kwargs: figures.append(kwargs)
+    )
+    application_module._render_orthology(database=Path("unused"))
+    assert ("Near-redundancy clusters", expected) in metrics
+    assert figures[0]["download_name"] == "discovery_validation_block_allocation"
+    assert figures[0]["figure"].layout.yaxis.title.text == "Independent partition blocks"
+    assert "proteins" in figures[0]["figure"].data[0].hovertemplate
+    assert any("No optional OrthoFinder group-context" in message for message in fake.messages)
+
+
+def test_signature_plot_coordinates_preserve_recorded_values_and_flag_underflow() -> None:
+    """Display caps must not change published q-values or admit invalid coordinates."""
+    frame = pd.DataFrame(
+        data={
+            "feature_id": [f"f{index}" for index in range(10)],
+            "discovery_q_value": [1.0, 1e-8, 0.0, 1e-320, -0.1, 1.1, None, float("inf"), 0.1, 0.1],
+            "discovery_prevalence_difference": [0.2] * 8 + [float("inf"), 1.1],
+        }
+    )
+    original = frame.copy(deep=True)
+    plotted = application_module._signature_plot_data(frame=frame)
+    assert plotted["feature_id"].tolist() == ["f0", "f1", "f2", "f3"]
+    assert plotted["plot_negative_log10_q_value"].tolist() == [0.0, 8.0, 300.0, 300.0]
+    assert plotted["plot_q_value_clipped"].tolist() == [False, False, True, True]
+    assert plotted["discovery_q_value"].tolist() == [1.0, 1e-8, 0.0, 1e-320]
+    pd.testing.assert_frame_equal(left=frame, right=original)
+
+
+def test_signature_plot_accepts_nullable_fields_and_empty_valid_sets() -> None:
+    """Historical unavailable values should give an empty plot rather than an exception."""
+    frame = pd.DataFrame(
+        data={
+            "discovery_q_value": pd.Series(data=[pd.NA, -1.0], dtype="Float64"),
+            "discovery_prevalence_difference": pd.Series(data=[pd.NA, 0.1], dtype="Float64"),
+        }
+    )
+    assert application_module._signature_plot_data(frame=frame).empty
+
+
+@pytest.mark.parametrize("frame", [None, [], pd.DataFrame(data={"unrelated": [1]})])
+def test_signature_plot_rejects_missing_coordinate_authorities(frame: object) -> None:
+    """A plotting request must not invent q-values or prevalence differences."""
+    with pytest.raises(InputValidationError, match="recorded q-values and effects"):
+        application_module._signature_plot_data(frame=frame)
+
+
+@pytest.mark.parametrize("axis", ["−log10 q-value", "Recorded q-value"])
+def test_signature_chart_axis_choice_keeps_zero_and_missing_outcomes_explicit(
+    axis: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both axes must retain original hover values and disclose omitted status rows."""
+    fake = _FakeStreamlit()
+    figures = []
+    frame = pd.DataFrame(
+        data={
+            "feature_id": ["k3:AAA", "k3:BBB", "unfitted"],
+            "feature_name": ["AAA", "BBB", "Unavailable"],
+            "feature_type": ["AMINO_ACID_KMER"] * 3,
+            "evidence_class": ["DECISION_CANDIDATE__DISCOVERY_ONLY"] * 3,
+            "discovery_q_value": [0.0, 1e-8, None],
+            "discovery_prevalence_difference": [0.2] * 3,
+        }
+    )
+
+    def signature_records(*, sql: str, **_kwargs: object) -> pd.DataFrame:
+        """Supply two completed outcomes and one unavailable statistical record."""
+        if "AS enriched_count" in sql:
+            return pd.DataFrame(
+                data={
+                    "comparison_id": ["cmp"],
+                    "display_name": ["Example target"],
+                    "enriched_count": [2],
+                    "complete_count": [2],
+                    "insufficient_count": [0],
+                    "no_signature_count": [0],
+                }
+            )
+        return frame if "SELECT * FROM signatures" in sql else pd.DataFrame()
+
+    def axis_selection(*, label: str, options: tuple[str, ...], **_kwargs: object) -> str:
+        """Choose the requested display without changing the comparison."""
+        return axis if label == "q-value axis" else options[0]
+
+    monkeypatch.setattr(application_module, "st", fake)
+    monkeypatch.setattr(
+        application_module,
+        "distinct_values",
+        lambda **kwargs: (
+            ("cmp",) if kwargs["column_name"] == "comparison_id" else ("AMINO_ACID_KMER",)
+        ),
+    )
+    monkeypatch.setattr(application_module, "query_dataframe", signature_records)
+    monkeypatch.setattr(application_module, "_render_downloadable_table", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        fake,
+        "selectbox",
+        lambda *args, **kwargs: axis_selection(
+            label=kwargs.get("label", args[0] if args else ""),
+            options=kwargs.get("options", args[1] if len(args) > 1 else ()),
+        ),
+    )
+    monkeypatch.setattr(
+        application_module, "_render_plotly_figure", lambda **kwargs: figures.append(kwargs)
+    )
+    application_module._render_signatures(database=Path("unused"))
+    assert len(figures) == 2
+    assert figures[0]["download_name"] == "cmp_Discovery_shortlist_chart"
+    assert figures[1]["download_name"] == "signature_scatter"
+    figure = figures[1]["figure"]
+    logarithmic = axis == "−log10 q-value"
+    assert list(figure.data[0].y) == ([300.0, 8.0] if logarithmic else [0.0, 1e-8])
+    assert len(figure.layout.shapes) == int(logarithmic)
+    if logarithmic:
+        assert "q = 0.05" in str(figure.layout.annotations)
+    assert any("1 rows without finite" in message for message in fake.messages)
+    assert any("display cap of 300" in message for message in fake.messages) == logarithmic
+
+
+def test_individual_shap_query_uses_full_validation_ranking_and_a_bounded_preview(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The chart must rank individual SHAP values, excluding invalid or other-model rows."""
+    database = tmp_path / "shap.duckdb"
+    with duckdb.connect(database=str(database)) as connection:
+        connection.execute(
+            query=(
+                "CREATE TABLE ml_feature_importance (comparison_id VARCHAR, feature_type VARCHAR, "
+                "feature_id VARCHAR, feature_name VARCHAR, "
+                "mean_absolute_validation_contribution DOUBLE, coefficient_log_odds DOUBLE)"
+            )
+        )
+        connection.executemany(
+            query="INSERT INTO ml_feature_importance VALUES (?, ?, ?, ?, ?, ?)",
+            parameters=[
+                ("cmp", "FOLD", f"f{index}", f"Fold {index}", index / 40, 40 - index)
+                for index in range(41)
+            ]
+            + [
+                ("cmp", "FOLD", "null", "Unavailable", None, 99),
+                ("cmp", "FOLD", "infinite", "Invalid", float("inf"), 99),
+                ("cmp", "FOLD", "negative", "Invalid", -1.0, 99),
+                ("other", "FOLD", "other", "Other comparison", 999, 99),
+            ],
+        )
+    fake = _FakeStreamlit()
+    figures = []
+    monkeypatch.setattr(application_module, "st", fake)
+    monkeypatch.setattr(
+        application_module, "_render_plotly_figure", lambda **kwargs: figures.append(kwargs)
+    )
+    application_module._render_individual_shap_summary(database=database, comparison_id="cmp")
+    assert len(figures) == 1
+    figure = figures[0]["figure"]
+    assert len(figure.data[0].x) == 30
+    assert list(figure.data[0].x) == [index / 40 for index in range(40, 10, -1)]
+    assert figure.data[0].y[0] == "Fold 40 · f40"
+    assert "log-odds" in figure.layout.xaxis.title.text
+    assert any("remainder is excluded" in message for message in fake.messages)
+    application_module._render_individual_shap_summary(database=database, comparison_id="missing")
+    assert len(figures) == 1
+    assert any("No individual validation SHAP summary" in message for message in fake.messages)

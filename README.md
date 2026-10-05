@@ -690,6 +690,24 @@ separate from the published aggregate structural-alignment scores. See
 portable model instructions. The app opens only checksum-verified results and restricts
 read-only queries to canonical tables.
 
+Every page has question-mark panels explaining its purpose, methods, terms and the
+thresholds saved with the selected result. Table headings have field-definition tooltips,
+with an adjacent expandable dictionary for every visible column and status code. The
+searchable glossary includes every canonical field, controlled state and displayed
+summary field; newly generated Excel workbooks use the same definitions. ROC/AUC, average
+precision (AP), MCC, balanced accuracy and Brier score have interpretation help and a
+pure-block target-prevalence reference. Missing historical limits are marked **Not
+recorded**. The signature chart has a selectable logarithmic q-value view with explicit
+display capping for recorded zeros. A separate validation SHAP chart ranks individual
+features without the aggregated other-features remainder. Both read existing results;
+no cluster rerun is required. The data-quality page loads only the selected audit preview (at most 5,000
+rows), with complete audit files available in the canonical-data browser. See
+[App critical review and help changes](docs/APP_CRITICAL_REVIEW_20261005.md) for the
+page-by-page evaluation, remaining scientific limitations and verification results.
+See [Mac and cluster update commands](docs/APP_UPDATE_COMMANDS_20261005.md) for applying
+the overlay, committing and pushing, updating the cluster, transferring a verified
+result and launching the app.
+
 ## Custom protein types
 
 Set `campaign.profile` to a custom YAML path and either use its `profile_defaults` policy or

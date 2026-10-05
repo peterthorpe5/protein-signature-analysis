@@ -252,21 +252,41 @@ assessed under the configured design; it is not equivalent to not run.
 
 The predictive layer is separate corroborating analysis. For each comparison it:
 
-1. takes reviewed target/background proteins and their frozen block identities;
+1. takes eligible reviewed or explicitly accepted provisional target/background proteins
+   and their frozen block identities;
 2. removes technical feature types by default;
 3. uses only discovery proteins to discard constant features;
 4. ranks features by discovery document frequency within each feature type and selects them
    round-robin across sorted feature types, without consulting class labels;
 5. selects an elastic-net logistic regularisation strength using shuffled
    `StratifiedGroupKFold`, with blocks kept intact and mean ROC AUC as the score;
-6. fits a class-balanced `saga` logistic model to discovery data only; and
-7. evaluates untouched validation proteins.
+6. fits a `saga` logistic model to pure discovery groups, using inverse-block-size and
+   class-balanced sample weights; and
+7. evaluates untouched validation **pure independence blocks**, aggregating binary
+   features by presence within each block. Mixed target/background blocks are excluded.
 
 The model uses \(C=1/\lambda\), where the configuration lists \(\lambda\) values. A fixed 0.5
 decision threshold produces balanced accuracy and Matthews correlation. Validation ROC AUC,
-average precision and Brier score are reported only when both validation classes exist.
-Permutation importance is the drop in held-out balanced accuracy after independently
-permuting a feature, repeated with the configured seed.
+average precision and Brier score are reported only when each pure validation class meets
+both `explainable_ml.minimum_samples_per_class` (protein samples) and
+`explainable_ml.minimum_groups_per_class` (independence blocks). Discovery fitting checks
+those same two per-class minimums. These execution thresholds are not a statistical power
+calculation. Missing historical settings must not be replaced with today's defaults.
+Permutation importance uses those eligible held-out blocks and measures the drop in
+balanced accuracy after independently permuting a feature, repeated with the configured
+seed. Negative drops are possible; the reported standard deviation is not a confidence
+interval. Prediction and SHAP tables describe individual proteins, so their sample unit
+differs from the reported model metrics.
+
+The stored `regularisation_strength` is the selected penalty strength lambda, with
+`C = 1/lambda`; larger stored values impose stronger regularisation. `importance_rank`
+orders features by absolute fitted coefficient. It does not give the ordering of a
+mean-absolute-SHAP bar chart. Average precision (AP) is the recall-weighted precision
+summary computed by scikit-learn, rather than trapezoidal precision-recall AUC. Compare
+AP with the target fraction among the evaluated pure blocks. ROC AUC describes ranking,
+not accuracy or calibration: 0.5 is chance ranking and 1 is perfect ranking. These
+statistics describe performance against the supplied labels in the evaluated cohort,
+not a probability that a protein has the proposed biological function.
 
 This workflow does not claim an unbiased estimate after arbitrary iterative exploration of
 the same validation set. Once validation results influence new labels, features or
@@ -285,6 +305,24 @@ plot and bounded per-protein waterfalls in PNG, SVG and PDF. SHAP answers why th
 model produced a prediction. It does not show causation, physical contact, sufficiency or a
 universal family mechanism. Correlated domains, k-mers and structural features can divide or
 duplicate attribution and should be interpreted together.
+
+The app additionally queries the published `mean_absolute_validation_contribution`
+values for an interactive chart of the 30 largest individual validation SHAP
+contributions. The ranking uses all published model features, rather than the
+coefficient-ranked preview, and excludes the aggregate other-features remainder.
+It does not recompute explanations or change archived plots. No validation
+summary is invented when those values were not published.
+
+## Displaying very small q-values
+
+The signature scatter offers recorded q-values or their negative base-10 logarithm.
+For display only, q-values below 1e-300, including recorded numerical zeros, are
+capped at −log10(q) = 300 and flagged in hover. A zero may reflect numerical
+underflow; the plot does not assign it an exact recoverable significance.
+The q=0.05 line is explicitly a viewer reference. Recorded q-values, statistical
+decisions and table downloads are unchanged. Missing, non-finite or out-of-range
+q-values/effects are excluded from the chart with a disclosed count and remain
+available in its source table.
 
 ## Reproducibility
 

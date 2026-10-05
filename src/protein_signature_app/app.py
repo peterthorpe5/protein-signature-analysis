@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import logging
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -27,6 +29,17 @@ from protein_signature_app.backend import (
     result_inventory_identity,
     table_count,
 )
+from protein_signature_app.help_content import (
+    METRIC_HELP,
+    PAGE_METHODS,
+    PAGE_TERMS,
+    campaign_limit_rows,
+    feature_explanation,
+    glossary_rows,
+    graph_explanation,
+    metric_reading,
+    status_explanation,
+)
 from protein_signature_app.structure_viewer import (
     ANNOTATION_COLUMNS,
     ModelTrace,
@@ -45,7 +58,7 @@ from protein_signature_app.structure_viewer import (
     read_published_model,
     significant_intervals,
 )
-from protein_signature_app.viewer_help import GLOSSARY, PAGE_HELP, PAGE_METHODS
+from protein_signature_app.viewer_help import GLOSSARY, PAGE_HELP
 from protein_signatures.errors import InputValidationError, PublicationError
 from protein_signatures.exports import (
     dataframe_to_tsv_bytes,
@@ -54,8 +67,12 @@ from protein_signatures.exports import (
     plotly_figure_to_pdf_bytes,
     safe_download_stem,
 )
+from protein_signatures.result_help import column_definition
+
+LOGGER = logging.getLogger(__name__)
 
 _MAX_APP_ASSET_BYTES = 100 * 1024 * 1024
+_SIGNATURE_Q_PLOT_FLOOR = 1e-300
 _ASSET_FORMATS = {
     "PNG": (".png", "image/png"),
     "SVG": (".svg", "image/svg+xml"),
@@ -136,6 +153,7 @@ def main() -> None:
         st.error(f"Could not open the result: {error}")
         st.stop()
     campaign = metadata.get("campaign", {}).get("campaign", {})
+    st.session_state["help-result-metadata"] = metadata
     st.sidebar.title("Protein signatures")
     st.sidebar.caption(f"Campaign: {campaign.get('campaign_id', 'unknown')}")
     st.sidebar.caption(f"Package: {metadata.get('package_version', 'unknown')}")
@@ -157,6 +175,7 @@ def main() -> None:
     )
     with st.sidebar.expander("How to use this page"):
         st.markdown(PAGE_HELP[page])
+        st.caption("Open the question-mark panels on the page and hover over table headings.")
     if page == "Overview":
         _render_overview(
             database=database, metadata=metadata, inventory_identity=inventory_identity
@@ -181,19 +200,6 @@ def main() -> None:
         _render_quality(database=database, metadata=metadata)
     else:
         _render_glossary()
-
-
-def _page_guidance(*, page: str) -> None:
-    """Give each page accessible, expandable purpose and methods notes.
-
-    Args:
-        page: Supported application navigation label.
-    """
-
-    with st.expander("❔ What can I answer on this page?"):
-        st.markdown(PAGE_HELP[page])
-    with st.expander("🔬 Methods, evidence and limitations"):
-        st.markdown(PAGE_METHODS[page])
 
 
 def _feature_explanation(*, feature_type: str, feature_id: str, feature_name: str) -> str:
@@ -311,6 +317,126 @@ def _feature_key() -> None:
         )
 
 
+def _render_page_help(*, page: str) -> None:
+    """Show contextual methods, terms and actual campaign decision limits.
+
+    Args:
+        page: Exact application navigation label.
+
+    Raises:
+        InputValidationError: If the page has no registered help content.
+    """
+    if page not in PAGE_METHODS or page not in PAGE_TERMS:
+        raise InputValidationError(f"No contextual help is registered for page {page!r}.")
+    with st.expander(label="❓ What can I answer on this page?", expanded=False):
+        st.markdown(body=PAGE_HELP[page])
+    with st.expander(label="❓ Methods, evidence and limitations", expanded=False):
+        st.markdown(body=PAGE_METHODS[page])
+    definitions = {term: definition for _, term, definition in glossary_rows(base_rows=GLOSSARY)}
+    with st.expander(label="❓ Terms used on this page", expanded=False):
+        for term in PAGE_TERMS[page]:
+            st.markdown(body=f"**{term}** — {definitions[term]}")
+        st.caption(body="Every displayed field is also defined in Glossary & help.")
+    with st.expander(label="❓ Sample-size limits and thresholds for this result", expanded=False):
+        for row in campaign_limit_rows(metadata=st.session_state.get("help-result-metadata", {})):
+            st.markdown(body=f"**{row['meaning']}: {row['limit']}** — {row['unit']}.")
+            st.caption(body=row["setting"])
+        st.markdown(
+            body=(
+                "Association limits count **independent blocks**, despite the configuration "
+                "names ending in proteins. Model fitting and held-out evaluation require "
+                "both the **protein** and **group** minimum in each class. These are "
+                "execution limits, not a statistical power calculation. Historical missing "
+                "settings are never replaced with current defaults. Positional colouring "
+                "and positive-discovery suggestions use the viewer's stated q ≤ 0.05 rule."
+            )
+        )
+
+
+def _table_column_configuration(*, frame: pd.DataFrame) -> dict[str, object]:
+    """Build header tooltips and preserve small probabilities and q-values.
+
+    Args:
+        frame: Normalised visible table.
+
+    Returns:
+        Streamlit column specifications with readable labels and exact-name help.
+    """
+    configuration = {}
+    for name in frame.columns:
+        label = str(name).replace("_", " ")
+        help_text = f"{name}: {column_definition(column_name=name)}"
+        if pd.api.types.is_numeric_dtype(frame[name]) and not pd.api.types.is_bool_dtype(
+            frame[name]
+        ):
+            scientific = name.endswith(("q_value", "p_value")) or name == "e_value"
+            configuration[name] = st.column_config.NumberColumn(
+                label=label,
+                help=help_text,
+                format="%.3g"
+                if scientific
+                else "%.6f"
+                if name == "predicted_probability"
+                else None,
+            )
+        else:
+            configuration[name] = st.column_config.Column(label=label, help=help_text)
+    return configuration
+
+
+def _render_table_help(*, frame: pd.DataFrame) -> None:
+    """Explain visible fields and outcome codes next to their table.
+
+    Args:
+        frame: Bounded visible table, never the full unqueried result.
+    """
+    with st.expander(label="❓ Table fields, units and status codes", expanded=False):
+        for name in frame.columns:
+            st.markdown(body=f"**{name}** — {column_definition(column_name=name)}")
+        context = (
+            "model" if {"model_type", "cv_roc_auc"}.intersection(frame.columns) else "association"
+        )
+        for name in (
+            "status",
+            "analysis_status",
+            "assessment_status",
+            "evidence_status",
+            "curation_status",
+            "analysis_eligibility_status",
+            "fold_evidence_status",
+            "availability_status",
+            "acquisition_status",
+            "decision",
+            "derivation_scope",
+            "membership_source",
+            "membership_method",
+            "evidence_class",
+        ):
+            if name not in frame.columns:
+                continue
+            for code in sorted(str(value) for value in frame[name].dropna().unique() if str(value)):
+                text = status_explanation(
+                    status=code,
+                    metadata=st.session_state.get("help-result-metadata", {}),
+                    context=context,
+                )
+                st.markdown(body=f"**{code}** — {text}")
+        st.caption(body="Header labels are readable; downloads retain the exact field names above.")
+
+
+def _render_graph_help(*, graph_name: str, explanation: str = "") -> None:
+    """Place interpretation help beside an interactive or published graphic.
+
+    Args:
+        graph_name: Stable chart identity or published plot type.
+        explanation: Optional plot-specific interpretation from the source renderer.
+    """
+    with st.expander(
+        label="❓ What does this graph show and how should I interpret it?", expanded=False
+    ):
+        st.markdown(body=explanation or graph_explanation(graph_name=graph_name))
+
+
 def _render_canonical_data(*, database: Path) -> None:
     """Render every canonical dataset with complete published downloads.
 
@@ -319,7 +445,7 @@ def _render_canonical_data(*, database: Path) -> None:
     """
 
     st.title("Canonical data & downloads")
-    _page_guidance(page="Canonical data & downloads")
+    _render_page_help(page="Canonical data & downloads")
     names = canonical_table_names()
     st.caption(
         "Browse a bounded preview and inspect the complete checksum-verified storage files. "
@@ -520,7 +646,7 @@ def _render_overview(
     """
 
     st.title("Protein signature analysis")
-    _page_guidance(page="Overview")
+    _render_page_help(page="Overview")
     st.caption("Sequence · domains · folds · pairwise structural evidence")
     st.info(
         "Signatures are prioritisation evidence, not proof of biochemical activity. "
@@ -530,18 +656,25 @@ def _render_overview(
     columns[0].metric(
         "Proteins",
         f"{_overview_count(database=database, metadata=metadata, table_name='proteins'):,}",
+        help="Distinct published protein records; statistical independence is counted by blocks.",
     )
     columns[1].metric(
-        "Signature records",
+        "Signature outcome rows",
         f"{_overview_count(database=database, metadata=metadata, table_name='signatures'):,}",
+        help="All signature rows, including explicit insufficient/no-signature outcomes. "
+        "Completed evidence is shown separately below; this is not a unique-feature count.",
     )
     columns[2].metric(
         "Structure models",
         f"{_overview_count(database=database, metadata=metadata, table_name='structures'):,}",
+        help=(
+            "Coordinate records; inspect eligibility and confidence before interpreting similarity."
+        ),
     )
     columns[3].metric(
         "Domain hits",
         f"{_overview_count(database=database, metadata=metadata, table_name='domain_hits'):,}",
+        help="Retained domain-hit intervals; several hits can belong to the same protein.",
     )
     st.subheader("Where can this run support a discovery?")
     outcomes = _comparison_outcomes(database=database)
@@ -744,6 +877,46 @@ def _signature_evidence(*, frame: pd.DataFrame, tier: str) -> pd.DataFrame:
     )
 
 
+def _signature_plot_data(*, frame: pd.DataFrame) -> pd.DataFrame:
+    """Prepare finite signature effects and explicitly capped q-value coordinates.
+
+    Args:
+        frame: Published signature rows with discovery q-values and effects.
+
+    Returns:
+        Detached plottable rows, retaining recorded values and adding display
+        coordinates. Recorded zeros and q-values below 1e-300 are flagged.
+
+    Raises:
+        InputValidationError: If the input is not a dataframe or lacks fields.
+    """
+    required = {"discovery_q_value", "discovery_prevalence_difference"}
+    if not isinstance(frame, pd.DataFrame) or not required.issubset(frame.columns):
+        raise InputValidationError("Signature plotting requires recorded q-values and effects.")
+    q_values = pd.to_numeric(arg=frame["discovery_q_value"], errors="coerce").astype("float64")
+    effects = pd.to_numeric(arg=frame["discovery_prevalence_difference"], errors="coerce").astype(
+        "float64"
+    )
+    valid = (
+        np.isfinite(q_values)
+        & q_values.between(left=0, right=1)
+        & np.isfinite(effects)
+        & effects.between(left=-1, right=1)
+    )
+    omitted = len(frame) - int(valid.sum())
+    if omitted:
+        LOGGER.debug(
+            "Omitted %d unavailable or invalid signature coordinates from the plot.", omitted
+        )
+    result = frame.loc[valid].copy()
+    selected_q = q_values.loc[valid]
+    result["plot_q_value_clipped"] = selected_q < _SIGNATURE_Q_PLOT_FLOOR
+    result["plot_negative_log10_q_value"] = -np.log10(
+        selected_q.clip(lower=_SIGNATURE_Q_PLOT_FLOOR)
+    )
+    return result
+
+
 def _render_signatures(*, database: Path) -> None:
     """Render filterable discovery and validation signature evidence.
 
@@ -752,7 +925,7 @@ def _render_signatures(*, database: Path) -> None:
     """
 
     st.title("Signature explorer")
-    _page_guidance(page="Signature explorer")
+    _render_page_help(page="Signature explorer")
     _feature_key()
     outcomes = _comparison_outcomes(database=database)
     comparisons = tuple(outcomes["comparison_id"].astype(str)) if not outcomes.empty else ()
@@ -885,6 +1058,58 @@ def _render_signatures(*, database: Path) -> None:
             download_name=f"{selected_comparison}_signatures",
             height=480,
         )
+    chart_data = _signature_plot_data(frame=frame)
+    if not chart_data.empty:
+        axis = st.selectbox(
+            label="q-value axis",
+            options=("−log10 q-value", "Recorded q-value"),
+            help=(
+                "The logarithmic view separates very small q-values. Recorded zeros and "
+                "values below 1e-300 are capped at 300 for display and flagged in hover. "
+                "The table and downloads retain the original q-values."
+            ),
+        )
+        logarithmic = axis == "−log10 q-value"
+        figure = px.scatter(
+            data_frame=chart_data,
+            x="discovery_prevalence_difference",
+            y="plot_negative_log10_q_value" if logarithmic else "discovery_q_value",
+            color="feature_type",
+            symbol="evidence_class",
+            hover_data={
+                "feature_id": True,
+                "feature_name": True,
+                "discovery_q_value": ":.3g",
+                "plot_q_value_clipped": True,
+            },
+            labels={
+                "discovery_prevalence_difference": "Target − background prevalence",
+                "discovery_q_value": "Discovery q-value",
+                "plot_negative_log10_q_value": "−log10 discovery q-value (display cap: 300)",
+                "plot_q_value_clipped": "q-value below display floor",
+            },
+        )
+        if logarithmic:
+            figure.add_hline(
+                y=-np.log10(0.05),
+                line_dash="dash",
+                annotation_text="q = 0.05 (viewer reference)",
+            )
+            clipped = int(chart_data["plot_q_value_clipped"].sum())
+            if clipped:
+                st.caption(
+                    body=f"{clipped:,} recorded zero or below-floor q-values appear at "
+                    "the display cap of 300. Their exact significance is unresolved at "
+                    "that scale; recorded values remain in hover and downloads."
+                )
+        else:
+            figure.update_yaxes(autorange="reversed")
+        _render_plotly_figure(figure=figure, download_name="signature_scatter")
+    if len(chart_data) < len(frame):
+        st.caption(
+            body=f"{len(frame) - len(chart_data):,} rows without finite, in-range q-values "
+            "and prevalence differences are omitted from this chart and retained in the table."
+        )
     st.caption("Association counts may take longer to load for large campaigns.")
     association_key = (
         f"signature-associations-{database}-{selected_comparison}-{'-'.join(selected_types)}"
@@ -920,7 +1145,7 @@ def _render_explainable_ml(*, database: Path) -> None:
     """
 
     st.title("Explainable prediction")
-    _page_guidance(page="Explainable prediction")
+    _render_page_help(page="Explainable prediction")
     st.info(
         "Prediction is a separate corroborating layer, not a replacement for association "
         "testing and not evidence of biochemical causation. Validation groups never enter "
@@ -967,6 +1192,7 @@ def _render_explainable_ml(*, database: Path) -> None:
         }
     )
     comparison_id = model_choices[st.selectbox("Model comparison", tuple(model_choices))]
+    LOGGER.debug("Rendering published model comparison %s", comparison_id)
     model = query_dataframe(
         database=database,
         sql="SELECT * FROM ml_models WHERE comparison_id = ?",
@@ -984,20 +1210,39 @@ def _render_explainable_ml(*, database: Path) -> None:
             + (reason or "Inspect the published model status and sample counts above.")
         )
         return
+    record = model.iloc[0]
+    st.caption(body=str(record.get("status_message") or ""))
+    if str(record["status"]) != "COMPLETE":
+        st.warning(
+            body=status_explanation(
+                status=str(record["status"]),
+                metadata=st.session_state.get("help-result-metadata", {}),
+                context="model",
+            )
+        )
     columns = st.columns(4)
-    columns[0].metric("CV ROC AUC", _metric_text(model.iloc[0]["cv_roc_auc"]))
+    columns[0].metric(
+        label="CV ROC AUC",
+        value=_metric_text(record["cv_roc_auc"]),
+        help=METRIC_HELP["cv_roc_auc"],
+    )
     columns[1].metric(
-        "Validation ROC AUC",
-        _metric_text(model.iloc[0]["validation_roc_auc"]),
+        label="Validation ROC AUC",
+        value=_metric_text(record["validation_roc_auc"]),
+        help=METRIC_HELP["validation_roc_auc"],
     )
     columns[2].metric(
-        "Validation PR AUC",
-        _metric_text(model.iloc[0]["validation_average_precision"]),
+        label="Validation average precision (AP)",
+        value=_metric_text(record["validation_average_precision"]),
+        help=METRIC_HELP["validation_average_precision"],
     )
     columns[3].metric(
-        "Validation MCC",
-        _metric_text(model.iloc[0]["validation_matthews_correlation"]),
+        label="Validation MCC",
+        value=_metric_text(record["validation_matthews_correlation"]),
+        help=METRIC_HELP["validation_matthews_correlation"],
     )
+    _render_metric_guide(database=database, comparison_id=comparison_id, record=record.to_dict())
+    _render_individual_shap_summary(database=database, comparison_id=comparison_id)
     global_plots = query_dataframe(
         database=database,
         sql=(
@@ -1023,7 +1268,9 @@ def _render_explainable_ml(*, database: Path) -> None:
     st.subheader("Global model evidence")
     st.caption(
         "Coefficients are signed log-odds effects. Held-out permutation importance is "
-        "model-specific and is only calculated when both validation classes are present."
+        "balanced-accuracy loss on pure blocks, calculated only when both per-class "
+        "sample/group limits pass. This preview contains up to 200 features ranked "
+        "by absolute coefficient; these ranks are different from the SHAP bar ordering."
     )
     _render_downloadable_table(
         frame=importance,
@@ -1039,6 +1286,10 @@ def _render_explainable_ml(*, database: Path) -> None:
             color="feature_type",
             orientation="h",
             hover_data=["feature_id", "validation_permutation_importance_mean"],
+            labels={
+                "coefficient_log_odds": "Fitted coefficient (log-odds)",
+                "feature_name": "Feature",
+            },
         )
         _render_plotly_figure(
             figure=figure,
@@ -1085,7 +1336,7 @@ def _render_explainable_ml(*, database: Path) -> None:
         ),
     )
     protein_id = st.selectbox(
-        "Explain validation protein",
+        f"Explain {explained_partition.lower()} protein",
         tuple(str(value) for value in predictions["protein_id"].tolist()),
     )
     local = query_dataframe(
@@ -1118,6 +1369,113 @@ def _render_explainable_ml(*, database: Path) -> None:
         inventory=local_plots,
         heading="SHAP waterfall",
     )
+
+
+def _render_individual_shap_summary(*, database: Path, comparison_id: str) -> None:
+    """Show the largest published individual validation SHAP contributions.
+
+    Args:
+        database: Verified result database.
+        comparison_id: Exact selected model comparison.
+    """
+    frame = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT feature_type, feature_id, feature_name, "
+            "mean_absolute_validation_contribution FROM ml_feature_importance "
+            "WHERE comparison_id = ? AND mean_absolute_validation_contribution IS NOT NULL "
+            "AND isfinite(mean_absolute_validation_contribution) "
+            "AND mean_absolute_validation_contribution >= 0 "
+            "ORDER BY mean_absolute_validation_contribution DESC, feature_type, feature_id LIMIT 30"
+        ),
+        parameters=(comparison_id,),
+    )
+    st.subheader("Individual feature contributions in validation")
+    required = {
+        "feature_type",
+        "feature_id",
+        "feature_name",
+        "mean_absolute_validation_contribution",
+    }
+    if frame.empty or not required.issubset(frame.columns):
+        st.info("No individual validation SHAP summary was published for this comparison.")
+        return
+    chart = frame.copy()
+    chart["plot_feature_label"] = (
+        chart["feature_name"].astype(str).str.slice(stop=45)
+        + " · "
+        + chart["feature_id"].astype(str)
+    )
+    st.caption(
+        body="Up to 30 individual features ranked by mean absolute SHAP contribution across "
+        "validation proteins, in model log-odds. Each bar is one feature; the aggregate "
+        "other-features remainder is excluded. Magnitude does not show direction or causation. "
+        "The original published SHAP figures remain available below."
+    )
+    figure = px.bar(
+        data_frame=chart,
+        x="mean_absolute_validation_contribution",
+        y="plot_feature_label",
+        color="feature_type",
+        orientation="h",
+        hover_data=["feature_id", "feature_name"],
+        labels={
+            "mean_absolute_validation_contribution": "Mean absolute SHAP contribution (log-odds)",
+            "plot_feature_label": "Individual feature",
+            "feature_type": "Evidence family",
+        },
+    )
+    figure.update_yaxes(autorange="reversed", automargin=True)
+    figure.update_layout(height=max(400, 24 * len(chart)))
+    _render_plotly_figure(
+        figure=figure, download_name=f"{comparison_id}_validation_individual_shap"
+    )
+
+
+def _render_metric_guide(*, database: Path, comparison_id: str, record: dict[str, object]) -> None:
+    """Interpret every model metric beside actual pure-block class counts.
+
+    Args:
+        database: Verified result database.
+        comparison_id: Exact selected model comparison.
+        record: Published selected model record.
+    """
+    counts = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT coalesce(count_if(true_class = 'TARGET'), 0) AS target_blocks, "
+            "coalesce(count_if(true_class = 'BACKGROUND'), 0) AS background_blocks FROM ("
+            "SELECT partition_key, min(true_class) AS true_class FROM ml_predictions "
+            "WHERE comparison_id = ? AND partition = 'VALIDATION' GROUP BY partition_key "
+            "HAVING count(DISTINCT true_class) = 1)"
+        ),
+        parameters=(comparison_id,),
+    )
+    baseline = None
+    with st.expander(label="❓ ROC, AUC, AP and MCC — interpret these values", expanded=False):
+        if not counts.empty and {"target_blocks", "background_blocks"}.issubset(counts.columns):
+            target = int(counts.iloc[0]["target_blocks"])
+            background = int(counts.iloc[0]["background_blocks"])
+            if target + background:
+                baseline = target / (target + background)
+                st.markdown(
+                    body=f"Held-out pure blocks: **{target} target**, **{background} background**. "
+                    f"Target fraction for the AP baseline: **{baseline:.3f}**."
+                )
+        for name, definition in METRIC_HELP.items():
+            st.markdown(body=f"**{name.replace('_', ' ')}** — {definition}")
+            st.caption(
+                body=metric_reading(metric_name=name, value=record.get(name), baseline=baseline)
+            )
+        st.markdown(
+            body=(
+                "Metrics use aggregated pure independence blocks; prediction/SHAP tables show "
+                "individual proteins. Their apparent separation can differ. A high value is "
+                "performance against supplied labels in this sampled cohort, not a probability "
+                "of biological correctness. No confidence interval or external-proteome "
+                "evaluation is supplied by these metric cards."
+            )
+        )
 
 
 def _render_shap_assets(*, database: Path, inventory: object, heading: str) -> None:
@@ -1165,33 +1523,7 @@ def _render_shap_assets(*, database: Path, inventory: object, heading: str) -> N
         if protein:
             caption += f" · {protein}"
         st.image(payload, caption=caption, width="stretch")
-        explanations = {
-            "SHAP_BEESWARM": (
-                "Each point represents one explained protein. Horizontal position is "
-                "that feature's contribution to the fitted model output, and colour "
-                "usually shows the feature value. Read this with the feature "
-                "definitions and held-out performance; SHAP is not causal evidence."
-            ),
-            "SHAP_GLOBAL_BAR": (
-                "Bars summarise the absolute size of feature contributions across "
-                "explained proteins. Larger bars indicate more influence on this "
-                "model's predictions, not stronger enrichment or a causal effect."
-            ),
-            "SHAP_WATERFALL": (
-                "Bars show how feature contributions move one protein's prediction "
-                "away from the model's baseline in the scale printed on the plot. "
-                "Correlated features may share attribution; this is not a direct "
-                "biochemical measurement."
-            ),
-        }
-        with st.expander("❔ What does this graph show and how should I interpret it?"):
-            st.markdown(
-                explanations.get(
-                    str(row["plot_type"]),
-                    "This is a model explanation; inspect its axes, provenance and "
-                    "held-out metrics before interpreting a feature.",
-                )
-            )
+        _render_graph_help(graph_name=str(row["plot_type"]))
     for row, asset_path, payload, mime in valid_assets:
         file_format = str(row["file_format"]).upper()
         protein = str(row.get("protein_id") or "global")
@@ -1288,6 +1620,34 @@ def _read_result_asset(
     return path, payload, mime
 
 
+def _with_feature_explanations(*, frame: pd.DataFrame) -> pd.DataFrame:
+    """Add readable feature semantics to a detached visible table.
+
+    Args:
+        frame: Normalised visible table with unique field names.
+
+    Returns:
+        Copy preserving original values and any authoritative explanation column.
+    """
+    result = frame.copy(deep=True)
+    if not {"feature_type", "feature_id"}.issubset(result.columns):
+        return result
+    if "feature_explanation" in result.columns:
+        return result
+    descriptions = {}
+    values = []
+    for kind, identifier in zip(result["feature_type"], result["feature_id"], strict=True):
+        if not isinstance(kind, str) or not isinstance(identifier, str) or not identifier:
+            values.append("No feature identifier is recorded on this outcome row.")
+            continue
+        key = (kind, identifier)
+        if key not in descriptions:
+            descriptions[key] = feature_explanation(feature_type=kind, feature_id=identifier)
+        values.append(descriptions[key])
+    result["feature_explanation"] = values
+    return result
+
+
 def _render_downloadable_table(
     *, frame: object, download_name: str, height: int | None = None
 ) -> None:
@@ -1300,12 +1660,35 @@ def _render_downloadable_table(
     """
 
     normalised = normalise_dataframe(value=frame)
+    normalised = _with_feature_explanations(frame=normalised)
     display_options: dict[str, object] = {
         "hide_index": True,
         "width": "stretch",
+        "column_config": _table_column_configuration(frame=normalised),
     }
-    if height is not None:
-        display_options["height"] = height
+    display_options["height"] = min(height or 460, 38 + 35 * max(1, min(len(normalised), 12)))
+    priority = (
+        "protein_id",
+        "feature_name",
+        "feature_explanation",
+        "display_name",
+        "status",
+        "evidence_class",
+        "true_class",
+        "predicted_probability",
+        "predicted_class",
+        "discovery_prevalence_difference",
+        "discovery_q_value",
+        "validation_q_value",
+        "validation_study_q_value",
+        "prevalence_difference",
+        "q_value",
+        "study_q_value",
+    )
+    front = [name for name in priority if name in normalised.columns]
+    display_options["column_order"] = front + [
+        name for name in normalised.columns if name not in front
+    ]
     stem = safe_download_stem(value=download_name)
     try:
         tsv = dataframe_to_tsv_bytes(frame=normalised)
@@ -1326,7 +1709,9 @@ def _render_downloadable_table(
             display[column] = pd.to_numeric(display[column], errors="coerce").map(
                 lambda value: "—" if pd.isna(value) else f"{value:+.3f}"
             )
+    display_options["column_config"] = _table_column_configuration(frame=display)
     st.dataframe(display, **display_options)
+    _render_table_help(frame=normalised)
     st.download_button(
         label="Download table as TSV",
         data=tsv,
@@ -1374,12 +1759,7 @@ def _render_plotly_figure(*, figure: object, download_name: str, explanation: st
         st.session_state.pop(f"plot-html-{stem}", None)
         st.session_state[f"plot-signature-{stem}"] = signature
     st.plotly_chart(figure, width="stretch")
-    with st.expander("❔ What does this graph show and how should I interpret it?"):
-        st.markdown(
-            explanation
-            or "Read the labelled axes and hover details; inspect the source table "
-            "and methods before drawing biological conclusions."
-        )
+    _render_graph_help(graph_name=download_name, explanation=explanation)
     if st.button(
         "Prepare plot image (PNG)",
         key=f"plot-png-prepare-{stem}",
@@ -1468,7 +1848,7 @@ def _render_proteins(*, database: Path) -> None:
     """
 
     st.title("Protein & Pfam explorer")
-    _page_guidance(page="Protein & Pfam")
+    _render_page_help(page="Protein & Pfam")
     _feature_key()
     suggestions = query_dataframe(
         database=database,
@@ -1691,7 +2071,7 @@ def _render_classes(*, database: Path, metadata: dict[str, object] | None = None
     """
 
     st.title("Classes & component roles")
-    _page_guidance(page="Classes & roles")
+    _render_page_help(page="Classes & roles")
     st.caption(
         "Mechanistic class, system class and component role are independent fields; "
         "a substrate receptor is not silently relabelled as a catalytic protein."
@@ -1759,6 +2139,10 @@ def _render_classes(*, database: Path, metadata: dict[str, object] | None = None
     left, right = st.columns((3, 2))
     with left:
         st.subheader("Populated class labels")
+        st.caption(
+            "Parent and child memberships overlap. Bars are not additive parts "
+            "of one total; labels can be reviewed or provisional under the recorded authority."
+        )
         if populated.empty:
             st.info("No positive profile memberships are present.")
         else:
@@ -1820,7 +2204,7 @@ def _render_structures(*, database: Path) -> None:
     """
 
     st.title("Structures & folds")
-    _page_guidance(page="Structures & folds")
+    _render_page_help(page="Structures & folds")
     _feature_key()
     source_counts = query_dataframe(
         database=database,
@@ -2023,7 +2407,7 @@ def _render_model_explorer(*, database: Path) -> None:
     """Explore enrichment on exact sequence positions, models and aligned pairs."""
 
     st.title("Model & alignment explorer")
-    _page_guidance(page="Model & alignment explorer")
+    _render_page_help(page="Model & alignment explorer")
     _feature_key()
     st.caption(
         "White: no significant mapped enrichment; blue: weaker significant enrichment; "
@@ -2984,9 +3368,11 @@ def _render_glossary() -> None:
     """Show a searchable, downloadable dictionary for any protein profile."""
 
     st.title("Glossary & help")
-    _page_guidance(page="Glossary & help")
+    _render_page_help(page="Glossary & help")
     term = st.text_input("Search definitions", help="Search terms, categories and explanations.")
-    frame = pd.DataFrame(GLOSSARY, columns=["category", "term", "definition"])
+    frame = pd.DataFrame(
+        glossary_rows(base_rows=GLOSSARY), columns=["category", "term", "definition"]
+    )
     if term.strip():
         mask = frame.apply(
             lambda column: column.astype(str).str.contains(term.strip(), case=False, regex=False)
@@ -3004,7 +3390,7 @@ def _render_orthology(*, database: Path, metadata: dict[str, object] | None = No
     """
 
     st.title("Orthology & partitions")
-    _page_guidance(page="Orthology & partitions")
+    _render_page_help(page="Orthology & partitions")
     st.caption(
         "The composite OrthoFinder authority is run ID + group type + hierarchy node + "
         "group ID. Whole connected homology/redundancy blocks stay in one partition."
@@ -3013,6 +3399,9 @@ def _render_orthology(*, database: Path, metadata: dict[str, object] | None = No
     columns[0].metric(
         "Memberships",
         f"{table_count(database=database, table_name='orthofinder_memberships'):,}",
+        help=(
+            "Published protein-to-group records; one protein can belong to several hierarchy nodes."
+        ),
     )
     groups = query_dataframe(
         database=database,
@@ -3021,12 +3410,20 @@ def _render_orthology(*, database: Path, metadata: dict[str, object] | None = No
             "FROM orthofinder_memberships"
         ),
     )
-    columns[1].metric("Groups", f"{int(groups.iloc[0]['n']):,}")
+    columns[1].metric(
+        "Groups",
+        f"{int(groups.iloc[0]['n']):,}",
+        help="Distinct composite keys: run ID, group type, hierarchy node and group ID.",
+    )
     blocks = query_dataframe(
         database=database,
         sql="SELECT count(DISTINCT partition_key) AS n FROM partitions",
     )
-    columns[2].metric("Partition blocks", f"{int(blocks.iloc[0]['n']):,}")
+    columns[2].metric(
+        "Partition blocks",
+        f"{int(blocks.iloc[0]['n']):,}",
+        help=column_definition(column_name="partition_key"),
+    )
     near = query_dataframe(
         database=database,
         sql=(
@@ -3034,16 +3431,23 @@ def _render_orthology(*, database: Path, metadata: dict[str, object] | None = No
             "WHERE cluster_type = 'NEAR_REDUNDANCY'"
         ),
     )
-    availability = (metadata or {}).get("evidence_availability", {})
-    redundancy_state = (
-        availability.get("near_redundancy", "") if isinstance(availability, dict) else ""
+    near_count = int(near.iloc[0]["n"])
+    metadata = (
+        metadata if metadata is not None else st.session_state.get("help-result-metadata", {})
     )
+    availability = metadata.get("evidence_availability", {}) if isinstance(metadata, dict) else {}
+    near_status = availability.get("near_redundancy") if isinstance(availability, dict) else None
     near_value = (
         "Not assessed"
-        if redundancy_state in {"INPUT_UNAVAILABLE", "NOT_SELECTED", "NOT_ASSESSED"}
-        else f"{int(near.iloc[0]['n']):,}"
+        if near_count == 0 and near_status in {"INPUT_UNAVAILABLE", "NOT_SELECTED", "NOT_ASSESSED"}
+        else f"{near_count:,}"
     )
-    columns[3].metric("Near-redundancy clusters", near_value)
+    columns[3].metric(
+        "Near-redundancy clusters",
+        near_value,
+        help="Supplied NEAR_REDUNDANCY groups. Zero means none recorded, "
+        "not proof that the proteome contains no closely related sequences.",
+    )
     partitions = query_dataframe(
         database=database,
         sql=(
@@ -3057,9 +3461,11 @@ def _render_orthology(*, database: Path, metadata: dict[str, object] | None = No
         frame=partitions,
         download_name="discovery_validation_allocation",
     )
-    if not partitions.empty:
+    if not partitions.empty and {"partition", "partition_unit", "blocks"}.issubset(
+        partitions.columns
+    ):
         figure = px.bar(
-            partitions,
+            data_frame=partitions,
             x="partition",
             y="blocks",
             color="partition_unit",
@@ -3088,10 +3494,9 @@ def _render_orthology(*, database: Path, metadata: dict[str, object] | None = No
     st.subheader("Published OrthoFinder group context")
     if context.empty:
         st.info(
-            "OrthoFinder membership and partitioning are present, but the optional "
-            "detailed group-context table was not published. The group count above "
-            "still comes from memberships; this empty table is not evidence that "
-            "no orthogroups exist."
+            "No optional OrthoFinder group-context summary was supplied. The membership "
+            "and partition counts above remain authoritative. OrthoFinder memberships, "
+            "when supplied, still contribute to the connected partition blocks."
         )
     else:
         _render_downloadable_table(
@@ -3110,7 +3515,7 @@ def _render_quality(*, database: Path, metadata: dict[str, object]) -> None:
     """
 
     st.title("Data quality & provenance")
-    _page_guidance(page="Data quality & provenance")
+    _render_page_help(page="Data quality & provenance")
     st.success("Completion marker and all checksums verified when this resource was opened.")
     label_evidence = metadata.get("automated_label_evidence", {})
     if isinstance(label_evidence, dict) and label_evidence.get("status") != "NOT_SELECTED":
@@ -3125,73 +3530,8 @@ def _render_quality(*, database: Path, metadata: dict[str, object]) -> None:
                 frame=comparison_coverage,
                 download_name="quality_comparison_matched_cohorts",
             )
-        control_coverage = _matched_control_coverage(database=database)
-        if not control_coverage.empty:
-            st.markdown("**Matched-control coverage by pooled background**")
-            st.caption(
-                "A background pool may serve several target comparisons. These pooled "
-                "fractions describe the matching audit; comparison-specific counts "
-                "above are the analysis denominators."
-            )
-            _render_downloadable_table(
-                frame=control_coverage,
-                download_name="matched_control_coverage",
-            )
-            figure = px.bar(
-                control_coverage,
-                x="target_coverage_fraction",
-                y="background_label_id",
-                orientation="h",
-                range_x=[0, 1],
-                hover_data=["target_units", "matched_control_units"],
-                labels={
-                    "target_coverage_fraction": "Fraction of target units with a control",
-                    "background_label_id": "Pooled background",
-                },
-            )
-            figure.update_layout(height=max(300, 48 * len(control_coverage)))
-            _render_plotly_figure(
-                figure=figure,
-                download_name="matched_control_coverage_chart",
-                explanation=(
-                    "Each bar is the fraction of target independence units with at "
-                    "least one accepted matched control in the named background pool. "
-                    "Pools may combine targets from several comparisons, so use the "
-                    "comparison-specific table for each class's denominator. The "
-                    "bar is not an enrichment q-value."
-                ),
-            )
-        evidence_queries = {
-            "Decisions": (
-                "SELECT * FROM label_evidence_audit ORDER BY protein_id, label_id, rule_id",
-                "label_evidence_audit",
-            ),
-            "Matched controls": (
-                "SELECT * FROM control_matching_audit "
-                "ORDER BY background_label_id, target_unit_id, control_unit_id",
-                "control_matching_audit",
-            ),
-            "Excluded label features": (
-                "SELECT * FROM label_definition_features "
-                "ORDER BY label_id, feature_type, feature_id",
-                "label_definition_features",
-            ),
-            "Abstentions": (
-                "SELECT * FROM unresolved_assignments ORDER BY curation_status, protein_id",
-                "unresolved_assignments",
-            ),
-        }
-        section = st.selectbox("Inspect evidence audit", tuple(evidence_queries))
-        sql, download_name = evidence_queries[section]
-        audit_key = f"quality-evidence-audit-{database}-{download_name}"
-        if st.button("Load selected detailed audit"):
-            st.session_state[audit_key] = query_dataframe(database=database, sql=sql)
-        if audit_key in st.session_state:
-            _render_downloadable_table(
-                frame=st.session_state[audit_key],
-                download_name=download_name,
-                height=420,
-            )
+        _render_control_matching_coverage(database=database)
+        _render_label_evidence_audit(database=database)
     st.subheader("Feature assessment coverage")
     st.caption(
         "A missing positive row is not treated as absence: explicit assessment state and "
@@ -3314,6 +3654,78 @@ def _render_quality(*, database: Path, metadata: dict[str, object]) -> None:
         )
     with st.expander("Run metadata", expanded=False):
         st.json(metadata)
+
+
+def _render_control_matching_coverage(*, database: Path) -> None:
+    """Show pooled matching coverage without treating it as a test denominator.
+
+    Args:
+        database: Verified result database.
+    """
+    coverage = _matched_control_coverage(database=database)
+    st.subheader(body="Pooled matched-control coverage")
+    st.caption(
+        body="Fraction of requested target blocks with at least one matched control. "
+        "Unmatched targets are excluded from matched comparisons; review selection bias. "
+        "Pools can serve several comparisons, so these totals are not test denominators."
+    )
+    _render_downloadable_table(frame=coverage, download_name="pooled_control_matching_coverage")
+    if not coverage.empty:
+        figure = px.bar(
+            data_frame=coverage,
+            x="background_label_id",
+            y="target_coverage_fraction",
+            labels={
+                "background_label_id": "Control pool",
+                "target_coverage_fraction": "Matched target fraction",
+            },
+            range_y=[0, 1],
+            hover_data=["target_units", "covered_target_units", "matched_control_units"],
+        )
+        _render_plotly_figure(figure=figure, download_name="control_matching_coverage")
+
+
+def _render_label_evidence_audit(*, database: Path) -> None:
+    """Load only the selected, explicitly bounded label-audit preview.
+
+    Args:
+        database: Verified result database.
+    """
+    queries = {
+        "Decisions": ("label_evidence_audit", "protein_id, label_id, rule_id"),
+        "Matched controls": (
+            "control_matching_audit",
+            "background_label_id, target_unit_id, control_unit_id",
+        ),
+        "Excluded label features": (
+            "label_definition_features",
+            "label_id, feature_type, feature_id",
+        ),
+        "Abstentions": ("unresolved_assignments", "curation_status, protein_id"),
+    }
+    selected = st.selectbox(
+        label="Evidence audit to preview",
+        options=tuple(queries),
+        help=(
+            "Only this audit is queried. The preview and its downloads contain at most 5,000 rows."
+        ),
+    )
+    table_name, ordering = queries[selected]
+    st.caption(
+        body="Preview: at most 5,000 rows. For the complete audit, use its published "
+        "TSV/Parquet files in Canonical data & downloads."
+    )
+    audit_key = f"bounded-evidence-audit-{database}-{table_name}"
+    if st.button(label="Load selected detailed audit"):
+        st.session_state[audit_key] = query_dataframe(
+            database=database, sql=f"SELECT * FROM {table_name} ORDER BY {ordering} LIMIT 5000"
+        )
+    if audit_key in st.session_state:
+        _render_downloadable_table(
+            frame=st.session_state[audit_key],
+            download_name=f"{table_name}_preview",
+            height=420,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

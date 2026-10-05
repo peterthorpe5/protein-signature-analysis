@@ -17,6 +17,7 @@ from protein_signatures.exports import (
     plotly_figure_to_pdf_bytes,
     safe_download_stem,
 )
+from protein_signatures.result_help import column_definition
 
 
 def test_dataframe_normalisation_and_tsv_are_deterministic() -> None:
@@ -74,7 +75,9 @@ def test_excel_preserves_long_numeric_identifiers_as_literal_text() -> None:
     payload = dataframe_to_xlsx_bytes(frame=frame, title="Identifiers")
     with zipfile.ZipFile(BytesIO(payload)) as archive:
         assert b"1234567890123456789" in archive.read("xl/sharedStrings.xml")
-        assert b"Adjusted p-value" in archive.read("xl/sharedStrings.xml")
+        assert column_definition(column_name="q_value").encode("utf-8") in archive.read(
+            "xl/sharedStrings.xml"
+        )
         assert b"ColumnDictionary" in archive.read("xl/tables/table2.xml")
 
 

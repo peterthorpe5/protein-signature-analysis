@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from protein_signatures.errors import InputValidationError, PublicationError
+from protein_signatures.result_help import column_definition
 
 _EXCEL_MAX_COLUMNS = 16_384
 _EXCEL_DATA_ROWS_PER_SHEET = 1_048_573
@@ -17,25 +18,6 @@ _EXCEL_MAX_CELL_CHARACTERS = 32_767
 _EXCEL_LONG_TEXT_CHUNK = 32_000
 _IDENTIFIER_COLUMN = re.compile(r"(^|_)(accession|checksum|digest|identifier|id)(_|$)", re.I)
 _DESCRIPTION_COLUMN = re.compile(r"description|reason|interpretation|message|note", re.I)
-_COLUMN_DEFINITIONS = {
-    "protein_id": "Exact protein identifier in this completed result.",
-    "sequence": "Published amino-acid sequence; positions are 1-based.",
-    "start": "First residue in a 1-based inclusive sequence interval.",
-    "end": "Last residue in a 1-based inclusive sequence interval.",
-    "comparison_id": "Exact target-versus-background comparison identifier.",
-    "feature_type": "Evidence family of a tested protein feature.",
-    "feature_id": "Exact feature identifier within its evidence family.",
-    "discovery_q_value": "Discovery false-discovery-rate adjusted p-value within a comparison.",
-    "validation_q_value": "Held-out validation false-discovery-rate adjusted p-value.",
-    "discovery_study_q_value": "Discovery q-value adjusted across comparisons in the family.",
-    "validation_study_q_value": "Validation q-value adjusted across comparisons in the family.",
-    "prevalence_difference": "Target fraction minus background fraction.",
-    "q_value": "Adjusted p-value; consult the table's source and testing scope.",
-    "tm_score": "Normalised structural-similarity score for a whole-model comparison.",
-    "coverage_a": "Fraction of protein A included in its structural comparison.",
-    "coverage_b": "Fraction of protein B included in its structural comparison.",
-    "mean_confidence": "Source-reported model confidence, where supplied.",
-}
 
 
 def normalise_dataframe(*, value: Any) -> pd.DataFrame:
@@ -332,10 +314,7 @@ def dataframe_to_xlsx_bytes(*, frame: pd.DataFrame, title: str) -> bytes:
                 definitions.set_column(index, index, width, narrative_format)
                 definitions.write(0, index, name, header_format)
             for row_number, name in enumerate(normalised.columns, start=1):
-                definition = _COLUMN_DEFINITIONS.get(
-                    name,
-                    "Published value; consult the canonical table and result provenance.",
-                )
+                definition = column_definition(column_name=name)
                 for index, value in enumerate(
                     (
                         name,
