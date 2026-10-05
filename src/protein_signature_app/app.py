@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import re
 from pathlib import Path
 
@@ -44,7 +45,7 @@ from protein_signature_app.structure_viewer import (
     read_published_model,
     significant_intervals,
 )
-from protein_signature_app.viewer_help import GLOSSARY, PAGE_HELP
+from protein_signature_app.viewer_help import GLOSSARY, PAGE_HELP, PAGE_METHODS
 from protein_signatures.errors import InputValidationError, PublicationError
 from protein_signatures.exports import (
     dataframe_to_tsv_bytes,
@@ -59,6 +60,28 @@ _ASSET_FORMATS = {
     "PNG": (".png", "image/png"),
     "SVG": (".svg", "image/svg+xml"),
     "PDF": (".pdf", "application/pdf"),
+}
+_AMINO_ACIDS = {
+    "A": "Ala",
+    "C": "Cys",
+    "D": "Asp",
+    "E": "Glu",
+    "F": "Phe",
+    "G": "Gly",
+    "H": "His",
+    "I": "Ile",
+    "K": "Lys",
+    "L": "Leu",
+    "M": "Met",
+    "N": "Asn",
+    "P": "Pro",
+    "Q": "Gln",
+    "R": "Arg",
+    "S": "Ser",
+    "T": "Thr",
+    "V": "Val",
+    "W": "Trp",
+    "Y": "Tyr",
 }
 
 
@@ -145,19 +168,147 @@ def main() -> None:
     elif page == "Protein & Pfam":
         _render_proteins(database=database)
     elif page == "Classes & roles":
-        _render_classes(database=database)
+        _render_classes(database=database, metadata=metadata)
     elif page == "Structures & folds":
         _render_structures(database=database)
     elif page == "Model & alignment explorer":
         _render_model_explorer(database=database)
     elif page == "Orthology & partitions":
-        _render_orthology(database=database)
+        _render_orthology(database=database, metadata=metadata)
     elif page == "Canonical data & downloads":
         _render_canonical_data(database=database)
     elif page == "Data quality & provenance":
         _render_quality(database=database, metadata=metadata)
     else:
         _render_glossary()
+
+
+def _page_guidance(*, page: str) -> None:
+    """Give each page accessible, expandable purpose and methods notes.
+
+    Args:
+        page: Supported application navigation label.
+    """
+
+    with st.expander("❔ What can I answer on this page?"):
+        st.markdown(PAGE_HELP[page])
+    with st.expander("🔬 Methods, evidence and limitations"):
+        st.markdown(PAGE_METHODS[page])
+
+
+def _feature_explanation(*, feature_type: str, feature_id: str, feature_name: str) -> str:
+    """Explain a canonical feature without replacing its stable identifier.
+
+    Args:
+        feature_type: Published evidence family.
+        feature_id: Machine-stable feature key.
+        feature_name: Published short name, if available.
+
+    Returns:
+        Readable biological meaning and a key scope limitation.
+    """
+
+    if feature_type == "AMINO_ACID_KMER":
+        match = re.fullmatch(r"k(\d+):([A-Z]+)", feature_id)
+        if match and len(match.group(2)) == int(match.group(1)):
+            sequence = match.group(2)
+            expanded = "–".join(_AMINO_ACIDS.get(letter, letter) for letter in sequence)
+            return (
+                f"Exact {len(sequence)}-residue sequence {sequence} ({expanded}) "
+                "somewhere in a protein; this alone does not establish a functional motif."
+            )
+        return "Exact short amino-acid sequence present somewhere in a protein."
+    if feature_type == "STRUCTURE_CLUSTER":
+        return (
+            "Whole-model structural-similarity cluster built from aligned model "
+            "relationships; the SC_ identifier is a stable fingerprint, not a named "
+            "fold, local motif or residue interval."
+        )
+    if feature_type in {"PFAM_DOMAIN", "DOMAIN"}:
+        return (
+            f"Recognised sequence domain ({feature_name or feature_id}); inspect domain "
+            "hits for coordinates and assessment status."
+        )
+    if feature_type in {"PFAM_ARCHITECTURE", "DOMAIN_ARCHITECTURE"}:
+        return (
+            "Ordered list of detected domains along one protein; identifiers after the "
+            "colon are domain accessions, not amino-acid positions."
+        )
+    if feature_type in {"FOLD", "STRUCTURE_FOLD"}:
+        return f"Assigned whole-model fold ({feature_name or feature_id}); no motif interval."
+    return f"{feature_name or feature_id}: consult the feature family and source record."
+
+
+def _feature_plot_label(*, feature_type: str, feature_id: str, feature_name: str) -> str:
+    """Give a chart feature a short human-readable label.
+
+    Args:
+        feature_type: Published evidence family.
+        feature_id: Reproducible feature identity.
+        feature_name: Published short name.
+
+    Returns:
+        Compact label retaining the source identity when useful.
+    """
+
+    if feature_type == "AMINO_ACID_KMER":
+        match = re.fullmatch(r"k(\d+):([A-Z]+)", feature_id)
+        if match:
+            expanded = "–".join(_AMINO_ACIDS.get(letter, letter) for letter in match.group(2))
+            return f"{match.group(2)} · {expanded} (k={match.group(1)})"
+    if feature_type == "STRUCTURE_CLUSTER":
+        return f"Whole-model cluster · {feature_id}"
+    return f"{feature_name or feature_id} · {feature_id}"[:75]
+
+
+def _explain_feature_rows(*, frame: pd.DataFrame) -> pd.DataFrame:
+    """Add readable meaning to a bounded signature table.
+
+    Args:
+        frame: Signature rows with canonical type, ID and optional short name.
+
+    Returns:
+        A copy with an explanatory column; canonical columns are preserved.
+    """
+
+    explained = frame.copy()
+    if {"feature_type", "feature_id"}.issubset(explained.columns):
+        explained.insert(
+            min(3, len(explained.columns)),
+            "feature_explanation",
+            [
+                _feature_explanation(
+                    feature_type=str(row.feature_type),
+                    feature_id=str(row.feature_id),
+                    feature_name=(
+                        str(row.feature_name)
+                        if hasattr(row, "feature_name") and pd.notna(row.feature_name)
+                        else ""
+                    ),
+                )
+                for row in explained.itertuples(index=False)
+            ],
+        )
+    return explained
+
+
+def _feature_key() -> None:
+    """Explain opaque IDs beside the tables where readers encounter them."""
+
+    with st.expander("❔ What do these feature IDs mean?"):
+        st.markdown(
+            "**`k3:LPD`** means the three consecutive amino acids L–P–D "
+            "(leucine–proline–aspartate) occur somewhere in a protein. `k5:` uses "
+            "five amino acids. Prevalence is measured per protein, not per occurrence. "
+            "A frequent short word is not automatically a functional motif.\n\n"
+            "**`SC_...`** is a stable fingerprint for a whole-model similarity "
+            "cluster derived from structural comparisons. It is not a named fold and "
+            "does not identify a local 3D motif or pocket. Inspect its members under "
+            "Structures & folds.\n\n"
+            "**`Pfam:PF...`** names a detected domain; an architecture lists domains "
+            "in sequence order with `>`. The raw ID remains in exports so a result "
+            "can be traced to the original analysis."
+        )
 
 
 def _render_canonical_data(*, database: Path) -> None:
@@ -168,6 +319,7 @@ def _render_canonical_data(*, database: Path) -> None:
     """
 
     st.title("Canonical data & downloads")
+    _page_guidance(page="Canonical data & downloads")
     names = canonical_table_names()
     st.caption(
         "Browse a bounded preview and inspect the complete checksum-verified storage files. "
@@ -297,6 +449,65 @@ def _overview_count(*, database: Path, metadata: dict[str, object], table_name: 
     return table_count(database=database, table_name=table_name)
 
 
+def _comparison_outcomes(*, database: Path) -> pd.DataFrame:
+    """Summarise every configured comparison, including those without a discovery.
+
+    Args:
+        database: Verified result database.
+
+    Returns:
+        One row per comparison with separate discovery and validation counts.
+    """
+
+    frame = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT c.comparison_id, c.display_name, c.target_label_ids, "
+            "coalesce(count_if(s.status = 'COMPLETE' AND "
+            "s.discovery_prevalence_difference > 0 "
+            "AND s.discovery_q_value <= 0.05 AND "
+            "starts_with(s.evidence_class, 'DECISION_CANDIDATE__')), 0) "
+            "AS enriched_count, "
+            "coalesce(count_if(s.status = 'COMPLETE' AND "
+            "s.discovery_prevalence_difference > 0 "
+            "AND s.discovery_q_value <= 0.05 AND "
+            "s.evidence_class IN ('DECISION_CANDIDATE__VALIDATED_STUDY_WIDE', "
+            "'DECISION_CANDIDATE__VALIDATED_WITHIN_COMPARISON')), 0) "
+            "AS validated_within_count, "
+            "coalesce(count_if(s.status = 'COMPLETE' AND "
+            "s.discovery_prevalence_difference > 0 "
+            "AND s.discovery_q_value <= 0.05 AND "
+            "s.evidence_class = 'DECISION_CANDIDATE__VALIDATED_STUDY_WIDE'), 0) "
+            "AS validated_study_count, "
+            "coalesce(count_if(s.status = 'COMPLETE'), 0) AS complete_count, "
+            "coalesce(count_if(s.status = 'INSUFFICIENT_SAMPLE_SIZE'), 0) "
+            "AS insufficient_count, "
+            "coalesce(count_if(s.status = 'NO_SIGNIFICANT_SIGNATURE'), 0) "
+            "AS no_signature_count "
+            "FROM comparisons c LEFT JOIN signatures s USING (comparison_id) "
+            "GROUP BY c.comparison_id, c.display_name, c.target_label_ids "
+            "ORDER BY enriched_count DESC, c.display_name"
+        ),
+    )
+    if frame.empty:
+        return frame
+    frame["analysis_status"] = frame.apply(
+        lambda row: (
+            "DISCOVERY_ENRICHED"
+            if row["enriched_count"]
+            else "COMPLETE_NO_POSITIVE_ENRICHMENT"
+            if row["complete_count"]
+            else "INSUFFICIENT_SAMPLE_SIZE"
+            if row["insufficient_count"]
+            else "NO_SIGNIFICANT_SIGNATURE"
+            if row["no_signature_count"]
+            else "NO_PUBLISHED_SIGNATURE"
+        ),
+        axis=1,
+    )
+    return frame
+
+
 def _render_overview(
     *, database: Path, metadata: dict[str, object], inventory_identity: str = ""
 ) -> None:
@@ -309,6 +520,7 @@ def _render_overview(
     """
 
     st.title("Protein signature analysis")
+    _page_guidance(page="Overview")
     st.caption("Sequence · domains · folds · pairwise structural evidence")
     st.info(
         "Signatures are prioritisation evidence, not proof of biochemical activity. "
@@ -320,7 +532,7 @@ def _render_overview(
         f"{_overview_count(database=database, metadata=metadata, table_name='proteins'):,}",
     )
     columns[1].metric(
-        "Candidate signatures",
+        "Signature records",
         f"{_overview_count(database=database, metadata=metadata, table_name='signatures'):,}",
     )
     columns[2].metric(
@@ -331,6 +543,73 @@ def _render_overview(
         "Domain hits",
         f"{_overview_count(database=database, metadata=metadata, table_name='domain_hits'):,}",
     )
+    st.subheader("Where can this run support a discovery?")
+    outcomes = _comparison_outcomes(database=database)
+    if outcomes.empty:
+        st.info("This result has no configured comparisons.")
+    else:
+        status_counts = outcomes["analysis_status"].value_counts()
+        summary = st.columns(3)
+        summary[0].metric("Comparisons", f"{len(outcomes):,}")
+        summary[1].metric(
+            "Discovery enriched",
+            f"{int(status_counts.get('DISCOVERY_ENRICHED', 0)):,}",
+        )
+        summary[2].metric(
+            "Insufficient sample size",
+            f"{int(status_counts.get('INSUFFICIENT_SAMPLE_SIZE', 0)):,}",
+        )
+        st.caption(
+            "An insufficient comparison cannot establish absence of a class signature. "
+            "Discovery counts include sequence and whole-model features; held-out "
+            "validation is counted separately below."
+        )
+        enriched = outcomes[outcomes["enriched_count"] > 0].head(12).copy()
+        if not enriched.empty:
+            st.markdown("**Classes with positive discovery results**")
+            visible = enriched[
+                [
+                    "display_name",
+                    "enriched_count",
+                    "validated_within_count",
+                    "validated_study_count",
+                ]
+            ]
+            _render_downloadable_table(frame=visible, download_name="overview_discovery_shortlist")
+            figure = px.bar(
+                enriched.sort_values("enriched_count"),
+                x="enriched_count",
+                y="display_name",
+                orientation="h",
+                hover_data=["validated_within_count", "validated_study_count"],
+                labels={
+                    "enriched_count": "Positive discovery signatures",
+                    "display_name": "Target versus background",
+                },
+            )
+            figure.update_layout(height=max(300, 65 * len(enriched)))
+            _render_plotly_figure(
+                figure=figure,
+                download_name="overview_discovery_shortlist_chart",
+                explanation=(
+                    "Each bar counts positive discovery signatures for one target versus "
+                    "background comparison. Hover for held-out validation counts. "
+                    "A larger bar can contain many correlated short sequence words; "
+                    "it is not a count of independent motifs."
+                ),
+            )
+        with st.expander("All comparison outcomes and validation counts"):
+            _render_downloadable_table(
+                frame=outcomes.drop(columns=["target_label_ids"]),
+                download_name="overview_all_comparison_outcomes",
+                height=370,
+            )
+    label_evidence = metadata.get("automated_label_evidence", {})
+    if isinstance(label_evidence, dict) and label_evidence.get("human_review_completed") is False:
+        st.warning(
+            "Target labels in this campaign have not completed human scientific review. "
+            "Treat these enrichments as provisional hypotheses."
+        )
     signature_counts = query_dataframe(
         database=database,
         sql=(
@@ -355,7 +634,16 @@ def _render_overview(
                     "feature_type": "Feature type",
                 },
             )
-            _render_plotly_figure(figure=figure, download_name="overview_signature_types")
+            _render_plotly_figure(
+                figure=figure,
+                download_name="overview_signature_types",
+                explanation=(
+                    "Bars count published completed signature rows in each feature "
+                    "family across comparisons. Sequence words, domains and "
+                    "whole-model groups are different biological scales, so compare "
+                    "family composition rather than treating rows as unique motifs."
+                ),
+            )
     with right:
         st.subheader("Availability states")
         availability = metadata.get("evidence_availability", {})
@@ -397,8 +685,63 @@ def _render_overview(
                     labels={"protein_count": "Proteins", "feature_type": "Feature type"},
                 )
                 _render_plotly_figure(
-                    figure=figure, download_name="overview_exact_feature_coverage_chart"
+                    figure=figure,
+                    download_name="overview_exact_feature_coverage_chart",
+                    explanation=(
+                        "The vertical axis counts distinct proteins with a positive "
+                        "feature membership by family; colour indicates the number "
+                        "of distinct features. This is input coverage, not evidence "
+                        "of significant class enrichment."
+                    ),
                 )
+
+
+def _signature_evidence(*, frame: pd.DataFrame, tier: str) -> pd.DataFrame:
+    """Select positive signatures meeting an explicit evidence threshold.
+
+    Args:
+        frame: Published signatures for one comparison and selected feature types.
+        tier: Discovery, within-comparison validation or study-wide validation.
+
+    Returns:
+        Rows ordered by the tier-specific q-value and prevalence difference.
+
+    Raises:
+        InputValidationError: If the requested tier is unsupported.
+    """
+
+    columns = {
+        "Discovery": ("discovery_q_value", "discovery_prevalence_difference"),
+        "Validated within comparison": (
+            "validation_q_value",
+            "validation_prevalence_difference",
+        ),
+        "Validated study-wide": (
+            "validation_study_q_value",
+            "validation_prevalence_difference",
+        ),
+    }
+    if tier not in columns:
+        raise InputValidationError(f"Unknown signature evidence tier: {tier}")
+    q_column, difference_column = columns[tier]
+    if not {q_column, difference_column}.issubset(frame.columns):
+        return frame.iloc[:0].copy()
+    q_values = pd.to_numeric(frame[q_column], errors="coerce")
+    differences = pd.to_numeric(frame[difference_column], errors="coerce")
+    accepted = (q_values <= 0.05) & (differences > 0)
+    if "status" in frame:
+        accepted &= frame["status"].eq("COMPLETE")
+    if "evidence_class" in frame:
+        accepted &= frame["evidence_class"].astype(str).str.startswith("DECISION_CANDIDATE__")
+    if "evidence_class" in frame and tier != "Discovery":
+        classes = ("DECISION_CANDIDATE__VALIDATED_STUDY_WIDE",)
+        if tier == "Validated within comparison":
+            classes += ("DECISION_CANDIDATE__VALIDATED_WITHIN_COMPARISON",)
+        accepted &= frame["evidence_class"].isin(classes)
+    return frame.loc[accepted].sort_values(
+        [q_column, difference_column, "feature_type", "feature_id"],
+        ascending=[True, False, True, True],
+    )
 
 
 def _render_signatures(*, database: Path) -> None:
@@ -409,45 +752,35 @@ def _render_signatures(*, database: Path) -> None:
     """
 
     st.title("Signature explorer")
-    comparisons = distinct_values(
-        database=database, table_name="signatures", column_name="comparison_id"
-    )
+    _page_guidance(page="Signature explorer")
+    _feature_key()
+    outcomes = _comparison_outcomes(database=database)
+    comparisons = tuple(outcomes["comparison_id"].astype(str)) if not outcomes.empty else ()
     feature_types = distinct_values(
         database=database, table_name="signatures", column_name="feature_type"
     )
     if not comparisons:
         st.info("No comparisons are present in this result.")
         return
-    completed = query_dataframe(
-        database=database,
-        sql=(
-            "SELECT comparison_id, count(*) AS enriched_count FROM signatures "
-            "WHERE status = 'COMPLETE' AND discovery_prevalence_difference > 0 "
-            "AND discovery_q_value <= 0.05 GROUP BY comparison_id "
-            "ORDER BY enriched_count DESC, comparison_id"
-        ),
-    )
-    counts = (
-        {
-            str(row.comparison_id): int(row.enriched_count)
-            for row in completed.itertuples(index=False)
-        }
-        if {"comparison_id", "enriched_count"}.issubset(completed.columns)
-        else {}
-    )
-    comparisons = tuple(counts) + tuple(value for value in comparisons if value not in counts)
+    counts = dict(zip(outcomes["comparison_id"], outcomes["enriched_count"], strict=True))
+    display_names = dict(zip(outcomes["comparison_id"], outcomes["display_name"], strict=True))
     st.caption(
         "Target prevalence describes how common a feature is. The q-value controls FDR "
         "within this comparison and evidence family; study q-value also corrects across "
         "all configured comparisons in the same evidence family. "
-        f"{len(counts)} of {len(comparisons)} comparisons have completed enriched signatures."
+        f"{sum(value > 0 for value in counts.values())} of {len(comparisons)} "
+        "comparisons have positive decision-candidate discovery signatures."
     )
-    selected_comparison = st.selectbox(
-        "Comparison",
-        comparisons,
-        format_func=lambda value: (
-            f"{value} · {counts[value]:,} enriched" if value in counts else value
-        ),
+    comparison_choices = _comparison_choices(
+        descriptions={
+            comparison: f"{display_names[comparison]} · {int(counts[comparison]):,} enriched"
+            for comparison in comparisons
+        }
+    )
+    selected_comparison = comparison_choices[st.selectbox("Comparison", tuple(comparison_choices))]
+    selected_outcome = outcomes.loc[outcomes["comparison_id"] == selected_comparison].iloc[0]
+    st.caption(
+        f"Comparison outcome: {selected_outcome['analysis_status'].replace('_', ' ').lower()}."
     )
     selected_types = st.multiselect("Feature types", feature_types, default=feature_types)
     if not selected_types:
@@ -463,33 +796,100 @@ def _render_signatures(*, database: Path) -> None:
         ),
         parameters=(selected_comparison, *selected_types),
     )
-    _render_downloadable_table(
-        frame=frame,
-        download_name=f"{selected_comparison}_signatures",
-        height=480,
+    evidence_tier = st.selectbox(
+        "Evidence to prioritise",
+        ("Discovery", "Validated within comparison", "Validated study-wide"),
+        help=(
+            "Discovery proposes candidates. Validation requires positive enrichment "
+            "in held-out proteins; study-wide validation also corrects across comparisons."
+        ),
     )
-    if not counts.get(selected_comparison):
-        st.info("No completed positive enriched signature is available for this comparison.")
-    chart_data = frame.dropna(subset=["discovery_prevalence_difference"])
-    if not chart_data.empty:
-        figure = px.scatter(
-            chart_data,
-            x="discovery_prevalence_difference",
-            y="discovery_q_value",
+    ranked = _signature_evidence(frame=frame, tier=evidence_tier)
+    st.caption(
+        f"{len(ranked):,} positive {evidence_tier.lower()} decision candidates among the selected "
+        "feature types. Sequence k-mers and whole-model clusters represent different "
+        "scales of evidence."
+    )
+    if ranked.empty:
+        st.info(
+            "No positive signature meets this tier for the selected comparison and "
+            "feature types. An insufficient comparison is not evidence of absence."
+        )
+    else:
+        shortlist = ranked.groupby("feature_type", sort=False).head(5).copy()
+        shortlist["feature_label"] = [
+            _feature_plot_label(
+                feature_type=str(row.feature_type),
+                feature_id=str(row.feature_id),
+                feature_name=str(row.feature_name) if pd.notna(row.feature_name) else "",
+            )
+            for row in shortlist.itertuples(index=False)
+        ]
+        st.subheader("Shortlist across evidence families")
+        st.caption(
+            "Up to five features from each family, ranked first by the selected q-value "
+            "and then by target − background prevalence. Inspect counts and controls "
+            "before interpreting a candidate."
+        )
+        columns = [
+            "feature_type",
+            "feature_name",
+            "feature_id",
+            "discovery_prevalence_difference",
+            "discovery_q_value",
+            "validation_prevalence_difference",
+            "validation_q_value",
+            "validation_study_q_value",
+            "evidence_class",
+        ]
+        _render_downloadable_table(
+            frame=_explain_feature_rows(
+                frame=shortlist[[column for column in columns if column in shortlist]]
+            ),
+            download_name=f"{selected_comparison}_{evidence_tier}_shortlist",
+            height=360,
+        )
+        difference_column = (
+            "discovery_prevalence_difference"
+            if evidence_tier == "Discovery"
+            else "validation_prevalence_difference"
+        )
+        figure = px.bar(
+            shortlist.sort_values(difference_column),
+            x=difference_column,
+            y="feature_label",
             color="feature_type",
-            symbol="evidence_class",
-            hover_data=["feature_id", "feature_name"],
+            orientation="h",
+            hover_data=["feature_id", "discovery_q_value", "evidence_class"],
             labels={
-                "discovery_prevalence_difference": "Target − background prevalence",
-                "discovery_q_value": "Discovery q-value",
+                difference_column: "Target − background prevalence",
+                "feature_label": "Feature",
+                "feature_type": "Evidence family",
             },
         )
-        figure.update_yaxes(autorange="reversed")
+        figure.update_layout(height=max(360, 33 * len(shortlist)))
         _render_plotly_figure(
             figure=figure,
-            download_name=f"{selected_comparison}_signature_scatter",
+            download_name=f"{selected_comparison}_{evidence_tier}_shortlist_chart",
+            explanation=(
+                "Each bar is the target-minus-background prevalence for a shortlisted "
+                "feature at the selected evidence tier. More positive means the "
+                "feature is more common in the target; colour distinguishes evidence "
+                "families. Hover to see its ID and discovery q-value. Examine "
+                "held-out results and cohort counts before making a biological claim."
+            ),
         )
-    with st.expander("Association counts, intervals and multiplicity", expanded=False):
+    with st.expander("Complete signature ledger and downloads", expanded=False):
+        _render_downloadable_table(
+            frame=_explain_feature_rows(frame=frame),
+            download_name=f"{selected_comparison}_signatures",
+            height=480,
+        )
+    st.caption("Association counts may take longer to load for large campaigns.")
+    association_key = (
+        f"signature-associations-{database}-{selected_comparison}-{'-'.join(selected_types)}"
+    )
+    if st.button("Load association counts, intervals and multiplicity"):
         association_frame = query_dataframe(
             database=database,
             sql=(
@@ -503,8 +903,10 @@ def _render_signatures(*, database: Path) -> None:
             ),
             parameters=(selected_comparison, *selected_types),
         )
+        st.session_state[association_key] = association_frame
+    if association_key in st.session_state:
         _render_downloadable_table(
-            frame=association_frame,
+            frame=st.session_state[association_key],
             download_name=f"{selected_comparison}_association_counts",
             height=440,
         )
@@ -518,6 +920,7 @@ def _render_explainable_ml(*, database: Path) -> None:
     """
 
     st.title("Explainable prediction")
+    _page_guidance(page="Explainable prediction")
     st.info(
         "Prediction is a separate corroborating layer, not a replacement for association "
         "testing and not evidence of biochemical causation. Validation groups never enter "
@@ -531,18 +934,55 @@ def _render_explainable_ml(*, database: Path) -> None:
     if not comparisons:
         st.info("No configured comparison is present in the modelling results.")
         return
-    comparison_id = st.selectbox("Model comparison", comparisons)
+    catalogue = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT m.comparison_id, c.display_name, m.status, "
+            "m.validation_target_count FROM ml_models m "
+            "LEFT JOIN comparisons c USING (comparison_id) "
+            "ORDER BY m.comparison_id"
+        ),
+    )
+    if catalogue.empty:
+        st.info("No model outcomes were published for these comparisons.")
+        return
+    catalogue["has_validation"] = catalogue["status"].eq("COMPLETE") & pd.to_numeric(
+        catalogue["validation_target_count"], errors="coerce"
+    ).gt(0)
+    catalogue = catalogue.sort_values(
+        ["has_validation", "display_name", "comparison_id"],
+        ascending=[False, True, True],
+    )
+    st.caption(
+        f"{int(catalogue['has_validation'].sum()):,} of {len(catalogue):,} "
+        "comparisons have a complete model with held-out target proteins. "
+        "Other comparisons retain their explicit reason for not being fitted."
+    )
+    model_choices = _comparison_choices(
+        descriptions={
+            str(row.comparison_id): (
+                f"{row.display_name} · {str(row.status).replace('_', ' ').lower()}"
+            )
+            for row in catalogue.itertuples(index=False)
+        }
+    )
+    comparison_id = model_choices[st.selectbox("Model comparison", tuple(model_choices))]
     model = query_dataframe(
         database=database,
         sql="SELECT * FROM ml_models WHERE comparison_id = ?",
         parameters=(comparison_id,),
     )
-    _render_downloadable_table(
-        frame=model,
-        download_name=f"{comparison_id}_model_summary",
-    )
+    with st.expander("Complete model record and download"):
+        _render_downloadable_table(
+            frame=model,
+            download_name=f"{comparison_id}_model_summary",
+        )
     if model.empty or not str(model.iloc[0]["status"]).startswith("COMPLETE"):
-        st.warning("This comparison has an explicit non-fitted model status.")
+        reason = str(model.iloc[0].get("status_message") or "") if not model.empty else ""
+        st.warning(
+            "No fitted model is available for this comparison. "
+            + (reason or "Inspect the published model status and sample counts above.")
+        )
         return
     columns = st.columns(4)
     columns[0].metric("CV ROC AUC", _metric_text(model.iloc[0]["cv_roc_auc"]))
@@ -603,6 +1043,11 @@ def _render_explainable_ml(*, database: Path) -> None:
         _render_plotly_figure(
             figure=figure,
             download_name=f"{comparison_id}_model_coefficients",
+            explanation=(
+                "Signed model coefficients show which features raise or lower the "
+                "fitted target log-odds, conditional on the other model features. "
+                "They are model contributions, not causal effects or enrichment tests."
+            ),
         )
     explained_partition = str(model.iloc[0].get("shap_explained_partition") or "VALIDATION")
     predictions = query_dataframe(
@@ -632,6 +1077,12 @@ def _render_explainable_ml(*, database: Path) -> None:
     _render_plotly_figure(
         figure=figure,
         download_name=f"{comparison_id}_{explained_partition}_probabilities",
+        explanation=(
+            "The bars show the distribution of predicted target probabilities for "
+            "proteins in the selected partition, split by their known class. "
+            "Overlapping groups indicate uncertain discrimination; consult the "
+            "held-out metrics and sample counts."
+        ),
     )
     protein_id = st.selectbox(
         "Explain validation protein",
@@ -714,6 +1165,33 @@ def _render_shap_assets(*, database: Path, inventory: object, heading: str) -> N
         if protein:
             caption += f" · {protein}"
         st.image(payload, caption=caption, width="stretch")
+        explanations = {
+            "SHAP_BEESWARM": (
+                "Each point represents one explained protein. Horizontal position is "
+                "that feature's contribution to the fitted model output, and colour "
+                "usually shows the feature value. Read this with the feature "
+                "definitions and held-out performance; SHAP is not causal evidence."
+            ),
+            "SHAP_GLOBAL_BAR": (
+                "Bars summarise the absolute size of feature contributions across "
+                "explained proteins. Larger bars indicate more influence on this "
+                "model's predictions, not stronger enrichment or a causal effect."
+            ),
+            "SHAP_WATERFALL": (
+                "Bars show how feature contributions move one protein's prediction "
+                "away from the model's baseline in the scale printed on the plot. "
+                "Correlated features may share attribution; this is not a direct "
+                "biochemical measurement."
+            ),
+        }
+        with st.expander("❔ What does this graph show and how should I interpret it?"):
+            st.markdown(
+                explanations.get(
+                    str(row["plot_type"]),
+                    "This is a model explanation; inspect its axes, provenance and "
+                    "held-out metrics before interpreting a feature.",
+                )
+            )
     for row, asset_path, payload, mime in valid_assets:
         file_format = str(row["file_format"]).upper()
         protein = str(row.get("protein_id") or "global")
@@ -838,7 +1316,17 @@ def _render_downloadable_table(
     workbook_key = f"table-xlsx-payload-{stem}"
     if st.session_state.get(workbook_key, (None, None))[0] != fingerprint:
         st.session_state.pop(workbook_key, None)
-    st.dataframe(normalised, **display_options)
+    display = normalised.copy()
+    for column in display:
+        if column.endswith("q_value") or column == "q_value":
+            display[column] = pd.to_numeric(display[column], errors="coerce").map(
+                lambda value: "—" if pd.isna(value) else f"{value:.2e}"
+            )
+        elif column.endswith("prevalence_difference"):
+            display[column] = pd.to_numeric(display[column], errors="coerce").map(
+                lambda value: "—" if pd.isna(value) else f"{value:+.3f}"
+            )
+    st.dataframe(display, **display_options)
     st.download_button(
         label="Download table as TSV",
         data=tsv,
@@ -866,12 +1354,13 @@ def _render_downloadable_table(
         )
 
 
-def _render_plotly_figure(*, figure: object, download_name: str) -> None:
+def _render_plotly_figure(*, figure: object, download_name: str, explanation: str = "") -> None:
     """Render an interactive figure with on-demand PDF, PNG and HTML exports.
 
     Args:
         figure: Plotly-compatible figure.
         download_name: Stable human-readable export identity.
+        explanation: What this plot encodes and how to interpret it.
     """
 
     stem = safe_download_stem(value=download_name)
@@ -885,6 +1374,12 @@ def _render_plotly_figure(*, figure: object, download_name: str) -> None:
         st.session_state.pop(f"plot-html-{stem}", None)
         st.session_state[f"plot-signature-{stem}"] = signature
     st.plotly_chart(figure, width="stretch")
+    with st.expander("❔ What does this graph show and how should I interpret it?"):
+        st.markdown(
+            explanation
+            or "Read the labelled axes and hover details; inspect the source table "
+            "and methods before drawing biological conclusions."
+        )
     if st.button(
         "Prepare plot image (PNG)",
         key=f"plot-png-prepare-{stem}",
@@ -973,13 +1468,30 @@ def _render_proteins(*, database: Path) -> None:
     """
 
     st.title("Protein & Pfam explorer")
-    protein_ids = distinct_values(
-        database=database, table_name="proteins", column_name="protein_id"
+    _page_guidance(page="Protein & Pfam")
+    _feature_key()
+    suggestions = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT m.protein_id, "
+            "max(CASE WHEN s.coordinate_path <> '' THEN 1 ELSE 0 END) AS has_model, "
+            "count(DISTINCT m.label_id) AS label_count "
+            "FROM label_memberships m LEFT JOIN structures s USING (protein_id) "
+            "GROUP BY m.protein_id ORDER BY has_model DESC, label_count DESC, "
+            "m.protein_id LIMIT 250"
+        ),
     )
-    if not protein_ids:
-        st.info("No proteins are present.")
+    protein_ids = tuple(suggestions["protein_id"].astype(str)) if not suggestions.empty else ()
+    st.caption(
+        "Suggested proteins have published class memberships, with available models "
+        "first. Enter an exact protein ID to inspect any other published sequence."
+    )
+    selected_id = st.selectbox("Suggested labelled protein", protein_ids) if protein_ids else ""
+    exact_id = st.text_input("Exact published protein ID (optional)").strip()
+    protein_id = exact_id or selected_id
+    if not protein_id:
+        st.info("Enter a published protein ID to inspect its evidence.")
         return
-    protein_id = st.selectbox("Protein", protein_ids)
     inventory = query_dataframe(
         database=database,
         sql=(
@@ -988,14 +1500,20 @@ def _render_proteins(*, database: Path) -> None:
         ),
         parameters=(protein_id,),
     )
+    if inventory.empty:
+        st.warning(f"Protein {protein_id!r} is not present in this completed result.")
+        return
     _render_downloadable_table(
         frame=inventory,
         download_name=f"{protein_id}_protein_inventory",
     )
-    labels_tab, domain_tab, feature_tab, assessment_tab = st.tabs(
-        ("Labels", "Domains", "Positive features", "Feature assessments")
+    section = st.radio(
+        "Protein evidence",
+        ("Labels", "Domains", "Positive features", "Feature assessments"),
+        horizontal=True,
+        help="Load one evidence source at a time; feature membership can be very large.",
     )
-    with labels_tab:
+    if section == "Labels":
         _render_downloadable_table(
             frame=query_dataframe(
                 database=database,
@@ -1008,7 +1526,7 @@ def _render_proteins(*, database: Path) -> None:
             ),
             download_name=f"{protein_id}_labels",
         )
-    with domain_tab:
+    elif section == "Domains":
         st.caption("No-hit, not-assessed and failed scans are deliberately different states.")
         _render_downloadable_table(
             frame=query_dataframe(
@@ -1033,46 +1551,147 @@ def _render_proteins(*, database: Path) -> None:
             ),
             download_name=f"{protein_id}_domain_hits",
         )
-    with feature_tab:
+    elif section == "Positive features":
         _render_downloadable_table(
-            frame=query_dataframe(
-                database=database,
-                sql=(
-                    "SELECT * FROM features WHERE protein_id = ? "
-                    'ORDER BY feature_type, "start", feature_id'
-                ),
-                parameters=(protein_id,),
+            frame=_explain_feature_rows(
+                frame=query_dataframe(
+                    database=database,
+                    sql=(
+                        "SELECT * FROM features WHERE protein_id = ? "
+                        'ORDER BY feature_type, "start", feature_id'
+                    ),
+                    parameters=(protein_id,),
+                )
             ),
             download_name=f"{protein_id}_features",
             height=450,
         )
-    with assessment_tab:
+    else:
         st.caption(
             "Assessed absence, unassessed, failed and excluded evidence remain distinct "
             "from positive feature evidence."
         )
         _render_downloadable_table(
-            frame=query_dataframe(
-                database=database,
-                sql=(
-                    "SELECT * FROM feature_assessments WHERE protein_id = ? "
-                    'ORDER BY feature_type, feature_id, "start"'
-                ),
-                parameters=(protein_id,),
+            frame=_explain_feature_rows(
+                frame=query_dataframe(
+                    database=database,
+                    sql=(
+                        "SELECT * FROM feature_assessments WHERE protein_id = ? "
+                        'ORDER BY feature_type, feature_id, "start"'
+                    ),
+                    parameters=(protein_id,),
+                )
             ),
             download_name=f"{protein_id}_feature_assessments",
             height=450,
         )
 
 
-def _render_classes(*, database: Path) -> None:
+def _matched_control_coverage(*, database: Path) -> pd.DataFrame:
+    """Count target units with a match within each pooled background stratum.
+
+    Args:
+        database: Verified result database.
+
+    Returns:
+        Per-background coverage with its explicit denominator.
+    """
+
+    frame = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT background_label_id, "
+            "count(DISTINCT target_unit_id) AS target_units, "
+            "count(DISTINCT CASE WHEN status = 'MATCHED' "
+            "THEN target_unit_id END) AS covered_target_units, "
+            "count(DISTINCT CASE WHEN status = 'MATCHED' "
+            "THEN control_unit_id END) AS matched_control_units "
+            "FROM control_matching_audit GROUP BY background_label_id "
+            "ORDER BY background_label_id"
+        ),
+    )
+    if not frame.empty:
+        frame["target_coverage_fraction"] = frame["covered_target_units"] / frame[
+            "target_units"
+        ].replace(0, float("nan"))
+    return frame
+
+
+def _matched_comparison_coverage(
+    *, database: Path, metadata: dict[str, object] | None
+) -> pd.DataFrame:
+    """Read the exact cohorts used for each audited comparison.
+
+    Args:
+        database: Verified result database.
+        metadata: Published campaign metadata with matched cohort counts.
+
+    Returns:
+        One row per audited comparison, with its target-unit denominator.
+    """
+
+    evidence = (metadata or {}).get("automated_label_evidence")
+    cohorts = evidence.get("matched_comparison_cohorts") if isinstance(evidence, dict) else None
+    if not isinstance(cohorts, dict) or not cohorts:
+        return pd.DataFrame()
+    comparisons = query_dataframe(
+        database=database,
+        sql="SELECT comparison_id, display_name FROM comparisons ORDER BY comparison_id",
+    )
+    names = (
+        dict(zip(comparisons["comparison_id"], comparisons["display_name"], strict=True))
+        if not comparisons.empty
+        else {}
+    )
+    records = []
+    fields = (
+        "matched_target_unit_count",
+        "excluded_unmatched_target_unit_count",
+        "target_protein_count",
+        "excluded_unmatched_target_protein_count",
+        "control_unit_count",
+        "control_protein_count",
+    )
+    for comparison_id, cohort in sorted(cohorts.items()):
+        if not isinstance(cohort, dict) or any(
+            not isinstance(cohort.get(field), int)
+            or isinstance(cohort[field], bool)
+            or cohort[field] < 0
+            for field in fields
+        ):
+            continue
+        total = cohort["matched_target_unit_count"] + cohort["excluded_unmatched_target_unit_count"]
+        records.append(
+            {
+                "comparison_id": comparison_id,
+                "display_name": names.get(comparison_id, comparison_id),
+                "target_units": total,
+                "matched_target_units": cohort["matched_target_unit_count"],
+                "excluded_unmatched_target_units": cohort["excluded_unmatched_target_unit_count"],
+                "target_coverage_fraction": (
+                    cohort["matched_target_unit_count"] / total if total else float("nan")
+                ),
+                "analysed_target_proteins": cohort["target_protein_count"],
+                "excluded_unmatched_target_proteins": cohort[
+                    "excluded_unmatched_target_protein_count"
+                ],
+                "matched_control_units": cohort["control_unit_count"],
+                "matched_control_proteins": cohort["control_protein_count"],
+            }
+        )
+    return pd.DataFrame.from_records(records)
+
+
+def _render_classes(*, database: Path, metadata: dict[str, object] | None = None) -> None:
     """Render the configured hierarchy and observed class/role coverage.
 
     Args:
         database: Verified result database.
+        metadata: Published comparison-specific cohort counts, when available.
     """
 
     st.title("Classes & component roles")
+    _page_guidance(page="Classes & roles")
     st.caption(
         "Mechanistic class, system class and component role are independent fields; "
         "a substrate receptor is not silently relabelled as a catalytic protein."
@@ -1089,43 +1708,86 @@ def _render_classes(*, database: Path) -> None:
             "These automated labels are evidence-supported proposals for hypothesis "
             "generation. They are not equivalent to human-reviewed biochemical truth."
         )
-        st.subheader("Automated evidence-label coverage")
+        comparison_coverage = _matched_comparison_coverage(database=database, metadata=metadata)
+        if not comparison_coverage.empty:
+            st.subheader("Matched cohort used for each comparison")
+            st.caption(
+                "The denominator includes matched and excluded target units. Only "
+                "matched targets and their allocated controls enter that comparison's "
+                "association and prediction analysis."
+            )
+            _render_downloadable_table(
+                frame=comparison_coverage,
+                download_name="comparison_specific_matched_cohorts",
+                height=420,
+            )
+        else:
+            st.info(
+                "No comparison-specific matched cohort summary was published for "
+                "this resource. Background control totals cannot substitute for it."
+            )
+        st.subheader("Provisional target labels and background pools")
+        st.caption(
+            "These direct label counts and pooled background controls are descriptive. "
+            "Several comparisons may share one background. Where published, use the "
+            "comparison-specific matched cohort for the actual analysis denominator."
+        )
+        target_rows = provisional.loc[provisional["label_type"] == "TARGET"].copy()
         _render_downloadable_table(
-            frame=provisional,
-            download_name="automated_evidence_label_coverage",
+            frame=target_rows,
+            download_name="provisional_target_label_and_control_coverage",
             height=420,
         )
+        with st.expander("Background labels and full assignment summary"):
+            _render_downloadable_table(
+                frame=provisional,
+                download_name="automated_evidence_label_coverage",
+                height=420,
+            )
     coverage = query_dataframe(
         database=database,
         sql=(
             "SELECT p.label_id, p.display_name, p.parent_label_id, p.level, "
             "p.system_class, p.mechanistic_class, p.component_role, p.family, "
             "p.active_site_expected, p.active_site_residue, "
-            "count(DISTINCT m.protein_id) AS reviewed_proteins "
+            "count(DISTINCT m.protein_id) AS observed_proteins "
             "FROM profile_labels p LEFT JOIN label_memberships m USING (label_id) "
             "GROUP BY ALL ORDER BY p.label_id"
         ),
     )
-    populated = coverage[coverage["reviewed_proteins"] > 0]
+    populated = coverage[coverage["observed_proteins"] > 0]
     left, right = st.columns((3, 2))
     with left:
-        st.subheader("Observed hierarchy")
+        st.subheader("Populated class labels")
         if populated.empty:
-            st.info("No reviewed-positive profile memberships are present.")
+            st.info("No positive profile memberships are present.")
         else:
-            figure = px.sunburst(
-                populated,
-                ids="label_id",
-                names="display_name",
-                parents="parent_label_id",
-                values="reviewed_proteins",
-                color="reviewed_proteins",
-                hover_data=["mechanistic_class", "component_role"],
+            chart_rows = populated.loc[populated["parent_label_id"].ne("")].nlargest(
+                15, "observed_proteins"
             )
-            _render_plotly_figure(
-                figure=figure,
-                download_name="class_hierarchy_sunburst",
-            )
+            if not chart_rows.empty:
+                figure = px.bar(
+                    chart_rows.sort_values("observed_proteins"),
+                    x="observed_proteins",
+                    y="display_name",
+                    orientation="h",
+                    hover_data=["label_id", "parent_label_id", "component_role"],
+                    labels={
+                        "observed_proteins": "Proteins with this label",
+                        "display_name": "Class label",
+                    },
+                )
+                figure.update_layout(height=max(420, 34 * len(chart_rows)))
+                _render_plotly_figure(
+                    figure=figure,
+                    download_name="most_populated_class_labels",
+                    explanation=(
+                        "Bars show up to 15 populated child labels. The same protein "
+                        "can appear in a parent and several related labels, so bars "
+                        "must not be added to obtain a unique protein total. The "
+                        "chart shows membership, not class-specific enrichment."
+                    ),
+                )
     with right:
         st.subheader("Role coverage")
         roles = query_dataframe(
@@ -1158,6 +1820,8 @@ def _render_structures(*, database: Path) -> None:
     """
 
     st.title("Structures & folds")
+    _page_guidance(page="Structures & folds")
+    _feature_key()
     source_counts = query_dataframe(
         database=database,
         sql=(
@@ -1190,7 +1854,16 @@ def _render_structures(*, database: Path) -> None:
             labels={"analysis_eligibility_status": "Model eligibility", "models": "Models"},
         )
         figure.update_layout(title="Published model coverage and eligibility", height=400)
-        _render_plotly_figure(figure=figure, download_name="structure_eligibility_summary")
+        _render_plotly_figure(
+            figure=figure,
+            download_name="structure_eligibility_summary",
+            explanation=(
+                "Bars count model records by analysis eligibility and fold-evidence "
+                "status. Hover to identify sources and average model confidence. "
+                "A coordinate model can be eligible without a named fold or "
+                "local structural motif."
+            ),
+        )
     with st.expander("Structure model records and comparison universes", expanded=False):
         _render_downloadable_table(
             frame=query_dataframe(
@@ -1226,6 +1899,11 @@ def _render_structures(*, database: Path) -> None:
             )
     with right:
         st.subheader("Alignment-derived clusters")
+        st.caption(
+            "These are connected whole-model groups. At permissive similarity and "
+            "coverage thresholds, single-linkage chains can join diverse proteins; "
+            "a large group is not a shared local motif."
+        )
         clusters = query_dataframe(
             database=database,
             sql=(
@@ -1238,37 +1916,88 @@ def _render_structures(*, database: Path) -> None:
                 "ORDER BY total_members DESC, cluster_id"
             ),
         )
+        if not clusters.empty:
+            clusters.insert(
+                1,
+                "cluster_explanation",
+                [
+                    _feature_explanation(
+                        feature_type="STRUCTURE_CLUSTER",
+                        feature_id=str(cluster_id),
+                        feature_name="",
+                    )
+                    for cluster_id in clusters["cluster_id"]
+                ],
+            )
         _render_downloadable_table(
             frame=clusters,
             download_name="structural_clusters",
             height=380,
         )
     st.subheader("Pairwise structural alignments")
-    comparisons = query_dataframe(
+    density = query_dataframe(
         database=database,
-        sql=("SELECT * FROM structure_comparisons ORDER BY tm_score DESC NULLS LAST LIMIT 5000"),
+        sql=(
+            "SELECT comparison_tool, "
+            "round(floor(least(coverage_a, coverage_b) * 20) / 20, 2) "
+            "AS minimum_coverage_bin, "
+            "round(floor(tm_score * 20) / 20, 2) AS tm_score_bin, "
+            "count(*) AS comparison_count FROM structure_comparisons "
+            "WHERE tm_score IS NOT NULL AND coverage_a IS NOT NULL "
+            "AND coverage_b IS NOT NULL GROUP BY ALL "
+            "ORDER BY minimum_coverage_bin, tm_score_bin, comparison_tool"
+        ),
     )
-    if not comparisons.empty:
-        plot_data = comparisons.dropna(subset=["tm_score", "coverage_a", "coverage_b"]).copy()
-        if not plot_data.empty:
-            plot_data["minimum_coverage"] = plot_data[["coverage_a", "coverage_b"]].min(axis=1)
-            figure = px.scatter(
-                plot_data,
-                x="minimum_coverage",
-                y="tm_score",
-                color="comparison_tool",
-                hover_data=["protein_a_id", "protein_b_id", "rmsd_angstrom"],
-                labels={"minimum_coverage": "Minimum bilateral coverage"},
-            )
-            _render_plotly_figure(
-                figure=figure,
-                download_name="structural_alignment_score_coverage",
-            )
-    _render_downloadable_table(
-        frame=comparisons,
-        download_name="pairwise_structural_alignments",
-        height=480,
-    )
+    if not density.empty:
+        st.caption(
+            f"All {int(density['comparison_count'].sum()):,} recorded pairs with scores "
+            "and bilateral coverage contribute to this binned view."
+        )
+        figure = px.scatter(
+            density,
+            x="minimum_coverage_bin",
+            y="tm_score_bin",
+            size="comparison_count",
+            color="comparison_tool",
+            size_max=32,
+            hover_data=["comparison_count"],
+            labels={
+                "minimum_coverage_bin": "Minimum bilateral coverage (0.05 bins)",
+                "tm_score_bin": "TM-score (0.05 bins)",
+                "comparison_count": "Pairs in bin",
+            },
+        )
+        _render_plotly_figure(
+            figure=figure,
+            download_name="all_structural_alignment_score_coverage_bins",
+            explanation=(
+                "Every recorded pair with both coverage values contributes to one "
+                "bin. Larger circles contain more pairs. TM-score indicates model "
+                "similarity, and the horizontal position is the smaller aligned "
+                "fraction. The previous high-score-only sample was unsuitable for "
+                "interpreting the full distribution."
+            ),
+        )
+        _render_downloadable_table(
+            frame=density,
+            download_name="all_structural_alignment_score_coverage_bins",
+        )
+    if st.checkbox("Inspect the 5,000 highest-scoring structural pairs"):
+        st.caption(
+            "This is a score-ranked subset for inspecting individual pairs. "
+            "It is deliberately not used to estimate the score distribution."
+        )
+        comparisons = query_dataframe(
+            database=database,
+            sql=(
+                "SELECT * FROM structure_comparisons ORDER BY tm_score DESC NULLS LAST LIMIT 5000"
+            ),
+        )
+        _render_downloadable_table(
+            frame=comparisons,
+            download_name="highest_scoring_pairwise_structural_alignments",
+            height=480,
+        )
     imported = query_dataframe(
         database=database,
         sql=(
@@ -1277,10 +2006,11 @@ def _render_structures(*, database: Path) -> None:
         ),
     )
     if not imported.empty:
-        st.subheader("Imported within-group pocket conservation")
+        st.subheader("Imported exploratory structural summaries")
         st.caption(
-            "Imported US-align/TM-align evidence complements, rather than replaces, "
-            "cross-protein Foldseek fold discovery."
+            "These Stage 09b group and pocket-assessment summaries were imported for "
+            "context only. They were not enrichment-tested as residue-level pockets "
+            "in this campaign and provide no motif coordinates to colour."
         )
         _render_downloadable_table(
             frame=imported,
@@ -1293,6 +2023,8 @@ def _render_model_explorer(*, database: Path) -> None:
     """Explore enrichment on exact sequence positions, models and aligned pairs."""
 
     st.title("Model & alignment explorer")
+    _page_guidance(page="Model & alignment explorer")
+    _feature_key()
     st.caption(
         "White: no significant mapped enrichment; blue: weaker significant enrichment; "
         "red: stronger enrichment. A white residue may simply have no localisable feature. "
@@ -1308,23 +2040,7 @@ def _render_model_explorer(*, database: Path) -> None:
             "published structural comparisons contain scores and coverage, but no "
             "residue-to-residue superposition."
         )
-    overview = query_dataframe(
-        database=database,
-        sql=(
-            "SELECT c.comparison_id, c.display_name, c.target_label_ids, "
-            "coalesce(count_if(s.status = 'COMPLETE' AND "
-            "s.discovery_prevalence_difference > 0 "
-            "AND s.discovery_q_value <= 0.05), 0) AS enriched_count, "
-            "coalesce(count_if(s.status = 'COMPLETE'), 0) AS complete_count, "
-            "coalesce(count_if(s.status = 'INSUFFICIENT_SAMPLE_SIZE'), 0) "
-            "AS insufficient_count, "
-            "coalesce(count_if(s.status = 'NO_SIGNIFICANT_SIGNATURE'), 0) "
-            "AS no_signature_count "
-            "FROM comparisons c LEFT JOIN signatures s USING (comparison_id) "
-            "GROUP BY c.comparison_id, c.display_name, c.target_label_ids "
-            "ORDER BY enriched_count DESC, c.display_name"
-        ),
-    )
+    overview = _comparison_outcomes(database=database)
     if overview.empty:
         st.info("This result has no comparisons to inspect.")
         return
@@ -1343,30 +2059,7 @@ def _render_model_explorer(*, database: Path) -> None:
         "All comparison outcomes are available below."
     )
     with st.expander("All comparison outcomes", expanded=False):
-        outcomes = overview[
-            [
-                "comparison_id",
-                "display_name",
-                "enriched_count",
-                "complete_count",
-                "insufficient_count",
-                "no_signature_count",
-            ]
-        ].copy()
-        outcomes["analysis_status"] = outcomes.apply(
-            lambda row: (
-                "SIGNIFICANT_POSITIVE"
-                if row["enriched_count"]
-                else "COMPLETE_NO_POSITIVE_ENRICHMENT"
-                if row["complete_count"]
-                else "INSUFFICIENT_SAMPLE_SIZE"
-                if row["insufficient_count"]
-                else "NO_SIGNIFICANT_SIGNATURE"
-                if row["no_signature_count"]
-                else "NO_PUBLISHED_SIGNATURE"
-            ),
-            axis=1,
-        )
+        outcomes = overview.drop(columns=["target_label_ids"])
         _render_downloadable_table(
             frame=outcomes,
             download_name="all_comparison_outcomes",
@@ -1399,11 +2092,6 @@ def _render_model_explorer(*, database: Path) -> None:
     suggested_id = st.selectbox("Protein to inspect", proteins)
     typed_id = st.text_input("Exact protein ID (optional; overrides selection)").strip()
     protein_id = typed_id or suggested_id
-    _render_ranked_associations(
-        database=database,
-        enriched_comparisons=enriched_comparisons,
-        descriptions=descriptions,
-    )
     protein = query_dataframe(
         database=database,
         sql="SELECT sequence FROM proteins WHERE protein_id = ?",
@@ -1447,6 +2135,13 @@ def _render_model_explorer(*, database: Path) -> None:
                 "Discovery within comparison",
                 "Validated within comparison",
                 "Validated study-wide",
+            ),
+            index=(
+                2
+                if int(selected["validated_study_count"]) > 0
+                else 1
+                if int(selected["validated_within_count"]) > 0
+                else 0
             ),
             help="Stronger tiers require positive held-out enrichment and the selected q-value.",
         )
@@ -1493,9 +2188,15 @@ def _render_model_explorer(*, database: Path) -> None:
     valid = significant_intervals(rows=mapped, sequence_length=len(sequence))
     scores, descriptions = enrichment_track(rows=valid, sequence_length=len(sequence))
     st.subheader("Most enriched mapped regions")
+    st.caption(
+        f"{len(valid):,} localisable feature occurrences cover "
+        f"{sum(value > 0 for value in scores):,} of {len(sequence):,} residues. "
+        "Whole-model structural clusters have no residue boundaries and cannot colour "
+        "a specific motif."
+    )
     if valid:
         _render_downloadable_table(
-            frame=pd.DataFrame(valid),
+            frame=_explain_feature_rows(frame=pd.DataFrame(valid)),
             download_name=f"{comparison_id}_{protein_id}_mapped_regions_{mode}",
             height=300,
         )
@@ -1516,17 +2217,24 @@ def _render_model_explorer(*, database: Path) -> None:
         descriptions=descriptions,
         comparison_id=comparison_id,
     )
-    st.subheader("Paired sequence alignment")
-    _render_pair_alignment(
-        database=database,
-        protein_id=protein_id,
-        comparison_id=comparison_id,
-        reference_sequence=sequence,
-        reference_scores=scores,
-        annotations=annotations if mode == "Uploaded residue annotations" else None,
-        evidence_tier=evidence_tier,
-        maximum_features=maximum_features,
-    )
+    if st.checkbox("Inspect a paired sequence alignment"):
+        st.subheader("Paired sequence alignment")
+        _render_pair_alignment(
+            database=database,
+            protein_id=protein_id,
+            comparison_id=comparison_id,
+            reference_sequence=sequence,
+            reference_scores=scores,
+            annotations=annotations if mode == "Uploaded residue annotations" else None,
+            evidence_tier=evidence_tier,
+            maximum_features=maximum_features,
+        )
+    if st.checkbox("Compare ranked signatures across classes"):
+        _render_ranked_associations(
+            database=database,
+            enriched_comparisons=enriched_comparisons,
+            descriptions=descriptions,
+        )
 
 
 def _comparison_choices(*, descriptions: dict[str, str]) -> dict[str, str]:
@@ -1567,7 +2275,7 @@ def _render_ranked_associations(
         descriptions: Human-readable comparison labels keyed by ID.
     """
 
-    st.subheader("Most significant association results")
+    st.subheader("Discovery candidates across classes")
     st.caption(
         "This table can compare classes independently of the protein and model selection. "
         "It includes positive discovery enrichment at q ≤ 0.05, balanced by comparison; "
@@ -1598,13 +2306,14 @@ def _render_ranked_associations(
                 "AND s.status = 'COMPLETE' "
                 "AND s.discovery_prevalence_difference > 0 "
                 "AND s.discovery_q_value <= 0.05 "
+                "AND starts_with(s.evidence_class, 'DECISION_CANDIDATE__') "
                 "QUALIFY within_comparison_rank <= ? "
                 "ORDER BY within_comparison_rank, s.comparison_id LIMIT 5000"
             ),
             parameters=(*selected_results, rows_per_comparison),
         )
         _render_downloadable_table(
-            frame=ranked,
+            frame=_explain_feature_rows(frame=ranked),
             download_name="selected_comparisons_top_enriched_signatures",
             height=300,
         )
@@ -1626,13 +2335,15 @@ def _render_ranked_associations(
         strongest["comparison"] = strongest["comparison_id"].map(
             lambda value: descriptions[str(value)].split(" · ")[0]
         )
-        strongest["label"] = (
-            strongest["comparison"].astype(str).str.slice(0, 30)
-            + " · "
-            + strongest["feature_type"].astype(str)
-            + ": "
-            + strongest["feature_id"].astype(str).str.slice(0, 45)
-        )
+        strongest["label"] = [
+            f"{str(row.comparison)[:24]} · "
+            + _feature_plot_label(
+                feature_type=str(row.feature_type),
+                feature_id=str(row.feature_id),
+                feature_name=str(row.feature_name) if pd.notna(row.feature_name) else "",
+            )
+            for row in strongest.itertuples(index=False)
+        ]
         figure = px.bar(
             strongest,
             x="discovery_prevalence_difference",
@@ -1659,6 +2370,12 @@ def _render_ranked_associations(
         _render_plotly_figure(
             figure=figure,
             download_name="selected_comparisons_top_enriched_features",
+            explanation=(
+                "Bars show target-minus-background prevalence for the top selected "
+                "discovery features, coloured by comparison. Rows are balanced "
+                "between selected classes. The shortlist is ranked by discovery "
+                "q-value, so also compare effect size and validation."
+            ),
         )
 
 
@@ -1722,7 +2439,9 @@ def _enriched_intervals(
         raise InputValidationError("Unknown enrichment evidence tier.")
     q_column, difference_column = columns[evidence_tier]
     accepted_classes = {
-        "Discovery within comparison": "",
+        "Discovery within comparison": (
+            "AND starts_with(s.evidence_class, 'DECISION_CANDIDATE__') "
+        ),
         "Validated within comparison": (
             "AND s.evidence_class IN ('DECISION_CANDIDATE__VALIDATED_STUDY_WIDE', "
             "'DECISION_CANDIDATE__VALIDATED_WITHIN_COMPARISON') "
@@ -1794,7 +2513,16 @@ def _render_enrichment_track(
         xaxis_title="1-based residue position",
         height=270,
     )
-    _render_plotly_figure(figure=figure, download_name=download_name)
+    _render_plotly_figure(
+        figure=figure,
+        download_name=download_name,
+        explanation=(
+            "The horizontal axis is the selected protein's 1-based sequence position. "
+            "White has no mapped significant feature; blue to red encodes smaller "
+            "adjusted q-values of overlapping enriched features. A coloured residue "
+            "inherits a protein-level feature result; it does not have its own test."
+        ),
+    )
 
 
 def _render_model_for_protein(
@@ -1977,10 +2705,105 @@ def _render_trace_figure(
     )
     figure.update_layout(
         title=f"Cα trace · chain {trace.chain} · drag to rotate",
-        height=700,
-        scene={"aspectmode": "data"},
+        height=560,
+        margin={"l": 0, "r": 0, "t": 48, "b": 0},
+        scene={
+            "aspectmode": "data",
+            "xaxis": {"visible": False},
+            "yaxis": {"visible": False},
+            "zaxis": {"visible": False},
+        },
     )
-    _render_plotly_figure(figure=figure, download_name=download_name)
+    plot_column, explanation_column = st.columns((3, 2))
+    with plot_column:
+        _render_plotly_figure(
+            figure=figure,
+            download_name=download_name,
+            explanation=(
+                "This is a rotatable Cα backbone trace of one exact-sequence model. "
+                "When the model matches, coloured markers inherit the mapped "
+                "feature significance from the 2D track. White is unmapped; "
+                "colour does not show pLDDT, binding pockets or a structural "
+                "superposition."
+            ),
+        )
+    with explanation_column:
+        st.markdown("**How to read this model**")
+        st.caption(f"{len(residues):,} Cα coordinates; drag the model to rotate it.")
+        if scores is not None:
+            st.caption(
+                f"{sum(value > 0 for value in scores):,} residues have localised "
+                "significant enrichment. White marks no mapped enrichment. Colour "
+                "strength reflects adjusted significance, not pLDDT or effect size."
+            )
+        else:
+            st.caption("No enrichment was projected because the model did not match exactly.")
+
+
+def _alignment_residue_strip(
+    *, rows: list[dict[str, object]], reference_id: str, comparison_id: str
+) -> str:
+    """Build an escaped, horizontally scrollable amino-acid alignment window.
+
+    Args:
+        rows: Consecutive sequence-alignment columns with enrichment scores.
+        reference_id: Published identifier for the first sequence.
+        comparison_id: Published identifier for the second sequence.
+
+    Returns:
+        Static HTML with coloured residues, gaps and identity markers.
+    """
+
+    def cells(*, prefix: str) -> str:
+        """Render one safe sequence row from the current alignment window.
+
+        Args:
+            prefix: ``reference`` or ``comparison``.
+
+        Returns:
+            Consecutive, tooltip-labelled residue cells.
+        """
+
+        values = []
+        for row in rows:
+            amino_acid = html.escape(str(row[f"{prefix}_residue"]), quote=True)
+            position = row[f"{prefix}_position"]
+            score = max(0.0, min(1.0, float(row[f"{prefix}_enrichment"])))
+            hue = round(215 * (1 - max(0.0, score - 0.1) / 0.9))
+            background = f"hsl({hue}, 68%, 78%)" if score > 0 else "#ffffff"
+            foreground = "#192b40" if score > 0 else "#586573"
+            label = html.escape(
+                f"{prefix} position {position or 'gap'}; enrichment colour {score:.2f}",
+                quote=True,
+            )
+            values.append(
+                f'<span title="{label}" style="display:inline-block;width:1.35em;'
+                "box-sizing:border-box;"
+                f"text-align:center;background:{background};color:{foreground};"
+                f'border:1px solid #dae1e7">{amino_acid}</span>'
+            )
+        return "".join(values)
+
+    identities = "".join(
+        '<span style="display:inline-block;width:1.35em;box-sizing:border-box;'
+        'text-align:center">' + ("|" if row["identity"] else "&nbsp;") + "</span>"
+        for row in rows
+    )
+    reference = html.escape(reference_id, quote=True)
+    comparison = html.escape(comparison_id, quote=True)
+    return (
+        '<div style="max-width:100%;overflow-x:auto;border:1px solid #dae1e7;'
+        'border-radius:8px;padding:0.75rem;font:14px monospace">'
+        f'<div style="white-space:nowrap"><strong title="{reference}" '
+        f'style="display:inline-block;width:12rem;overflow:hidden">{reference}</strong>'
+        f"{cells(prefix='reference')}</div>"
+        '<div style="white-space:nowrap"><strong style="display:inline-block;'
+        f'width:12rem">Identity</strong>{identities}</div>'
+        f'<div style="white-space:nowrap"><strong title="{comparison}" '
+        'style="display:inline-block;width:12rem;overflow:hidden">'
+        f"{comparison}</strong>"
+        f"{cells(prefix='comparison')}</div></div>"
+    )
 
 
 def _render_pair_alignment(
@@ -2091,6 +2914,16 @@ def _render_pair_alignment(
         else 1
     )
     window = alignment_rows[window_start - 1 : window_start + 99]
+    st.markdown("**Residues in this alignment window**")
+    st.caption(
+        "Each letter is an aligned amino acid; dashes are gaps and vertical marks are "
+        "exact matches. Hover over a letter for its sequence position. These are "
+        "sequence columns, not structurally superposed coordinates."
+    )
+    st.markdown(
+        _alignment_residue_strip(rows=window, reference_id=protein_id, comparison_id=other_id),
+        unsafe_allow_html=True,
+    )
     figure = go.Figure(
         go.Heatmap(
             z=[
@@ -2119,6 +2952,12 @@ def _render_pair_alignment(
     _render_plotly_figure(
         figure=figure,
         download_name=f"{comparison_id}_{protein_id}_{other_id}_alignment_window_{window_start}",
+        explanation=(
+            "The two rows show a window of the newly computed amino-acid alignment; "
+            "columns line up by sequence alignment. Colour comes independently from "
+            "significant features in each protein. Read the letter strip above for "
+            "residues and gaps. These are not Foldseek superposed-residue columns."
+        ),
     )
     _render_downloadable_table(
         frame=pd.DataFrame(alignment_rows),
@@ -2145,6 +2984,7 @@ def _render_glossary() -> None:
     """Show a searchable, downloadable dictionary for any protein profile."""
 
     st.title("Glossary & help")
+    _page_guidance(page="Glossary & help")
     term = st.text_input("Search definitions", help="Search terms, categories and explanations.")
     frame = pd.DataFrame(GLOSSARY, columns=["category", "term", "definition"])
     if term.strip():
@@ -2155,14 +2995,16 @@ def _render_glossary() -> None:
     _render_downloadable_table(frame=frame, download_name="protein_signature_glossary")
 
 
-def _render_orthology(*, database: Path) -> None:
+def _render_orthology(*, database: Path, metadata: dict[str, object] | None = None) -> None:
     """Render OrthoFinder context and leakage-safe data partitions.
 
     Args:
         database: Verified result database.
+        metadata: Optional published evidence-availability states.
     """
 
     st.title("Orthology & partitions")
+    _page_guidance(page="Orthology & partitions")
     st.caption(
         "The composite OrthoFinder authority is run ID + group type + hierarchy node + "
         "group ID. Whole connected homology/redundancy blocks stay in one partition."
@@ -2192,7 +3034,16 @@ def _render_orthology(*, database: Path) -> None:
             "WHERE cluster_type = 'NEAR_REDUNDANCY'"
         ),
     )
-    columns[3].metric("Near-redundancy clusters", f"{int(near.iloc[0]['n']):,}")
+    availability = (metadata or {}).get("evidence_availability", {})
+    redundancy_state = (
+        availability.get("near_redundancy", "") if isinstance(availability, dict) else ""
+    )
+    near_value = (
+        "Not assessed"
+        if redundancy_state in {"INPUT_UNAVAILABLE", "NOT_SELECTED", "NOT_ASSESSED"}
+        else f"{int(near.iloc[0]['n']):,}"
+    )
+    columns[3].metric("Near-redundancy clusters", near_value)
     partitions = query_dataframe(
         database=database,
         sql=(
@@ -2206,6 +3057,26 @@ def _render_orthology(*, database: Path) -> None:
         frame=partitions,
         download_name="discovery_validation_allocation",
     )
+    if not partitions.empty:
+        figure = px.bar(
+            partitions,
+            x="partition",
+            y="blocks",
+            color="partition_unit",
+            barmode="group",
+            hover_data=["proteins"],
+            labels={"blocks": "Independent partition blocks", "partition": "Partition"},
+        )
+        _render_plotly_figure(
+            figure=figure,
+            download_name="discovery_validation_block_allocation",
+            explanation=(
+                "Bars count independent allocation blocks by partition and unit "
+                "type. Hover for the number of proteins they contain. Whole linked "
+                "groups are kept together to reduce discovery/validation leakage; "
+                "a block count is not a count of distinct functional orthogroups."
+            ),
+        )
     context = query_dataframe(
         database=database,
         sql=(
@@ -2217,8 +3088,10 @@ def _render_orthology(*, database: Path) -> None:
     st.subheader("Published OrthoFinder group context")
     if context.empty:
         st.info(
-            "No OrthoFinder group context was supplied. Exact-sequence blocks still "
-            "prevent duplicate-sequence leakage."
+            "OrthoFinder membership and partitioning are present, but the optional "
+            "detailed group-context table was not published. The group count above "
+            "still comes from memberships; this empty table is not evidence that "
+            "no orthogroups exist."
         )
     else:
         _render_downloadable_table(
@@ -2237,6 +3110,7 @@ def _render_quality(*, database: Path, metadata: dict[str, object]) -> None:
     """
 
     st.title("Data quality & provenance")
+    _page_guidance(page="Data quality & provenance")
     st.success("Completion marker and all checksums verified when this resource was opened.")
     label_evidence = metadata.get("automated_label_evidence", {})
     if isinstance(label_evidence, dict) and label_evidence.get("status") != "NOT_SELECTED":
@@ -2244,79 +3118,162 @@ def _render_quality(*, database: Path, metadata: dict[str, object]) -> None:
         warning = str(label_evidence.get("warning") or "").strip()
         if warning:
             st.warning(warning)
-        evidence_tabs = st.tabs(
-            ("Decisions", "Matched controls", "Excluded label features", "Abstentions")
-        )
-        evidence_queries = (
-            (
+        comparison_coverage = _matched_comparison_coverage(database=database, metadata=metadata)
+        if not comparison_coverage.empty:
+            st.markdown("**Comparison-specific matched cohorts**")
+            _render_downloadable_table(
+                frame=comparison_coverage,
+                download_name="quality_comparison_matched_cohorts",
+            )
+        control_coverage = _matched_control_coverage(database=database)
+        if not control_coverage.empty:
+            st.markdown("**Matched-control coverage by pooled background**")
+            st.caption(
+                "A background pool may serve several target comparisons. These pooled "
+                "fractions describe the matching audit; comparison-specific counts "
+                "above are the analysis denominators."
+            )
+            _render_downloadable_table(
+                frame=control_coverage,
+                download_name="matched_control_coverage",
+            )
+            figure = px.bar(
+                control_coverage,
+                x="target_coverage_fraction",
+                y="background_label_id",
+                orientation="h",
+                range_x=[0, 1],
+                hover_data=["target_units", "matched_control_units"],
+                labels={
+                    "target_coverage_fraction": "Fraction of target units with a control",
+                    "background_label_id": "Pooled background",
+                },
+            )
+            figure.update_layout(height=max(300, 48 * len(control_coverage)))
+            _render_plotly_figure(
+                figure=figure,
+                download_name="matched_control_coverage_chart",
+                explanation=(
+                    "Each bar is the fraction of target independence units with at "
+                    "least one accepted matched control in the named background pool. "
+                    "Pools may combine targets from several comparisons, so use the "
+                    "comparison-specific table for each class's denominator. The "
+                    "bar is not an enrichment q-value."
+                ),
+            )
+        evidence_queries = {
+            "Decisions": (
                 "SELECT * FROM label_evidence_audit ORDER BY protein_id, label_id, rule_id",
                 "label_evidence_audit",
             ),
-            (
+            "Matched controls": (
                 "SELECT * FROM control_matching_audit "
                 "ORDER BY background_label_id, target_unit_id, control_unit_id",
                 "control_matching_audit",
             ),
-            (
+            "Excluded label features": (
                 "SELECT * FROM label_definition_features "
                 "ORDER BY label_id, feature_type, feature_id",
                 "label_definition_features",
             ),
-            (
+            "Abstentions": (
                 "SELECT * FROM unresolved_assignments ORDER BY curation_status, protein_id",
                 "unresolved_assignments",
             ),
-        )
-        for tab, (sql, download_name) in zip(
-            evidence_tabs,
-            evidence_queries,
-            strict=True,
-        ):
-            with tab:
-                _render_downloadable_table(
-                    frame=query_dataframe(database=database, sql=sql),
-                    download_name=download_name,
-                    height=420,
-                )
+        }
+        section = st.selectbox("Inspect evidence audit", tuple(evidence_queries))
+        sql, download_name = evidence_queries[section]
+        audit_key = f"quality-evidence-audit-{database}-{download_name}"
+        if st.button("Load selected detailed audit"):
+            st.session_state[audit_key] = query_dataframe(database=database, sql=sql)
+        if audit_key in st.session_state:
+            _render_downloadable_table(
+                frame=st.session_state[audit_key],
+                download_name=download_name,
+                height=420,
+            )
     st.subheader("Feature assessment coverage")
     st.caption(
         "A missing positive row is not treated as absence: explicit assessment state and "
         "derivation scope determine each feature's tested universe."
     )
-    _render_downloadable_table(
-        frame=query_dataframe(
-            database=database,
-            sql=(
-                "SELECT feature_type, evidence_status, derivation_scope, "
-                "count(DISTINCT feature_id) AS features, "
-                "count(DISTINCT protein_id) AS proteins FROM feature_assessments "
-                "GROUP BY ALL ORDER BY feature_type, evidence_status, derivation_scope"
-            ),
+    assessment_coverage = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT feature_type, evidence_status, derivation_scope, "
+            "count(DISTINCT feature_id) AS features, "
+            "count(DISTINCT protein_id) AS proteins FROM feature_assessments "
+            "GROUP BY ALL ORDER BY feature_type, evidence_status, derivation_scope"
         ),
+    )
+    if "STRUCTURAL_POCKET" in set(assessment_coverage.get("feature_type", ())):
+        st.info(
+            "STRUCTURAL_POCKET rows here are imported exploratory assessment "
+            "records from an upstream structural resource. They are not "
+            "enrichment-tested, residue-mapped pocket discoveries in this campaign."
+        )
+    _render_downloadable_table(
+        frame=assessment_coverage,
         download_name="feature_assessment_coverage",
     )
     st.subheader("Domain assessment coverage")
-    _render_downloadable_table(
-        frame=query_dataframe(
-            database=database,
-            sql=(
-                "SELECT domain_authority, assessment_status, count(*) AS proteins "
-                "FROM domain_assessments GROUP BY ALL ORDER BY domain_authority, assessment_status"
-            ),
+    domain_coverage = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT domain_authority, assessment_status, count(*) AS proteins "
+            "FROM domain_assessments GROUP BY ALL ORDER BY domain_authority, assessment_status"
         ),
+    )
+    if not domain_coverage.empty:
+        unassessed = int(
+            domain_coverage.loc[
+                domain_coverage["assessment_status"] == "NOT_ASSESSED", "proteins"
+            ].sum()
+        )
+        if unassessed:
+            total = int(domain_coverage["proteins"].sum())
+            st.warning(
+                f"{unassessed:,} of {total:,} recorded domain assessments are "
+                "NOT_ASSESSED. Missing Pfam evidence for these proteins is unknown, "
+                "not a verified domain absence."
+            )
+        figure = px.bar(
+            domain_coverage,
+            x="assessment_status",
+            y="proteins",
+            color="domain_authority",
+            labels={"assessment_status": "Assessment state", "proteins": "Proteins"},
+        )
+        _render_plotly_figure(
+            figure=figure,
+            download_name="domain_assessment_state_chart",
+            explanation=(
+                "Bars count proteins by explicit domain-assessment state. A "
+                "completed scan with no hit differs from NOT_ASSESSED; the latter "
+                "must not be used as negative evidence for a Pfam feature."
+            ),
+        )
+    _render_downloadable_table(
+        frame=domain_coverage,
         download_name="domain_assessment_coverage",
     )
     st.subheader("AlphaFold acquisition outcomes")
-    _render_downloadable_table(
-        frame=query_dataframe(
-            database=database,
-            sql=(
-                "SELECT acquisition_status, count(*) AS proteins, "
-                "round(avg(mean_plddt), 2) AS mean_plddt "
-                "FROM alphafold_acquisitions GROUP BY acquisition_status "
-                "ORDER BY proteins DESC"
-            ),
+    acquisition_outcomes = query_dataframe(
+        database=database,
+        sql=(
+            "SELECT acquisition_status, count(*) AS proteins, "
+            "round(avg(mean_plddt), 2) AS mean_plddt "
+            "FROM alphafold_acquisitions GROUP BY acquisition_status "
+            "ORDER BY proteins DESC"
         ),
+    )
+    if acquisition_outcomes.empty:
+        st.info(
+            "No new AlphaFold acquisition was selected for this campaign. Packaged "
+            "coordinate models from the upstream workflow can still be available."
+        )
+    _render_downloadable_table(
+        frame=acquisition_outcomes,
         download_name="alphafold_acquisition_outcomes",
     )
     st.subheader("Curation states")
@@ -2336,8 +3293,10 @@ def _render_quality(*, database: Path, metadata: dict[str, object]) -> None:
         "Blocks containing both a target and background member are excluded from that "
         "comparison rather than counted in both classes."
     )
-    _render_downloadable_table(
-        frame=query_dataframe(
+    st.caption("Calculating this audit scans the full association ledger.")
+    audit_key = f"inferential-blocks-{database}"
+    if st.button("Calculate independence-block summary"):
+        st.session_state[audit_key] = query_dataframe(
             database=database,
             sql=(
                 "SELECT comparison_id, partition, max(target_unit_count) AS target_blocks, "
@@ -2346,10 +3305,13 @@ def _render_quality(*, database: Path, metadata: dict[str, object]) -> None:
                 "FROM associations GROUP BY comparison_id, partition "
                 "ORDER BY comparison_id, partition"
             ),
-        ),
-        download_name="inferential_independence_blocks",
-        height=400,
-    )
+        )
+    if audit_key in st.session_state:
+        _render_downloadable_table(
+            frame=st.session_state[audit_key],
+            download_name="inferential_independence_blocks",
+            height=400,
+        )
     with st.expander("Run metadata", expanded=False):
         st.json(metadata)
 

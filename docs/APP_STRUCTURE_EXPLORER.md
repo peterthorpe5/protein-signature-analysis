@@ -21,10 +21,11 @@ unexpected files remain an error.
 ./run_protein_signature_app.sh --resource /absolute/path/to/completed/result
 ```
 
-The **Overview** page reads published row counts and charts completed signatures by feature
-type without scanning the full feature table. If an exact count of distinct features and
-proteins by type is needed, expand **Exact feature coverage** and request the calculation;
-this can take several minutes on large campaigns.
+The **Overview** page separates comparisons with decision-candidate discovery signatures
+from those with insufficient samples or no positive result. It reports held-out validation
+counts, a class shortlist and published row counts. Automated labels remain provisional
+until scientific review. Exact full-table feature coverage is available on request and may
+take several minutes.
 
 For the current HPC test, copy the result directory recursively after it has completed:
 
@@ -36,18 +37,18 @@ rsync -avP HPC_LOGIN:/gpfs/uod-scale-01/cluster/gjb_lab/pthorpe001/2026_E3_prota
 Navigate to **Model & alignment explorer**. Select a protein and target-versus-background
 comparison. The ranked mapped-region table, a 2D sequence heat map, and a rotatable 3D Cα
 backbone show positional evidence. Recorded feature intervals and exact k-mer occurrences
-require a positive target-minus-background prevalence difference and q-value ≤ 0.05 at the
-chosen evidence tier before they colour a residue. Select discovery, held-out within-comparison validation,
-or held-out study-wide validation. The stronger tiers require the corresponding validated
-evidence class and q-value.
+require positive target-minus-background prevalence, a decision-candidate evidence class
+and q-value ≤ 0.05 at the chosen tier before they colour a residue. The strongest
+available tier is selected by default; choose discovery, held-out within-comparison
+validation, or held-out study-wide validation explicitly when comparing views.
 The comparison chooser shows completed positive significant signatures first and flags
 comparisons with none. The suggested protein list contains target-class members with packaged
 coordinates, ranked by model confidence; an exact protein ID box can inspect any other member.
 The **All comparison outcomes** expander lists every configured comparison and its
 published status. **Comparison for protein and model mapping** controls the positional
-colours and alignment. The **Most significant association results** table has a separate
-multi-select, initially including every comparison with positive significant signatures
-(up to ten). Its balanced preview shows 20 rows per comparison by default, ranked by
+colours and alignment. The optional **Compare ranked signatures across classes** section
+has a separate multi-select, initially including every comparison with positive decision
+candidates (up to ten). Its balanced preview shows 20 rows per comparison, ranked by
 discovery q-value then target prevalence difference; increase the per-comparison limit
 when needed. The table and cross-class plot can be downloaded. The **Signature explorer**
 provides the complete feature table for an individual comparison, including rows that
@@ -58,11 +59,13 @@ enriched feature**, not individually measured residue-level q-values. Whole-mode
 clusters still have no positional interval to project.
 The positional view starts with the 50 most significant positive feature memberships for the
 chosen evidence tier; the control can show 10 to 1,000. This prevents thousands of overlapping
-short k-mers from making an entire sequence uniformly red. The ranked signature table above
-remains separately available for broader inspection.
-The **Structures & folds** page separately charts model eligibility and reports when named
-fold assignments are absent; alignment-derived structural clusters remain browsable without
-implying that they are curated fold names.
+short k-mers from making an entire sequence uniformly red. The **Signature explorer**
+separately shows a shortlist across evidence families and its complete ledger. `k3:LPD`
+means leucine–proline–aspartate; `SC_...` is a whole-model similarity-group fingerprint,
+not a local motif. The app explains these IDs in context.
+The **Structures & folds** page charts model eligibility and reports when named folds are
+absent. Its TM-score/coverage graphic bins every recorded pair with complete values; a
+score-ranked top-5,000 pair table is an optional inspection, not a distribution sample.
 At overlapping positions, the smallest q-value wins. White means **no significant mapped
 evidence**, not an assessed absence; blue marks weaker significant evidence, and red stronger
 evidence. The colour scale saturates at q ≤ 10⁻⁸. The view identifies positional intervals
@@ -81,10 +84,11 @@ search link lets you upload the downloaded PDB or mmCIF to search other structur
 optional model fetch needs internet access from the machine running Streamlit; the rest
 of the app uses local data.
 
-The **Paired sequence alignment** panel selects a published structural comparison, shows its
+The optional **Paired sequence alignment** panel selects a published structural comparison, shows its
 TM-score and bilateral coverage, and computes an exploratory global **sequence** alignment
 (+2 match, −1 substitution, −2 gap). Its alignment columns are coloured from the same
-positional enrichment evidence for each protein, and the full aligned FASTA and alignment
+positional enrichment evidence for each protein. A letter strip shows amino acids,
+gaps and exact matches. The full aligned FASTA and alignment
 table are downloadable. The result currently publishes **aggregate** structural comparisons
 and whole-model clusters, not residue-pair alignments, so the app never labels these columns
 as structurally superposed. The external EMERALD and RCSB pairwise links allow a further
@@ -92,7 +96,9 @@ alignment analysis; a given computed structure might be absent from RCSB.
 
 ## Optional pocket and residue-level annotations
 
-The present structural-motif run does not publish pockets. If a separate analysis provides
+The present signature run does not publish enrichment-tested residue-level pockets.
+Imported Stage 09b pocket-assessment rows are exploratory context, not localisable
+campaign signatures. If a separate analysis provides
 residue intervals with association statistics, upload a UTF-8 TSV using **Optional residue
 annotations**. The template button in the app writes the exact header:
 
@@ -109,8 +115,9 @@ published signature q-values. Files are limited to 10 MiB and 10,000 rows. The u
 held in memory and does not alter the checksum-verified result; the displayed annotations
 and plots have downloads.
 
-The sidebar **How to use this page** menu and **Glossary & help** page explain evidence
-states, structural terms, colour mapping and interpretation. Every visible table offers
+Each page has expandable purpose and methods/limitations notes; each graph has an
+interpretation box. The sidebar **How to use this page** menu and **Glossary & help** page
+also explain evidence states. Every visible table offers
 an immediate TSV download and a **Prepare formatted Excel workbook** button; prepared
 workbooks have frozen headings, filters, types, readable widths and a column dictionary.
 Interactive plots export PNG, PDF and self-contained HTML on demand. The

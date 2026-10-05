@@ -14,6 +14,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 import protein_signature_app.app as application_module
+from protein_signature_app.viewer_help import PAGE_HELP, PAGE_METHODS
 from protein_signatures.errors import PublicationError
 
 APP_TEST_TIMEOUT_SECONDS = max(
@@ -125,6 +126,21 @@ class _FakeStreamlit:
 
         return options[0]
 
+    def radio(self, _label: str, options: tuple[str, ...], **_kwargs: object) -> str:
+        """Select the first evidence section."""
+
+        return options[0]
+
+    def checkbox(self, *_args: object, **_kwargs: object) -> bool:
+        """Leave optional, expensive evidence panels closed by default."""
+
+        return False
+
+    def text_input(self, *_args: object, **_kwargs: object) -> str:
+        """Leave optional exact-ID overrides unset."""
+
+        return ""
+
     def multiselect(
         self,
         _label: str,
@@ -166,7 +182,7 @@ def test_every_application_page_renders_and_stays_synchronised(
         assert [item.value for item in test_app.title if item.value == "Protein signature analysis"]
         assert [(item.label, item.value) for item in test_app.metric][:2] == [
             ("Proteins", "24"),
-            ("Candidate signatures", "195"),
+            ("Signature records", "195"),
         ]
         for page, title in (
             ("Signature explorer", "Signature explorer"),
@@ -277,6 +293,33 @@ def test_overview_uses_published_counts_and_defers_full_feature_scan(
         """Return only the small signature summary unless coverage is requested."""
 
         queries.append(sql)
+        if "FROM comparisons c LEFT JOIN signatures s" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "comparison_id": "fbox",
+                        "display_name": "F-box versus controls",
+                        "target_label_ids": "fbox",
+                        "enriched_count": 97,
+                        "validated_within_count": 12,
+                        "validated_study_count": 7,
+                        "complete_count": 97,
+                        "insufficient_count": 0,
+                        "no_signature_count": 0,
+                    },
+                    {
+                        "comparison_id": "unresolved",
+                        "display_name": "Unresolved versus controls",
+                        "target_label_ids": "unresolved",
+                        "enriched_count": 0,
+                        "validated_within_count": 0,
+                        "validated_study_count": 0,
+                        "complete_count": 0,
+                        "insufficient_count": 1,
+                        "no_signature_count": 0,
+                    },
+                ]
+            )
         if "FROM signatures" in sql:
             return pd.DataFrame({"feature_type": ["AMINO_ACID_KMER"], "signature_count": [97]})
         return pd.DataFrame(
@@ -298,8 +341,9 @@ def test_overview_uses_published_counts_and_defers_full_feature_scan(
     application_module._render_overview(
         database=Path("example.duckdb"), metadata=metadata, inventory_identity="snapshot"
     )
-    assert len(queries) == 1 and "FROM signatures" in queries[0]
-    assert len(figures) == 1
+    assert len(queries) == 2 and "FROM signatures" in queries[1]
+    assert len(figures) == 2
+    assert any("insufficient" in message.lower() for message in fake.messages)
     assert (
         application_module._overview_count(
             database=Path("unused"), metadata=metadata, table_name="proteins"
@@ -311,8 +355,8 @@ def test_overview_uses_published_counts_and_defers_full_feature_scan(
     application_module._render_overview(
         database=Path("example.duckdb"), metadata=metadata, inventory_identity="snapshot"
     )
-    assert len(queries) == 3 and "FROM features" in queries[-1]
-    assert len(figures) == 3
+    assert len(queries) == 5 and "FROM features" in queries[-1]
+    assert len(figures) == 5
 
 
 def test_explainable_page_renders_complete_and_non_fitted_models(
@@ -329,6 +373,17 @@ def test_explainable_page_renders_complete_and_non_fitted_models(
     def model_frames(*, sql: str, **_kwargs: object) -> pd.DataFrame:
         """Return the canonical frame requested by each XAI query."""
 
+        if "FROM ml_models m" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "comparison_id": "cmp",
+                        "display_name": "Modelled class",
+                        "status": "COMPLETE",
+                        "validation_target_count": 2,
+                    }
+                ]
+            )
         if "FROM ml_models" in sql:
             return pd.DataFrame(
                 [
@@ -399,12 +454,23 @@ def test_explainable_page_renders_complete_and_non_fitted_models(
     def incomplete_model(*, sql: str, **_kwargs: object) -> pd.DataFrame:
         """Return an explicit non-fitted model state."""
 
+        if "FROM ml_models m" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "comparison_id": "cmp",
+                        "display_name": "Underpowered class",
+                        "status": "INSUFFICIENT_SAMPLE_SIZE",
+                        "validation_target_count": 0,
+                    }
+                ]
+            )
         assert "FROM ml_models" in sql
         return pd.DataFrame([{"status": "INSUFFICIENT_SAMPLE_SIZE"}])
 
     monkeypatch.setattr(application_module, "query_dataframe", incomplete_model)
     application_module._render_explainable_ml(database=database)
-    assert any("non-fitted" in message for message in fake.messages)
+    assert any("No fitted model" in message for message in fake.messages)
 
 
 def test_shap_asset_rendering_is_result_scoped(
@@ -464,6 +530,9 @@ def test_shap_asset_rendering_is_result_scoped(
         == png
     )
     assert any("PNG" in message for message in fake.messages)
+    assert any(
+        "Each point represents one explained protein" in message for message in fake.messages
+    )
     assert fake.messages.count("download_button") == 3
     with pytest.raises(application_module.InputValidationError, match="result-relative"):
         application_module._result_asset_path(
@@ -626,6 +695,33 @@ def test_table_and_plot_renderers_always_offer_declared_downloads(
     assert sum("Figure object" in message for message in fake.messages) == rendered_plot_count + 1
 
 
+def test_signature_table_formats_screen_without_changing_numeric_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Readable scientific notation must not alter raw TSV statistics."""
+
+    fake = _FakeStreamlit()
+    visible: list[pd.DataFrame] = []
+    downloads: list[bytes] = []
+    fake.dataframe = lambda frame, **_kwargs: visible.append(frame)
+    fake.download_button = lambda **kwargs: downloads.append(kwargs["data"])
+    monkeypatch.setattr(application_module, "st", fake)
+    application_module._render_downloadable_table(
+        frame=pd.DataFrame(
+            {
+                "feature_id": ["k3:LPD"],
+                "discovery_q_value": [0.0000000123],
+                "discovery_prevalence_difference": [0.25],
+            }
+        ),
+        download_name="scientific_evidence",
+    )
+    assert visible[0].iloc[0]["discovery_q_value"] == "1.23e-08"
+    assert visible[0].iloc[0]["discovery_prevalence_difference"] == "+0.250"
+    assert b"+0.250" not in downloads[0]
+    assert b"0.25" in downloads[0]
+
+
 def test_packaged_mmcif_model_reaches_the_interactive_trace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -703,14 +799,59 @@ def test_ranked_associations_shows_fbox_u_box_and_ring_together(
             "status VARCHAR)"
         )
         rows = [
-            ("FBOX", "AMINO_ACID_KMER", f"f{i}", f"F-box {i}", 0.001, 0.3, "DISCOVERY", "COMPLETE")
+            (
+                "FBOX",
+                "AMINO_ACID_KMER",
+                f"f{i}",
+                f"F-box {i}",
+                0.001,
+                0.3,
+                "DECISION_CANDIDATE__DISCOVERY_ONLY",
+                "COMPLETE",
+            )
             for i in range(25)
         ]
         rows += [
-            ("UBOX", "AMINO_ACID_KMER", "u1", "U-box", 0.002, 0.2, "DISCOVERY", "COMPLETE"),
-            ("RING", "AMINO_ACID_KMER", "r1", "RING", 0.003, 0.1, "DISCOVERY", "COMPLETE"),
-            ("RING", "AMINO_ACID_KMER", "r2", "Not significant", 0.5, 0.2, "DISCOVERY", "COMPLETE"),
-            ("UBOX", "AMINO_ACID_KMER", "u2", "Depleted", 0.001, -0.2, "DISCOVERY", "COMPLETE"),
+            (
+                "UBOX",
+                "AMINO_ACID_KMER",
+                "u1",
+                "U-box",
+                0.002,
+                0.2,
+                "DECISION_CANDIDATE__DISCOVERY_ONLY",
+                "COMPLETE",
+            ),
+            (
+                "RING",
+                "AMINO_ACID_KMER",
+                "r1",
+                "RING",
+                0.003,
+                0.1,
+                "DECISION_CANDIDATE__DISCOVERY_ONLY",
+                "COMPLETE",
+            ),
+            (
+                "RING",
+                "AMINO_ACID_KMER",
+                "r2",
+                "Not significant",
+                0.5,
+                0.2,
+                "DECISION_CANDIDATE__DISCOVERY_ONLY",
+                "COMPLETE",
+            ),
+            (
+                "UBOX",
+                "AMINO_ACID_KMER",
+                "u2",
+                "Depleted",
+                0.001,
+                -0.2,
+                "DECISION_CANDIDATE__DISCOVERY_ONLY",
+                "COMPLETE",
+            ),
         ]
         connection.executemany("INSERT INTO signatures VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
@@ -763,6 +904,200 @@ def test_comparison_choices_use_display_values_and_disambiguate_names() -> None:
         "Shared label [first]": "first",
         "Shared label [second]": "second",
     }
+
+
+def test_comparison_outcomes_keep_unanalysed_separate_from_non_significant(
+    tmp_path: Path,
+) -> None:
+    """Discovery, validation and inadequate samples must remain distinct."""
+
+    database = tmp_path / "comparison_outcomes.duckdb"
+    with duckdb.connect(str(database)) as connection:
+        connection.execute(
+            "CREATE TABLE comparisons (comparison_id VARCHAR, display_name VARCHAR, "
+            "target_label_ids VARCHAR)"
+        )
+        connection.execute(
+            "CREATE TABLE signatures (comparison_id VARCHAR, status VARCHAR, "
+            "discovery_prevalence_difference DOUBLE, discovery_q_value DOUBLE, "
+            "evidence_class VARCHAR)"
+        )
+        connection.executemany(
+            "INSERT INTO comparisons VALUES (?, ?, ?)",
+            [
+                ("signal", "Signal class", "signal"),
+                ("weak", "Weak class", "weak"),
+                ("small", "Underpowered class", "small"),
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO signatures VALUES (?, ?, ?, ?, ?)",
+            [
+                ("signal", "COMPLETE", 0.3, 0.001, "DECISION_CANDIDATE__VALIDATED_STUDY_WIDE"),
+                ("signal", "COMPLETE", 0.1, 0.03, "DECISION_CANDIDATE__DISCOVERY_ONLY"),
+                ("signal", "COMPLETE", 0.5, 0.0001, "QC_TECHNICAL_NON_BIOLOGICAL__DISCOVERY_ONLY"),
+                ("weak", "COMPLETE", -0.2, 0.04, "DECISION_CANDIDATE__DISCOVERY_ONLY"),
+                ("small", "INSUFFICIENT_SAMPLE_SIZE", None, None, ""),
+            ],
+        )
+    outcomes = application_module._comparison_outcomes(database=database).set_index("comparison_id")
+    assert outcomes.loc["signal", "enriched_count"] == 2
+    assert outcomes.loc["signal", "validated_study_count"] == 1
+    assert outcomes.loc["weak", "analysis_status"] == "COMPLETE_NO_POSITIVE_ENRICHMENT"
+    assert outcomes.loc["small", "analysis_status"] == "INSUFFICIENT_SAMPLE_SIZE"
+
+
+def test_matched_control_coverage_counts_targets_not_only_controls(tmp_path: Path) -> None:
+    """Multiple controls for one target must not conceal an unmatched target."""
+
+    database = tmp_path / "matched_controls.duckdb"
+    with duckdb.connect(str(database)) as connection:
+        connection.execute(
+            "CREATE TABLE control_matching_audit (background_label_id VARCHAR, "
+            "target_unit_id VARCHAR, control_unit_id VARCHAR, status VARCHAR)"
+        )
+        connection.executemany(
+            "INSERT INTO control_matching_audit VALUES (?, ?, ?, ?)",
+            [
+                ("background", "target_1", "control_a", "MATCHED"),
+                ("background", "target_1", "control_b", "MATCHED"),
+                ("background", "target_2", "", "UNMATCHED"),
+            ],
+        )
+    coverage = application_module._matched_control_coverage(database=database).iloc[0]
+    assert coverage["target_units"] == 2
+    assert coverage["covered_target_units"] == 1
+    assert coverage["matched_control_units"] == 2
+    assert coverage["target_coverage_fraction"] == 0.5
+
+
+def test_comparison_coverage_uses_published_analysis_cohorts(tmp_path: Path) -> None:
+    """Shared background pools must retain distinct comparison denominators."""
+
+    database = tmp_path / "cohorts.duckdb"
+    with duckdb.connect(str(database)) as connection:
+        connection.execute("CREATE TABLE comparisons (comparison_id VARCHAR, display_name VARCHAR)")
+        connection.executemany(
+            "INSERT INTO comparisons VALUES (?, ?)",
+            [("fbox", "F-box class"), ("other", "Other receptor class")],
+        )
+    counts = {
+        "target_protein_count": 4,
+        "control_protein_count": 8,
+        "matched_target_unit_count": 2,
+        "excluded_unmatched_target_unit_count": 3,
+        "excluded_unmatched_target_protein_count": 6,
+        "control_unit_count": 4,
+    }
+    other = {**counts, "matched_target_unit_count": 1, "excluded_unmatched_target_unit_count": 0}
+    metadata = {
+        "automated_label_evidence": {"matched_comparison_cohorts": {"fbox": counts, "other": other}}
+    }
+    coverage = application_module._matched_comparison_coverage(
+        database=database, metadata=metadata
+    ).set_index("comparison_id")
+    assert coverage.loc["fbox", "target_units"] == 5
+    assert coverage.loc["fbox", "target_coverage_fraction"] == 0.4
+    assert coverage.loc["other", "target_units"] == 1
+    assert coverage.loc["other", "target_coverage_fraction"] == 1.0
+    assert coverage.loc["fbox", "display_name"] == "F-box class"
+    assert application_module._matched_comparison_coverage(database=database, metadata={}).empty
+
+
+def test_feature_meaning_and_page_methods_are_visible() -> None:
+    """Opaque feature hashes and sequence words need different explanations."""
+
+    assert "Leu–Pro–Asp" in application_module._feature_explanation(
+        feature_type="AMINO_ACID_KMER", feature_id="k3:LPD", feature_name="k3 LPD"
+    )
+    assert "not a named fold" in application_module._feature_explanation(
+        feature_type="STRUCTURE_CLUSTER", feature_id="SC_123", feature_name="Foldseek group"
+    )
+    assert set(PAGE_METHODS) == set(PAGE_HELP)
+    assert all("**Method.**" in note and "**Limit.**" in note for note in PAGE_METHODS.values())
+
+
+def test_signature_evidence_respects_held_out_and_study_wide_tiers() -> None:
+    """A strong discovery cannot silently become a validated candidate."""
+
+    frame = pd.DataFrame(
+        [
+            {
+                "feature_type": "AMINO_ACID_KMER",
+                "feature_id": "k3:AAB",
+                "status": "COMPLETE",
+                "discovery_q_value": 0.001,
+                "discovery_prevalence_difference": 0.4,
+                "validation_q_value": 0.01,
+                "validation_study_q_value": 0.2,
+                "validation_prevalence_difference": 0.1,
+                "evidence_class": "DECISION_CANDIDATE__VALIDATED_WITHIN_COMPARISON",
+            },
+            {
+                "feature_type": "STRUCTURE_CLUSTER",
+                "feature_id": "sc:strong",
+                "status": "COMPLETE",
+                "discovery_q_value": 0.02,
+                "discovery_prevalence_difference": 0.3,
+                "validation_q_value": 0.01,
+                "validation_study_q_value": 0.04,
+                "validation_prevalence_difference": 0.2,
+                "evidence_class": "DECISION_CANDIDATE__VALIDATED_STUDY_WIDE",
+            },
+            {
+                "feature_type": "STRUCTURE_AVAILABLE",
+                "feature_id": "technical",
+                "status": "COMPLETE",
+                "discovery_q_value": 0.0001,
+                "discovery_prevalence_difference": 0.5,
+                "validation_q_value": 0.001,
+                "validation_study_q_value": 0.001,
+                "validation_prevalence_difference": 0.5,
+                "evidence_class": "QC_TECHNICAL_NON_BIOLOGICAL__VALIDATED_STUDY_WIDE",
+            },
+        ]
+    )
+    assert len(application_module._signature_evidence(frame=frame, tier="Discovery")) == 2
+    assert (
+        len(application_module._signature_evidence(frame=frame, tier="Validated within comparison"))
+        == 2
+    )
+    study = application_module._signature_evidence(frame=frame, tier="Validated study-wide")
+    assert study["feature_id"].tolist() == ["sc:strong"]
+    with pytest.raises(application_module.InputValidationError, match="Unknown signature"):
+        application_module._signature_evidence(frame=frame, tier="unsupported")
+
+
+def test_alignment_residue_strip_shows_letters_without_injecting_identifiers() -> None:
+    """The alignment should be readable while treating supplied IDs as plain text."""
+
+    window = [
+        {
+            "reference_residue": "A",
+            "reference_position": 1,
+            "reference_enrichment": 1.0,
+            "comparison_residue": "A",
+            "comparison_position": 4,
+            "comparison_enrichment": 0.0,
+            "identity": True,
+        },
+        {
+            "reference_residue": "-",
+            "reference_position": None,
+            "reference_enrichment": 0.0,
+            "comparison_residue": "G",
+            "comparison_position": 5,
+            "comparison_enrichment": 0.2,
+            "identity": False,
+        },
+    ]
+    markup = application_module._alignment_residue_strip(
+        rows=window, reference_id="<script>", comparison_id="partner"
+    )
+    assert "&lt;script&gt;" in markup
+    assert "<script>" not in markup
+    assert "Identity" in markup and "gap" in markup
+    assert "hsl(0, 68%, 78%)" in markup
 
 
 def test_structure_summary_distinguishes_absent_named_folds(
@@ -827,6 +1162,22 @@ def test_page_renderers_cover_sparse_and_imported_evidence_branches(
     def sparse_signature_query(*, sql: str, **_kwargs: object) -> pd.DataFrame:
         """Return a signature with no plottable effect and an empty ledger."""
 
+        if "FROM comparisons c LEFT JOIN signatures s" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "comparison_id": "cmp",
+                        "display_name": "Sparse comparison",
+                        "target_label_ids": "target",
+                        "enriched_count": 0,
+                        "validated_within_count": 0,
+                        "validated_study_count": 0,
+                        "complete_count": 1,
+                        "insufficient_count": 0,
+                        "no_signature_count": 0,
+                    }
+                ]
+            )
         if "FROM signatures" in sql:
             return pd.DataFrame(
                 {
@@ -847,6 +1198,17 @@ def test_page_renderers_cover_sparse_and_imported_evidence_branches(
     def sparse_model_query(*, sql: str, **_kwargs: object) -> pd.DataFrame:
         """Return a fitted model with no importance or explained samples."""
 
+        if "FROM ml_models m" in sql:
+            return pd.DataFrame(
+                [
+                    {
+                        "comparison_id": "cmp",
+                        "display_name": "No validation class",
+                        "status": "COMPLETE_NO_VALIDATION",
+                        "validation_target_count": 0,
+                    }
+                ]
+            )
         if "FROM ml_models" in sql:
             return pd.DataFrame(
                 [
@@ -902,7 +1264,7 @@ def test_page_renderers_cover_sparse_and_imported_evidence_branches(
                         "family": "",
                         "active_site_expected": "UNKNOWN",
                         "active_site_residue": "",
-                        "reviewed_proteins": 0,
+                        "observed_proteins": 0,
                     }
                 ]
             )
@@ -910,7 +1272,7 @@ def test_page_renderers_cover_sparse_and_imported_evidence_branches(
 
     monkeypatch.setattr(application_module, "query_dataframe", empty_class_query)
     application_module._render_classes(database=database)
-    assert any("No reviewed-positive" in message for message in fake.messages)
+    assert any("No positive profile" in message for message in fake.messages)
 
     def structural_query(*, sql: str, **_kwargs: object) -> pd.DataFrame:
         """Return non-plottable pairwise rows and one imported summary."""
@@ -923,26 +1285,23 @@ def test_page_renderers_cover_sparse_and_imported_evidence_branches(
             return pd.DataFrame(columns=("cluster_id", "total_members"))
         if "FROM structure_comparisons" in sql:
             return pd.DataFrame(
-                {
-                    "protein_a_id": ["p1"],
-                    "protein_b_id": ["p2"],
-                    "comparison_tool": ["test"],
-                    "tm_score": [None],
-                    "coverage_a": [None],
-                    "coverage_b": [None],
-                    "rmsd_angstrom": [None],
-                }
+                columns=(
+                    "comparison_tool",
+                    "minimum_coverage_bin",
+                    "tm_score_bin",
+                    "comparison_count",
+                )
             )
         return pd.DataFrame([{"cluster_id": "c1", "group_support_fraction": 0.8}])
 
     monkeypatch.setattr(application_module, "query_dataframe", structural_query)
     application_module._render_structures(database=database)
-    assert any("Imported within-group" in message for message in fake.messages)
+    assert any("Imported exploratory" in message for message in fake.messages)
 
     def orthology_query(*, sql: str, **_kwargs: object) -> pd.DataFrame:
         """Return count frames, a partition row and non-empty group context."""
 
-        if "count(DISTINCT" in sql:
+        if "SELECT count(DISTINCT" in sql:
             return pd.DataFrame({"n": [0]})
         if "FROM partitions" in sql:
             return pd.DataFrame(
