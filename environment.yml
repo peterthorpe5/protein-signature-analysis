@@ -5,6 +5,7 @@ channels:
   - nodefaults
 dependencies:
   - python=3.11
+  - biopython>=1.84,<2
   - gawk
   - duckdb>=1.4,<2
   - foldseek

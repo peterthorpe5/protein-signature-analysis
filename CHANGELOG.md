@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-10-22
+
+- Add a generic guided protein research workbench and a separate durable server queue.
+- Integrate exact DeepClust mapping, indexed complete retrieval, global representative
+  similarity searches and individually audited member-to-seed screening.
+- Add bounded MAFFT alignment/conservation, interactive phylograms with FastTree,
+  local Pfam HMMER scans and frozen-signature evidence checks with unknown states.
+- Export exact-sequence-deduplicated expansion inputs, original-ID provenance and
+  unreviewed curation templates without changing completed campaigns or assigning functions.
+- Add an independent de.NBI environment, E3 profile-path import, diagnostics and a Mac
+  SSH/tmux launcher using the relocated Miniforge and large data disk.
+- Preserve result-only viewer launch and add workbench-only launch without a reference result.
+- Add focused fixture, corruption, queue, CLI, UI, viewer and launcher tests.
 
 - Add optional discovery-only, prevalence-ranked k-mer vocabulary selection for
   longer exact strings with balanced length budgets, deterministic tie-breaking

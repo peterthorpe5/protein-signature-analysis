@@ -4,6 +4,8 @@ set -Eeuo pipefail
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
+bash -n launch_protein_signature_denbi.sh
+
 bash -n \
     run_tests.sh \
     run_protein_signature_analysis.sh \

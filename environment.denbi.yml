@@ -1,0 +1,15 @@
+name: protein_signature_analysis
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip
+  - diamond>=2.1
+  - mafft
+  - fasttree
+  - hmmer
+  - tmux
+  - pip:
+      - -e .[app,dev]

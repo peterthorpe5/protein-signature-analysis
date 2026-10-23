@@ -12,6 +12,13 @@ from protein_signatures.errors import InputValidationError
 from protein_signatures.result_help import COLUMN_DEFINITIONS, column_definition
 
 PAGE_METHODS = {
+    "Protein research workbench": (
+        "Exact mapping finds existing database membership. Sequence similarity proposes "
+        "related representatives, and row-group retrieval checks complete family counts. "
+        "Screen individual members against the original seeds before preparing a new "
+        "campaign. Recompute homology blocks and review labels and controls; do not use "
+        "related sequences as independent held-out validation."
+    ),
     "Overview": (
         "Counts describe published records. Completed signature rows may represent the same "
         "feature in several comparisons and can include target depletion. Discovery selects "
@@ -511,6 +518,7 @@ LIMIT_SPECS = (
 )
 
 PAGE_TERMS = {
+    "Protein research workbench": ("Discovery partition", "Validation partition", "Feature ID"),
     "Overview": ("Independent block", "FDR", "Discovery partition", "Validation partition"),
     "Signature explorer": ("Fisher exact test", "q-value", "Study-wide q-value", "Wilson interval"),
     "Explainable prediction": ("ROC", "AUC", "AP / average precision / PR AUC", "MCC", "SHAP"),

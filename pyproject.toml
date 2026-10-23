@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "protein-signature-analysis"
-version = "0.2.0"
+version = "0.3.0"
 description = "Reproducible discovery and visualisation of protein-family sequence and structural signatures"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,6 +49,7 @@ Issues = "https://github.com/peterthorpe5/protein-signature-analysis/issues"
 
 [project.optional-dependencies]
 app = [
+  "biopython>=1.84,<2",
   "kaleido>=1,<2",
   "plotly>=6,<7",
   "streamlit>=1.52,<2",
@@ -73,6 +74,7 @@ workflow = [
 [project.scripts]
 protein-signatures = "protein_signatures.cli:main"
 protein-signature-app = "protein_signature_app.launcher:main"
+protein-signature-workbench = "protein_signatures.workbench.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

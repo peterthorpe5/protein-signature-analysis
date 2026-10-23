@@ -55,7 +55,7 @@ def test_every_canonical_field_and_page_term_has_an_explicit_glossary_entry() ->
     missing = fields - {term for category, term in definitions if category == "Table fields"}
     assert not missing, f"Missing canonical definitions: {sorted(missing)}"
     assert set(PAGE_METHODS) == set(PAGE_TERMS) == set(PAGE_HELP)
-    assert len(PAGE_HELP) == 11
+    assert len(PAGE_HELP) == 12
     assert all(set(page_terms).issubset(terms) for page_terms in PAGE_TERMS.values())
     assert all(column_definition(column_name=name) for name in fields)
     assert len(rows) == len(definitions)

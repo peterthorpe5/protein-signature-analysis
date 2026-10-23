@@ -6,6 +6,8 @@ include README.md
 include RELEASE_QA.md
 include SECURITY.md
 include environment.yml
+include environment.denbi.yml
+include launch_protein_signature_denbi.sh
 include run_protein_signature_analysis.sh
 include run_protein_signature_app.sh
 include run_completed_e3_workflow.sh
@@ -15,12 +17,13 @@ include start_from_inputs.sh
 include submit_protein_signature_workflow_slurm.sh
 
 recursive-include .github *.yml
-recursive-include configs *.json *.yaml
+recursive-include configs *.json *.yaml *.toml
 recursive-include docs *.md *.tsv *.txt
 recursive-include examples *.faa *.tsv *.yaml
 recursive-include profiles *.yaml
 recursive-include slurm *.sbatch
-recursive-include tests *.py
+recursive-include tests *.py *.md
+recursive-include src/protein_signatures/workbench *.md
 recursive-include workflow Snakefile E3Snakefile EvidenceSnakefile
 
 # Analysis caches can be created beneath a shipped example during local QA.  Git ignore

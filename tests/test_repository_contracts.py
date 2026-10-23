@@ -78,7 +78,7 @@ def test_documentation_local_links_and_release_metadata_exist() -> None:
                 target,
             )
     citation = yaml.safe_load((root / "CITATION.cff").read_text(encoding="utf-8"))
-    assert citation["version"] == "0.2.0"
+    assert citation["version"] == package_version
     assert (root / "CONTRIBUTING.md").is_file()
     assert (root / "SECURITY.md").is_file()
 
@@ -101,9 +101,11 @@ def test_release_versions_and_launcher_modes_are_consistent() -> None:
     assert project["scripts"] == {
         "protein-signatures": "protein_signatures.cli:main",
         "protein-signature-app": "protein_signature_app.launcher:main",
+        "protein-signature-workbench": "protein_signatures.workbench.cli:main",
     }
 
     launchers = (
+        "launch_protein_signature_denbi.sh",
         "run_tests.sh",
         "run_protein_signature_analysis.sh",
         "run_protein_signature_app.sh",

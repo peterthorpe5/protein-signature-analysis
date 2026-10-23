@@ -1,4 +1,45 @@
-# Release QA: version 0.2.0
+# Release QA: version 0.3.0
+
+QA date: 22 October 2026. Base GitHub commit:
+`647579a9c166bd5b3c356d686502b366cecdc072`.
+
+The de.NBI DeepClust workbench was implemented and checked locally. No live server
+connection, full DeepClust scan or production campaign rerun was performed. Existing
+analytical matching, partitioning and statistical algorithms were not changed.
+
+## Checks for this update
+
+- 132 focused workbench tests passed, including real Parquet/DuckDB extraction,
+  cross-row-group retrieval, exact/ambiguous/unmatched IDs, bounded streaming,
+  screening/deduplication, durable queue lifecycle and safe interrupted-job recovery.
+- Headless Streamlit tests cover all guided steps and analysis tasks. Direct action
+  tests cover seed selection, queue submission, verified downloads, alignment and tree views.
+- Frozen signature scoring passed against the small completed example campaign;
+  its reference manifest remained unchanged.
+- 128 existing help, frozen-query and repository-contract tests passed.
+- 11 existing app-routing/error/help tests and two existing launcher tests passed.
+- Branch-aware coverage for the new workbench modules: **96.23%**, above the unchanged
+  95% gate. This is focused coverage, not a claim to have rerun the complete legacy suite.
+- Ruff checks/formatting, pycodestyle, Google-style pydocstyle, compilation and shell
+  syntax passed. Wheel and source distribution builds passed; final archive checks are
+  recorded with the packaged release.
+
+DIAMOND, MAFFT, FastTree and HMMER were mocked at their executable boundaries in the
+integration tests. Short real local subprocesses exercise execution, logging, timeout
+and process-group shutdown. The SSH launcher was exercised with fake SSH/curl commands.
+Live binary/database compatibility on Sabrina remains an installation check.
+
+## Deployment scope
+
+Use `docs/DENBI_WORKBENCH.md`. Import the installed E3 research profile into a separate
+signature workspace, run diagnostics, then start with one small family. Sequence searches
+require a global representative `.dmnd` database; mapping/retrieval use the mounted
+Parquet files directly. New candidates are not automatically functional positives,
+controls or independent validation observations.
+
+The earlier 0.2.0 QA record is retained below as historical context.
+
+# Historical release QA: version 0.2.0
 
 QA date: 17 September 2026
 Candidate: `protein-signature-analysis` 0.2.0

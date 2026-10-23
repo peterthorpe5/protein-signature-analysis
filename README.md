@@ -7,7 +7,20 @@
 `protein-signature-analysis` is a standalone, protein-agnostic workflow for finding
 sequence, domain, fold and structural features that are common in—and statistically
 associated with—a reviewed protein type. It publishes an immutable, file-first scientific
-result bundle plus a read-only Streamlit application for optional interrogation.
+result bundle plus a Streamlit application for interrogation and optional family expansion.
+
+## DeepClust workbench on de.NBI
+
+Version 0.3.0 adds a guided **Protein research workbench**: choose seeds from protein
+FASTA or a completed result, map exact DeepClust membership or search global representatives,
+retrieve complete families, screen members against seeds, align sequences, infer trees,
+scan local Pfam domains and inspect frozen signature evidence. New server jobs and expanded
+campaign starters stay outside immutable reference results.
+
+Start with [de.NBI setup, Mac launch and update commands](docs/DENBI_WORKBENCH.md).
+The Mac launcher is `launch_protein_signature_denbi.sh`; it reuses the established
+Sabrina data-disk paths and imports installed resources from the E3 research profile.
+The workbench also runs without a copied completed signature result.
 
 The bundled default profile is a detailed core plant/human E3-system hierarchy. E3 is a use
 case, not an architectural assumption: a custom YAML profile can describe any protein family,

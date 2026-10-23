@@ -1,0 +1,37 @@
+# Operator configuration. Keep this outside the repository on the analysis server.
+# Easiest on Sabrina: use --action configure-denbi to import the E3 research.toml paths.
+workspace = "/home/ubuntu/data/protein_signature_research"
+index = "/replace/with/DeepClust/clust_index_RowGroup.parquet"
+sequences = "/replace/with/DeepClust/joined_with_index_RowGroupFinal.parquet"
+sequence_map = "/replace/with/DeepClust/SeqIdMapClustId.parquet"
+release = "Record the actual installed release here"
+identifier_prefixes = ["UNIPROT_", "NR_"]
+
+# Optional exact bridge: input_id,sequence_id; optional taxonomy: sequence_id,species,taxon_id.
+# TSV files are tab delimited. Reviewed taxonomy may include mapping_status=REVIEWED.
+identifier_bridge = ""
+taxonomy = ""
+
+# Required for sequence-similarity searches, but not exact mapping/retrieval.
+# Use exact release centroid identifiers as FASTA headers when building a .dmnd database.
+centroid_database = ""
+centroid_fasta = ""
+
+# Optional complete signature result, including manifest, COMPLETED and DuckDB/Parquet assets.
+# Enables canonical seed selectors and frozen reference-signature scoring.
+resource = ""
+
+diamond = "diamond"
+mafft = "mafft"
+fasttree = "FastTree"
+hmmscan = "hmmscan"
+pfam_hmm = ""
+
+threads = 4
+# DuckDB hard memory limit; DIAMOND uses a conservative block-size setting, not a hard cap.
+memory_gb = 4
+max_sequences = 2000000
+max_seed_sequences = 10000
+max_alignment_sequences = 1000
+max_alignment_cells = 5000000
+command_timeout = 86400

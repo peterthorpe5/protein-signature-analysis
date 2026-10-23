@@ -184,6 +184,12 @@ GLOSSARY = (
 )
 
 PAGE_HELP = {
+    "Protein research workbench": (
+        "Choose seed proteins, map exact DeepClust membership or search global "
+        "representatives, retrieve complete families and screen each member. "
+        "The separate worker runs persistent jobs on the analysis server. "
+        "Open Start here for the guided workflow and Jobs & results for outputs."
+    ),
     "Overview": (
         "Start with campaign scope, published counts and completed signatures. Exact "
         "feature coverage across every source row is available on request and can take "
@@ -247,6 +253,14 @@ PAGE_HELP = {
 
 
 PAGE_METHODS = {
+    "Protein research workbench": (
+        "**Method.** Exact identifier mapping and DIAMOND representative searches are "
+        "separate evidence routes. Indexed retrieval checks complete cluster counts. "
+        "Member screening measures identity and bilateral coverage against seeds. "
+        "Optional MAFFT, FastTree, Pfam and frozen-signature jobs record their inputs.\n\n"
+        "**Limit.** Related proteins are unreviewed candidates, not automatic functional "
+        "labels or independent external validation. Searches retain a bounded hit set."
+    ),
     "Overview": (
         "**Method.** Published counts describe the immutable campaign. The comparison "
         "census counts positive features at discovery q ≤ 0.05 and then separately "

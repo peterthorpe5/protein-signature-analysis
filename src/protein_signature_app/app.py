@@ -59,6 +59,7 @@ from protein_signature_app.structure_viewer import (
     significant_intervals,
 )
 from protein_signature_app.viewer_help import GLOSSARY, PAGE_HELP
+from protein_signature_app.workbench import render_workbench
 from protein_signatures.errors import InputValidationError, PublicationError
 from protein_signatures.exports import (
     dataframe_to_tsv_bytes,
@@ -68,6 +69,7 @@ from protein_signatures.exports import (
     safe_download_stem,
 )
 from protein_signatures.result_help import column_definition
+from protein_signatures.workbench.config import load_config as load_workbench_config
 
 LOGGER = logging.getLogger(__name__)
 
@@ -124,7 +126,8 @@ def main() -> None:
     """Render the complete read-only result interrogation application."""
 
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--resource", required=True, type=Path)
+    parser.add_argument("--resource", type=Path)
+    parser.add_argument("--workbench-config", type=Path)
     arguments, _ = parser.parse_known_args()
     st.set_page_config(
         page_title="Protein Signature Analysis",
@@ -142,6 +145,19 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
+    if arguments.resource is None and arguments.workbench_config is not None:
+        try:
+            workbench_profile = load_workbench_config(path=arguments.workbench_config)
+            if workbench_profile.resource:
+                arguments.resource = Path(workbench_profile.resource)
+        except InputValidationError as error:
+            st.error(str(error))
+            st.stop()
+    if arguments.resource is None:
+        st.sidebar.title("Protein signatures")
+        st.sidebar.caption("Protein research workbench")
+        render_workbench(config_path=arguments.workbench_config)
+        return
     try:
         inventory_identity = result_inventory_identity(resource=arguments.resource)
         database = _verified_app_database(
@@ -168,6 +184,7 @@ def main() -> None:
             "Structures & folds",
             "Model & alignment explorer",
             "Orthology & partitions",
+            "Protein research workbench",
             "Canonical data & downloads",
             "Data quality & provenance",
             "Glossary & help",
@@ -194,6 +211,8 @@ def main() -> None:
         _render_model_explorer(database=database)
     elif page == "Orthology & partitions":
         _render_orthology(database=database, metadata=metadata)
+    elif page == "Protein research workbench":
+        render_workbench(config_path=arguments.workbench_config, database=database)
     elif page == "Canonical data & downloads":
         _render_canonical_data(database=database)
     elif page == "Data quality & provenance":
