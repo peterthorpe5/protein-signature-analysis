@@ -1,4 +1,68 @@
-# Release QA: version 0.3.0
+# Release QA: version 0.5.0
+
+QA date: 12 November 2026. Cumulative source base:
+`b55ceac73d6134195446df7ebde595cad019875b` (published v0.3.0).
+Reference for the E3 workbench updates: v0.23.10,
+`9900d41c25d3a613ec441a23003c63425ff85932`.
+
+- The final focused workbench rerun passed **38 tests**. It covered exact HOG
+  scope and metadata, Streamlit handoffs, real DuckDB/Parquet partitions,
+  saved alignment and tree jobs, exact worker selection, private EBI contacts,
+  checked SSH exchange and retention with preserved results.
+- Real DIAMOND 2.2.8: a synthetic family returned a 169/170 identical residue
+  pair with 100% coverage in both proteins and a separate singleton. The
+  bounded stream command returned the same checked results and left the
+  input hash unchanged. This was a local protocol test.
+- Real FastTree 2.2.0: a three-protein tree was inferred from an existing
+  alignment. The divergence dataset passed the official Auspice v2 JSON
+  schema. The regression test verifies that the separate tree job calls
+  FastTree without invoking MAFFT again.
+- Ruff, pycodestyle, the repository's Google docstring check, Python
+  compilation, shell syntax and Git whitespace checks passed.
+- Provider requests and SSH transport to a VM were tested with local
+  fixtures. No production sequence was transferred; neither Stefan nor
+  Sabrina was connected, and no full DeepClust scan or production campaign
+  was run. The full repository coverage gate remains unchanged.
+
+Check your installed release and paths with the workbench doctor command in
+the [server guide](docs/SERVER_WORKBENCH.md). Start with a small family on
+the mounted database before running larger analyses.
+
+# Historical release QA: version 0.4.0
+
+QA date: 11 November 2026. GitHub base:
+`b55ceac73d6134195446df7ebde595cad019875b`.
+E3 viewer reference: v0.23.1,
+`245ffa9bdf068a5f91aa5658451ca1f02c549d2e`.
+
+- Targeted workbench and regression checks: **261 passed, one optional browser
+  smoke skipped**. This includes portable jobs, real Arrow/DuckDB fixtures,
+  original model hash checks, opt-in provider boundaries, exact annotation
+  coordinates, Streamlit handoffs, both launcher profiles, frozen querying
+  and the previous structural-resource contract.
+- The full legacy run was stopped during the offline campaign tests; the
+  repository-wide coverage gate was not completed. The 95% threshold is unchanged.
+- Real LoL-align: Foldseek revision `39b02b9fd8fea53a26a13ce638bfda616a0e2003`
+  matched all 76 residues of public PDB 1UBQ to a rotated/translated copy.
+  The recorded transform recovered the original coordinates; RMSD was about
+  0.009 Å. This is a software check, not a biological benchmark.
+- Real batch CLI smoke with that pair in an artificial prior E3-format table:
+  two prior method rows were retained, one new LoL comparison was computed,
+  and the original Parquet hash was unchanged. No duplicate PDBs were kept.
+- The pinned Linux AVX2 installer verified the tested archive and installed to
+  a new local prefix. Ruff, pycodestyle, pydocstyle, shell syntax, bundled JS
+  syntax and distribution builds passed.
+- API calls were simulated; no private sequence was sent. Chromium could not
+  start in the local test environment, so the rendered upstream JS viewer smoke
+  is a deployment check. The Streamlit control and HTML construction tests passed.
+- No live Stefan/Sabrina deployment, full DeepClust scan or production E3
+  structural rerun was performed. Existing results and statistics are unchanged.
+
+For the operator's first check, use a small mounted family and one known monomer
+pair, then follow [the rerun guide](docs/STRUCTURAL_RERUN.md). The release archive
+is verified against a clean copy of the stated GitHub base.
+
+# Historical release QA: version 0.3.0
 
 QA date: 22 October 2026. Base GitHub commit:
 `647579a9c166bd5b3c356d686502b366cecdc072`.

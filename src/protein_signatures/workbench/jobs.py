@@ -21,6 +21,7 @@ from protein_signatures.errors import InputValidationError
 from protein_signatures.io_utils import write_json_atomic
 
 from .config import WorkbenchConfig, config_identity
+from .storage import job_scratch
 
 LOGGER = logging.getLogger(__name__)
 OPERATIONS = (
@@ -29,13 +30,29 @@ OPERATIONS = (
     "search",
     "screen",
     "align",
+    "tree",
+    "subcluster",
     "annotate",
     "score",
     "prepare",
     "build_search",
+    "structure_pair",
+    "predict_models",
+    "annotate_proteins",
+    "import_deepclust",
 )
 JOB_PATTERN = re.compile(pattern=r"job_[0-9a-f]{32}")
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+INPUT_SUFFIXES = {
+    "family": ".fasta",
+    "alignment": ".fasta",
+    "context": ".tsv",
+    "ebi_email": ".private",
+    "seeds": ".fasta",
+    "query_model": ".model",
+    "target_model": ".model",
+    "deepclust_export": ".parquet",
+}
 
 
 def timestamp() -> str:
@@ -148,6 +165,7 @@ def submit_job(
     parameters: Mapping[str, object] | None = None,
     uploads: Mapping[str, bytes] | None = None,
     sources: Mapping[str, Mapping[str, str]] | None = None,
+    execution: str = "worker",
 ) -> str:
     """Submit named operations with private uploaded snapshots or verified source artifacts.
 
@@ -155,8 +173,9 @@ def submit_job(
         config: Trusted workspace and source profile.
         operation: Supported task name.
         parameters: JSON-serialisable scientific controls, validated by the worker.
-        uploads: At most two input FASTA snapshots named family and seeds.
+        uploads: Named, bounded FASTA, structure or DeepClust result snapshots.
         sources: Named references containing source job_id and artifact name.
+        execution: Reserve the request for an exact app-host start or the normal worker.
 
     Returns:
         Persistent job identifier.
@@ -166,22 +185,53 @@ def submit_job(
     """
     if operation not in OPERATIONS:
         raise InputValidationError("Unsupported workbench operation.")
+    if execution not in {"worker", "app"}:
+        raise InputValidationError("Choose worker or app-host execution.")
     uploaded, linked = dict(uploads or {}), dict(sources or {})
-    if set(uploaded) & set(linked) or (set(uploaded) | set(linked)) - {
-        "family",
-        "seeds",
-        "features",
-    }:
-        raise InputValidationError("Supply each named input once: family, seeds or features.")
+    if "ebi_email" in linked or ("ebi_email" in uploaded and operation != "annotate_proteins"):
+        raise InputValidationError("Supply EBI contact only as a private annotation input.")
+    if set(uploaded) & set(linked) or (set(uploaded) | set(linked)) - (
+        INPUT_SUFFIXES.keys() | {"features", "subcluster_membership"}
+    ):
+        raise InputValidationError("Supply each supported named input only once.")
+    for name, reference in linked.items():
+        expected = (
+            {"job_id", "name", "subcluster_id"}
+            if name == "subcluster_membership"
+            else {
+                "job_id",
+                "name",
+            }
+        )
+        if (
+            not isinstance(reference, Mapping)
+            or set(reference) != expected
+            or not all(isinstance(value, str) for value in reference.values())
+        ):
+            raise InputValidationError("A source reference must name an exact completed artifact.")
+    parent = linked.get("alignment" if operation == "tree" else "family")
+    if parent and "context" not in (uploaded | linked):
+        state = read_job(config=config, job_id=parent["job_id"])
+        if "family_context.tsv" in state.get("artifacts", {}):
+            linked["context"] = {"job_id": parent["job_id"], "name": "family_context.tsv"}
+    if "subcluster_membership" in linked:
+        from .subcluster_review import validate_partition_link
+
+        validate_partition_link(sources=linked)
+        state = read_job(config=config, job_id=linked["subcluster_membership"]["job_id"])
+        if state["operation"] != "subcluster":
+            raise InputValidationError("Use membership from a completed subcluster job.")
     for name, payload in uploaded.items():
         if (
-            name == "features"
+            name not in INPUT_SUFFIXES
             or not isinstance(payload, bytes)
             or not 0 < len(payload) <= MAX_UPLOAD_BYTES
         ):
             raise InputValidationError(
-                "Each protein upload must contain 1 byte to 20 MiB of FASTA."
+                "Each upload must contain 1 byte to 20 MiB of supported input data."
             )
+    if "ebi_email" in uploaded and len(uploaded["ebi_email"]) > 254:
+        raise InputValidationError("EBI contact exceeds the maximum address length.")
     # Verify source integrity before making a queue record visible.
     references = {}
     for name, reference in linked.items():
@@ -192,17 +242,22 @@ def submit_job(
     root.mkdir(parents=True, mode=0o700)
     inputs = {}
     for name, payload in uploaded.items():
-        path = root / f"{name}.fasta"
-        path.write_bytes(data=payload)
+        path = root / f"{name}{INPUT_SUFFIXES[name]}"
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, mode="wb") as handle:
+            handle.write(payload)
         inputs[name] = {"file": path.name, "sha256": sha256_file(path=path)}
     request = {
         "job_id": identifier,
         "operation": operation,
+        "execution": execution,
         "parameters": dict(parameters or {}),
         "uploads": inputs,
         "sources": references,
         "config_identity": config_identity(config=config),
-        "config": asdict(config),
+        "config": {
+            name: value for name, value in asdict(config).items() if name != "interpro_email"
+        },
         "package_version": __version__,
         "created_at": timestamp(),
     }
@@ -212,9 +267,11 @@ def submit_job(
         value={
             "job_id": identifier,
             "operation": operation,
+            "execution": execution,
             "status": "QUEUED",
             "created_at": request["created_at"],
             "request_sha256": sha256_file(path=root / "request.json"),
+            "input_jobs": {name: ref["job_id"] for name, ref in references.items()},
         },
     )
     LOGGER.info("Queued %s (%s)", identifier, operation)
@@ -237,7 +294,9 @@ def resolve_input(*, config: WorkbenchConfig, request: dict, name: str) -> Path:
     """
     if name in request["uploads"]:
         record = request["uploads"][name]
-        path = job_directory(config=config, job_id=request["job_id"]) / f"{name}.fasta"
+        path = job_directory(config=config, job_id=request["job_id"]) / (
+            f"{name}{INPUT_SUFFIXES[name]}"
+        )
     elif name in request["sources"]:
         record = request["sources"][name]
         path = artifact_path(config=config, job_id=record["job_id"], name=record["name"])
@@ -276,16 +335,20 @@ def cancel_job(*, config: WorkbenchConfig, job_id: str) -> None:
         )
 
 
-def run_next(*, config: WorkbenchConfig) -> str | None:
-    """Execute the oldest waiting job with one exclusive worker per workspace.
+def run_next(*, config: WorkbenchConfig, job_id: str | None = None) -> str | None:
+    """Execute one waiting job with one exclusive worker per workspace.
 
     Args:
         config: Worker configuration, matching the submitted snapshot.
+        job_id: Exact waiting job to start; otherwise take the oldest worker request.
 
     Returns:
         Claimed job ID or None when idle or another worker holds the lock.
     """
     from .operations import execute_job
+
+    if job_id is not None:
+        job_directory(config=config, job_id=job_id)
 
     root = Path(config.workspace)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -303,7 +366,11 @@ def run_next(*, config: WorkbenchConfig) -> str | None:
                     "Inspect interrupted/running job %s before starting more work", state["job_id"]
                 )
                 return None
-            if state["status"] == "QUEUED":
+            if state["status"] == "QUEUED" and (
+                state["job_id"] == job_id
+                if job_id is not None
+                else state.get("execution", "worker") == "worker"
+            ):
                 queued.append(state)
         if not queued:
             return None
@@ -325,7 +392,11 @@ def run_next(*, config: WorkbenchConfig) -> str | None:
                 raise InputValidationError(
                     "Package version changed after submission; submit a new job."
                 )
-            if request["job_id"] != identifier or request["operation"] != state["operation"]:
+            if (
+                request["job_id"] != identifier
+                or request["operation"] != state["operation"]
+                or request.get("execution", "worker") != state.get("execution", "worker")
+            ):
                 raise InputValidationError("Job request and queue state disagree.")
             if config_identity(config=config) != request["config_identity"]:
                 raise InputValidationError(
@@ -333,7 +404,8 @@ def run_next(*, config: WorkbenchConfig) -> str | None:
                 )
             output = directory / "outputs"
             output.mkdir(mode=0o700)
-            execute_job(config=config, request=request, output=output)
+            with job_scratch(directory=directory):
+                execute_job(config=config, request=request, output=output)
             if config_identity(config=config) != request["config_identity"]:
                 raise InputValidationError("Source metadata changed while the job was running.")
             artifacts = {}
@@ -356,6 +428,10 @@ def run_next(*, config: WorkbenchConfig) -> str | None:
                 },
             )
             state.update(status="COMPLETE", artifacts=artifacts)
+            if "family_context.json" in artifacts:
+                state["source_groups"] = json.loads(
+                    s=(output / "family_context.json").read_text(encoding="utf-8")
+                )["source_groups"]
         except Exception as error:
             LOGGER.exception("Workbench job %s failed", identifier)
             (directory / "failure.log").write_text(data=traceback.format_exc(), encoding="utf-8")

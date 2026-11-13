@@ -3,19 +3,57 @@
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 
 from protein_signatures.errors import InputValidationError
 from protein_signatures.io_utils import write_json_atomic, write_tsv_atomic
 
+from .alignment_study import tree_from_saved
 from .analysis import align_family, index_fasta, run_command, search_sequences, write_fasta
 from .catalogue import open_catalogue, resolve_ids, retrieve_clusters, source_view
 from .config import WorkbenchConfig, bounded_number
+from .context import carry_context
+from .exchange import import_result
 from .jobs import resolve_input
+from .providers import annotate_proteins, predict_models
+from .storage import temporary_root
+from .structures import compare_pair, read_model
 
 LOGGER = logging.getLogger(__name__)
+FAMILY_OPERATIONS = {
+    "align",
+    "screen",
+    "annotate",
+    "score",
+    "prepare",
+    "predict_models",
+    "annotate_proteins",
+    "subcluster",
+}
+
+
+def family_path(*, config: WorkbenchConfig, request: dict) -> Path:
+    """Resolve the saved family or an explicit audited partition of that same input."""
+    from .subcluster_review import filter_subcluster, validate_partition_link
+
+    source = resolve_input(config=config, request=request, name="family")
+    if "subcluster_membership" not in request["sources"]:
+        return source
+    identifier = validate_partition_link(sources=request["sources"])
+    destination = temporary_root(config=config) / "selected_subcluster.fasta"
+    filter_subcluster(
+        config=config,
+        fasta=source,
+        destination=destination,
+        subcluster_id=identifier,
+        membership=resolve_input(config=config, request=request, name="subcluster_membership"),
+    )
+    return destination
 
 
 def execute_job(*, config: WorkbenchConfig, request: dict, output: Path) -> None:
@@ -36,11 +74,23 @@ def execute_job(*, config: WorkbenchConfig, request: dict, output: Path) -> None
         "retrieve": {"cluster_ids"},
         "search": {"identity", "coverage", "evalue", "maximum_hits"},
         "screen": {"identity", "coverage", "evalue", "deduplicate", "taxon_ids"},
-        "align": {"selected_ids", "tree"},
+        "align": {"selected_ids", "tree", "reference_id"},
+        "tree": set(),
+        "subcluster": {"identity", "mutual_coverage", "evalue", "transport", "remote_allowed"},
         "annotate": set(),
         "score": {"comparison_ids", "include_within_comparison"},
         "prepare": set(),
         "build_search": set(),
+        "structure_pair": {"multidomain"},
+        "predict_models": {"selected_ids", "remote_allowed"},
+        "annotate_proteins": {
+            "engine",
+            "selected_ids",
+            "remote_allowed",
+            "tax_scope",
+            "target_taxon",
+        },
+        "import_deepclust": {"id_column", "sequence_column", "cluster_column", "cluster_id"},
     }
     if (
         operation not in allowed
@@ -48,7 +98,13 @@ def execute_job(*, config: WorkbenchConfig, request: dict, output: Path) -> None
         or set(parameters) - allowed[operation]
     ):
         raise InputValidationError("Unsupported operation or parameter in the job request.")
-    Path(config.workspace, "temporary").mkdir(parents=True, exist_ok=True, mode=0o700)
+    inputs = request["uploads"].keys() | request["sources"].keys()
+    context = (
+        resolve_input(config=config, request=request, name="context")
+        if "context" in inputs
+        else None
+    )
+    family = family_path(config=config, request=request) if operation in FAMILY_OPERATIONS else None
     if operation == "resolve":
         frame = resolve_ids(config=config, values=parameters.get("identifiers", []))
         frame.to_csv(path_or_buf=output / "mapping.tsv", sep="\t", index=False)
@@ -66,7 +122,7 @@ def execute_job(*, config: WorkbenchConfig, request: dict, output: Path) -> None
     elif operation == "screen":
         screen_family(
             config=config,
-            source=resolve_input(config=config, request=request, name="family"),
+            source=family,
             seeds=resolve_input(config=config, request=request, name="seeds"),
             parameters=parameters,
             output=output,
@@ -74,14 +130,31 @@ def execute_job(*, config: WorkbenchConfig, request: dict, output: Path) -> None
     elif operation == "align":
         align_family(
             config=config,
-            source=resolve_input(config=config, request=request, name="family"),
+            source=family,
+            parameters=parameters,
+            output=output,
+            context=context,
+        )
+    elif operation == "tree":
+        tree_from_saved(
+            config=config,
+            alignment=resolve_input(config=config, request=request, name="alignment"),
+            output=output,
+            context=context,
+        )
+    elif operation == "subcluster":
+        from .subclustering import subcluster
+
+        subcluster(
+            config=config,
+            source=family,
             parameters=parameters,
             output=output,
         )
     elif operation == "annotate":
         annotate_family(
             config=config,
-            source=resolve_input(config=config, request=request, name="family"),
+            source=family,
             output=output,
         )
     elif operation == "score":
@@ -92,7 +165,7 @@ def execute_job(*, config: WorkbenchConfig, request: dict, output: Path) -> None
         )
         score_family(
             config=config,
-            source=resolve_input(config=config, request=request, name="family"),
+            source=family,
             features=feature_path,
             parameters=parameters,
             output=output,
@@ -100,10 +173,68 @@ def execute_job(*, config: WorkbenchConfig, request: dict, output: Path) -> None
     elif operation == "prepare":
         prepare_campaign(
             config=config,
-            source=resolve_input(config=config, request=request, name="family"),
+            source=family,
             seeds=resolve_input(config=config, request=request, name="seeds"),
             output=output,
         )
+    elif operation == "structure_pair":
+        compare_pair(
+            config=config,
+            output=output,
+            query=read_model(
+                path=resolve_input(config=config, request=request, name="query_model")
+            ),
+            target=read_model(
+                path=resolve_input(config=config, request=request, name="target_model")
+            ),
+            multidomain=parameters.get("multidomain", True),
+        )
+    elif operation == "predict_models":
+        predict_models(
+            config=config,
+            output=output,
+            parameters=parameters,
+            source=family,
+        )
+    elif operation == "annotate_proteins":
+        effective = config
+        if "ebi_email" in inputs:
+            if parameters.get("engine") != "interpro_remote":
+                raise InputValidationError("A private contact is only used for EBI annotation.")
+            email = (
+                resolve_input(config=config, request=request, name="ebi_email")
+                .read_text(encoding="utf-8")
+                .strip()
+            )
+            if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or not email.isascii():
+                raise InputValidationError("Enter a valid contact email for EBI annotation.")
+            effective = replace(config, interpro_email=email)
+        annotate_proteins(
+            config=effective,
+            output=output,
+            parameters=parameters,
+            source=family,
+        )
+    elif operation == "import_deepclust":
+        import_result(
+            output=output,
+            parameters=parameters,
+            source=resolve_input(config=config, request=request, name="deepclust_export"),
+        )
+    contextual_outputs = {
+        "search": "seeds.fasta",
+        "screen": "candidates.fasta",
+        "prepare": "expanded.fasta",
+        "subcluster": "sequences.fasta",
+        "annotate": "sequences.fasta",
+        "score": "sequences.fasta",
+        "predict_models": "model_inputs.fasta",
+        "annotate_proteins": "annotation_input.fasta",
+    }
+    if context is not None and operation in contextual_outputs:
+        sequences = output / contextual_outputs[operation]
+        if sequences.stat().st_size:
+            carry_context(config=config, context=context, sequences=sequences, output=output)
     LOGGER.info("Finished workbench operation %s", operation)
 
 
@@ -267,26 +398,28 @@ def screen_family(
             query="SELECT sequence_id,sequence FROM seeds ORDER BY sequence_id",
             path=output / "seeds.fasta",
         )
-        run_command(
-            config=config,
-            output=output,
-            arguments=[
-                config.diamond,
-                "makedb",
-                "--in",
-                str(output / "seeds.fasta"),
-                "--db",
-                str(output / "seed_database"),
-            ],
-        )
-        hits = search_sequences(
-            config=config,
-            query=output / "family_input.fasta",
-            database=str(output / "seed_database.dmnd"),
-            parameters=parameters,
-            output=output,
-            maximum_hits=1,
-        )
+        with TemporaryDirectory(dir=temporary_root(config=config), prefix="screen_") as directory:
+            database = Path(directory) / "seed_database"
+            run_command(
+                config=config,
+                output=output,
+                arguments=[
+                    config.diamond,
+                    "makedb",
+                    "--in",
+                    str(output / "seeds.fasta"),
+                    "--db",
+                    str(database),
+                ],
+            )
+            hits = search_sequences(
+                config=config,
+                query=output / "family_input.fasta",
+                database=str(database.with_suffix(".dmnd")),
+                parameters=parameters,
+                output=output,
+                maximum_hits=1,
+            )
         source_view(connection=connection, path=str(hits), name="hits")
         if (
             connection.execute(

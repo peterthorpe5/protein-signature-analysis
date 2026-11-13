@@ -5,6 +5,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 bash -n launch_protein_signature_denbi.sh
+bash -n scripts/install_foldseek_lolalign.sh
 
 bash -n \
     run_tests.sh \

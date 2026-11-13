@@ -11,6 +11,8 @@ identifier_prefixes = ["UNIPROT_", "NR_"]
 # TSV files are tab delimited. Reviewed taxonomy may include mapping_status=REVIEWED.
 identifier_bridge = ""
 taxonomy = ""
+# Optional E3-compatible reviewed mapping for exact published HOG species labels.
+species_taxonomy = ""
 
 # Required for sequence-similarity searches, but not exact mapping/retrieval.
 # Use exact release centroid identifiers as FASTA headers when building a .dmnd database.
@@ -27,6 +29,25 @@ fasttree = "FastTree"
 hmmscan = "hmmscan"
 pfam_hmm = ""
 
+# Optional structural comparisons: set an absolute path to a LoL-enabled Foldseek build.
+foldseek = "foldseek"
+max_structure_residues = 3000
+
+# Optional remote model predictions. Disabled until an operator selects a provider.
+# For a compatible Atlas API: https://api.esmatlas.com/foldSequence/v1/pdb/
+# For a deployed endpoint expecting {"inputs": "..."} use esm_format = "json_inputs".
+esm_endpoint = ""
+esm_format = "sequence"
+esm_token_env = ""
+esm_max_length = 400
+
+# Optional annotations. Install the chosen databases separately.
+interproscan = "interproscan.sh"
+# Optional default. An individual EBI request can supply its own private contact.
+interpro_email = ""
+emapper = "emapper.py"
+eggnog_data = ""
+
 threads = 4
 # DuckDB hard memory limit; DIAMOND uses a conservative block-size setting, not a hard cap.
 memory_gb = 4
@@ -34,4 +55,12 @@ max_sequences = 2000000
 max_seed_sequences = 10000
 max_alignment_sequences = 1000
 max_alignment_cells = 5000000
+max_subcluster_sequences = 50000
+max_subcluster_residues = 20000000
+
+# Optional trusted SSH worker with this same app version and DIAMOND 2.2.1 or newer.
+# Set all three fields. Use an existing SSH alias and absolute paths on the remote host.
+subcluster_ssh_host = ""
+subcluster_ssh_executable = ""
+subcluster_ssh_profile = ""
 command_timeout = 86400

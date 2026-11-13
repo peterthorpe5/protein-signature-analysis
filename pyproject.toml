@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "protein-signature-analysis"
-version = "0.3.0"
+version = "0.5.0"
 description = "Reproducible discovery and visualisation of protein-family sequence and structural signatures"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,12 +31,14 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
+  "biopython>=1.84,<2",
   "duckdb>=1.4,<2",
   "matplotlib>=3.10,<4",
   "numpy>=2,<3",
   "pandas>=2.2,<3",
   "pyarrow>=18,<27",
   "PyYAML>=6,<7",
+  "requests>=2.32,<3",
   "scikit-learn>=1.8,<2",
   "shap>=0.50,<1",
   "XlsxWriter>=3.2,<4",
@@ -49,7 +51,6 @@ Issues = "https://github.com/peterthorpe5/protein-signature-analysis/issues"
 
 [project.optional-dependencies]
 app = [
-  "biopython>=1.84,<2",
   "kaleido>=1,<2",
   "plotly>=6,<7",
   "streamlit>=1.52,<2",
@@ -81,6 +82,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 protein_signatures = ["data/profiles/*.yaml", "data/evidence_rules/*.yaml"]
+protein_signature_app = ["resources/research_viewers/*.js", "resources/research_viewers/*.json", "resources/research_viewers/*.txt"]
 
 [tool.coverage.run]
 branch = true

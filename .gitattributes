@@ -1,0 +1,3 @@
+# Preserve checksummed upstream assets byte for byte across platforms.
+src/protein_signature_app/resources/research_viewers/*.js -text -diff -whitespace
+src/protein_signature_app/resources/research_viewers/THIRD_PARTY_NOTICES.txt -text -diff -whitespace

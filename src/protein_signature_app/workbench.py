@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
+import shlex
 from pathlib import Path
 
 import pandas as pd
@@ -10,6 +14,7 @@ import streamlit as st
 
 from protein_signatures.errors import ProteinSignatureError
 from protein_signatures.workbench.config import WorkbenchConfig, diagnostics, load_config
+from protein_signatures.workbench.context import CONTEXT_FILE
 from protein_signatures.workbench.jobs import (
     MAX_UPLOAD_BYTES,
     artifact_path,
@@ -17,11 +22,31 @@ from protein_signatures.workbench.jobs import (
     job_directory,
     list_jobs,
     recover_interrupted_job,
-    submit_job,
 )
+from protein_signatures.workbench.local_worker import start_local_job
 from protein_signatures.workbench.seeds import export_seeds
 
+from .alignment_ui import render_alignment_submit
+from .hog_ui import released_inputs
+from .research_tools import (
+    portable_model_request,
+    render_alignment_viewer,
+    render_deepclust_import,
+    render_feature_viewer,
+    render_imported_model,
+    render_predicted_models,
+    render_structure_jobs,
+)
+from .subcluster_ui import partition_choice, render_subclustering
 from .workbench_viewers import alignment_window, tree_figure
+from .workspace_ui import (
+    execution_choice,
+    job_label,
+    open_research_tool,
+    queue_job,
+    render_storage,
+    show_progress,
+)
 
 WORKBENCH_HELP = """Choose seed proteins, map exact DeepClust membership or search global
 representatives, retrieve complete families, and check each member against your seeds.
@@ -62,29 +87,6 @@ def parse_ids(*, text: str) -> list[str]:
     return [value.strip() for value in text.splitlines() if value.strip()]
 
 
-def queue_job(
-    *,
-    config: WorkbenchConfig,
-    operation: str,
-    parameters: dict | None = None,
-    uploads: dict | None = None,
-    sources: dict | None = None,
-) -> None:
-    """Submit one explicit user action and report its durable identifier.
-
-    Args:
-        config: Operator profile.
-        operation: Task name.
-        parameters: Named scientific controls.
-        uploads: Private FASTA snapshots.
-        sources: Completed job artifact references.
-    """
-    identifier = submit_job(
-        config=config, operation=operation, parameters=parameters, uploads=uploads, sources=sources
-    )
-    st.success(f"Queued {operation}: {identifier}. Open Jobs & results to follow progress.")
-
-
 def render_workbench(*, config_path: Path | None, database: Path | None = None) -> None:
     """Render a guided workbench independently of an optional reference campaign.
 
@@ -119,6 +121,7 @@ def render_workbench(*, config_path: Path | None, database: Path | None = None) 
                 "2. Find families",
                 "3. Retrieve sequences",
                 "4. Analyse family",
+                "5. Research tools",
                 "Jobs & results",
             ),
             horizontal=True,
@@ -168,9 +171,11 @@ def render_workbench(*, config_path: Path | None, database: Path | None = None) 
         elif stage == "3. Retrieve sequences":
             render_retrieval(config=config)
         elif stage == "4. Analyse family":
-            render_analysis(config=config)
+            render_analysis(config=config, config_path=config_path, database=database)
+        elif stage == "5. Research tools":
+            render_research_tools(config=config, config_path=config_path, database=database)
         else:
-            render_jobs(config=config)
+            render_jobs(config=config, config_path=config_path)
     except (ProteinSignatureError, OSError, ValueError, KeyError) as error:
         st.error(str(error))
 
@@ -191,7 +196,11 @@ def render_seeds(*, config: WorkbenchConfig, database: Path | None) -> None:
     )
     route = st.selectbox(
         label="Seed source",
-        options=("Upload or paste protein FASTA", "Select from the completed result"),
+        options=(
+            "Upload or paste protein FASTA",
+            "Select from the completed result",
+            *(("Search published HOGs",) if database is not None else ()),
+        ),
         key="wb-seed-route",
     )
     if route == "Upload or paste protein FASTA":
@@ -213,7 +222,14 @@ def render_seeds(*, config: WorkbenchConfig, database: Path | None) -> None:
             if not payload or len(payload) > MAX_UPLOAD_BYTES:
                 raise ValueError("Supply a protein FASTA of at most 20 MiB.")
             st.session_state["wb-seeds"] = payload
+            st.session_state.pop("wb-seeds-context", None)
             st.success("Seed snapshot selected. Continue to Find families.")
+    elif route == "Search published HOGs":
+        uploads, _ = released_inputs(database=database, config=config, key="wb-seed-hog")
+        if st.button("Use these released HOG members as seeds", disabled="family" not in uploads):
+            st.session_state["wb-seeds"] = uploads["family"]
+            st.session_state["wb-seeds-context"] = uploads["context"]
+            st.success("Released HOG seed snapshot selected. Continue to Find families.")
     elif database is None:
         st.info(
             (
@@ -254,6 +270,7 @@ def render_seeds(*, config: WorkbenchConfig, database: Path | None) -> None:
                 values=parse_ids(text=values),
                 maximum=int(maximum),
             )
+            st.session_state.pop("wb-seeds-context", None)
             st.success("Complete seed set prepared. Continue to Find families.")
     if payload := st.session_state.get("wb-seeds"):
         count = sum(line.startswith(b">") for line in payload.splitlines())
@@ -266,6 +283,14 @@ def render_seeds(*, config: WorkbenchConfig, database: Path | None) -> None:
             data=payload,
             file_name="seed_proteins.fasta",
             mime="text/plain",
+        )
+        st.button(
+            label="Open ESMFold for these seeds",
+            on_click=open_research_tool,
+            kwargs={
+                "tool": "ESMFold & models",
+                "selection": {"wb-family-source": "Current seed snapshot"},
+            },
         )
 
 
@@ -377,11 +402,14 @@ def render_discovery(*, config: WorkbenchConfig) -> None:
             seeds = st.session_state.get("wb-seeds")
             if not seeds:
                 raise ValueError("Choose seed FASTA in step 1 first.")
+            uploads = {"seeds": seeds}
+            if context := st.session_state.get("wb-seeds-context"):
+                uploads["context"] = context
             queue_job(
                 config=config,
                 operation="search",
                 parameters={**parameters, "maximum_hits": int(maximum)},
-                uploads={"seeds": seeds},
+                uploads=uploads,
             )
         if not config.centroid_database:
             st.info(
@@ -414,9 +442,7 @@ def render_retrieval(*, config: WorkbenchConfig) -> None:
     ]
     selected = []
     if jobs:
-        options = {
-            f"{job['operation']} · {job['created_at']} · {job['job_id']}": job for job in jobs
-        }
+        options = {job_label(job=job): job for job in jobs}
         label = st.selectbox(
             label="Completed discovery job", options=list(options), key="wb-retrieve-job"
         )
@@ -455,42 +481,72 @@ def render_retrieval(*, config: WorkbenchConfig) -> None:
         )
 
 
-def family_input(*, config: WorkbenchConfig) -> tuple[dict, dict]:
-    """Select an unaligned completed artifact or a new bounded upload.
-
-    Args:
-        config: Job workspace.
-
-    Returns:
-        Upload and source-reference dictionaries.
-    """
-    st.caption(
-        (
-            "Use an unaligned FASTA from a completed job, or upload your own. "
-            "Alignment matrices are not accepted as protein input."
-        )
-    )
+def family_input(*, config: WorkbenchConfig, database: Path | None = None) -> tuple[dict, dict]:
+    """Select an exact unaligned artifact, audited partition, released HOG or FASTA upload."""
+    st.caption("Choose unaligned proteins. Aligned matrices cannot be used as family FASTA.")
     candidates = {}
     for job in list_jobs(config=config):
         if job["status"] == "COMPLETE":
             for name in job.get("artifacts", {}):
-                if name in {
-                    "family.fasta",
-                    "candidates.fasta",
-                    "sequences.fasta",
-                    "expanded.fasta",
-                    "seeds.fasta",
-                }:
-                    candidates[
-                        f"{job['operation']} · {name} · {job['created_at']} · {job['job_id']}"
-                    ] = {"job_id": job["job_id"], "name": name}
+                if (
+                    name
+                    in {
+                        "family.fasta",
+                        "candidates.fasta",
+                        "sequences.fasta",
+                        "expanded.fasta",
+                        "seeds.fasta",
+                        "model_inputs.fasta",
+                        "annotation_input.fasta",
+                    }
+                    and job["artifacts"][name]["bytes"]
+                ):
+                    candidates[job_label(job=job, artifact=name)] = (job, name)
+    seed_snapshot = st.session_state.get("wb-seeds")
+    hog_snapshot = st.session_state.get("wb-hog-snapshot")
     selected = st.selectbox(
         label="Family FASTA from a completed job",
-        options=["Upload instead", *candidates],
+        options=[
+            "Upload instead",
+            *(["Current seed snapshot"] if seed_snapshot else []),
+            *(["Current released HOG snapshot"] if hog_snapshot else []),
+            *(["Select a published HOG"] if database is not None else []),
+            *candidates,
+        ],
         key="wb-family-source",
     )
-    if selected != "Upload instead":
-        return {}, {"family": candidates[selected]}
+    if selected == "Current seed snapshot":
+        uploads = {"family": seed_snapshot}
+        if context := st.session_state.get("wb-seeds-context"):
+            uploads["context"] = context
+        return uploads, {}
+    if selected == "Current released HOG snapshot":
+        return {"family": hog_snapshot[0], "context": hog_snapshot[1]}, {}
+    if selected == "Select a published HOG":
+        return released_inputs(database=database, config=config, key="wb-family-hog")
+    if selected in candidates:
+        job, name = candidates[selected]
+        identifier = job["job_id"]
+        uploads, sources = {}, {"family": {"job_id": identifier, "name": name}}
+        if CONTEXT_FILE in job["artifacts"]:
+            sources["context"] = {"job_id": identifier, "name": CONTEXT_FILE}
+        elif database is not None and st.checkbox(
+            "Match this saved input to a released HOG for species context",
+            key="wb-legacy-context",
+        ):
+            matched, _ = released_inputs(database=database, config=config, key="wb-legacy-family")
+            if "context" in matched:
+                uploads["context"] = matched["context"]
+                st.caption("The worker retains metadata only for exact ID and sequence matches.")
+        if job["operation"] == "subcluster" and name == "sequences.fasta":
+            partition = partition_choice(config=config, job=job, optional=True)
+            if partition:
+                sources["subcluster_membership"] = {
+                    "job_id": identifier,
+                    "name": "membership.parquet",
+                    "subcluster_id": partition,
+                }
+        return uploads, sources
     upload = st.file_uploader(
         label="Family protein FASTA (maximum 20 MiB)",
         type=["fa", "faa", "fasta"],
@@ -499,11 +555,18 @@ def family_input(*, config: WorkbenchConfig) -> tuple[dict, dict]:
     return ({"family": upload.getvalue()} if upload is not None else {}), {}
 
 
-def render_analysis(*, config: WorkbenchConfig) -> None:
+def render_analysis(
+    *,
+    config: WorkbenchConfig,
+    config_path: Path | None = None,
+    database: Path | None = None,
+) -> None:
     """Render family screening, alignment, annotation, signature and expansion tasks.
 
     Args:
         config: Operator profile.
+        config_path: Trusted launch profile for app-host jobs.
+        database: Optional read-only result database for HOG selection.
     """
     st.subheader("4 · Analyse and prepare the expanded family")
     task = st.selectbox(
@@ -517,7 +580,7 @@ def render_analysis(*, config: WorkbenchConfig) -> None:
         ),
         key="wb-analysis-task",
     )
-    uploads, sources = family_input(config=config)
+    uploads, sources = family_input(config=config, database=database)
     parameters, operation = (
         {},
         {
@@ -555,36 +618,15 @@ def render_analysis(*, config: WorkbenchConfig) -> None:
         )
         parameters["taxon_ids"] = parse_ids(text=text)
     elif operation == "align":
-        st.write(
-            (
-                "Create a MAFFT alignment and residue conservation table. Large "
-                "families require a smaller explicit selection; the app never samples "
-                "silently."
-            )
+        render_alignment_submit(
+            config=config,
+            config_path=config_path,
+            uploads=uploads,
+            sources=sources,
+            key="wb-family-mafft",
+            button_label="Queue alignment and tree",
         )
-        text = st.text_area(
-            label="Optional exact sequence IDs to align, one per line",
-            help=(
-                "Blank selects the complete input, subject to configured limits. Copy "
-                "IDs from members.tsv or candidate_audit.tsv."
-            ),
-        )
-        parameters = {
-            "selected_ids": parse_ids(text=text),
-            "tree": st.checkbox(
-                label="Infer a FastTree WAG+gamma tree",
-                value=False,
-                help=(
-                    "At least three sequences. Branch lengths represent inferred "
-                    "divergence, not time. tip_labels.tsv links safe tree labels to the "
-                    "exact protein IDs."
-                ),
-            ),
-        }
-        st.caption(
-            f"Limits: {config.max_alignment_sequences:,} sequences and "
-            f"{config.max_alignment_cells:,} alignment cells."
-        )
+        return
     elif operation == "annotate":
         st.write(
             (
@@ -650,7 +692,7 @@ def render_analysis(*, config: WorkbenchConfig) -> None:
             )
         )
     if st.button(label=f"Queue {task.lower()}"):
-        if not uploads and "family" not in sources:
+        if "family" not in (uploads | sources):
             raise ValueError("Select a family FASTA first.")
         if operation in {"screen", "prepare"}:
             seeds = st.session_state.get("wb-seeds")
@@ -666,13 +708,180 @@ def render_analysis(*, config: WorkbenchConfig) -> None:
         )
 
 
-def render_jobs(*, config: WorkbenchConfig) -> None:
+def render_research_tools(
+    *,
+    config: WorkbenchConfig,
+    config_path: Path | None = None,
+    database: Path | None = None,
+) -> None:
+    """Connect portable inputs and new evidence providers to the durable job queue."""
+    tool = st.selectbox(
+        "Research tool",
+        options=(
+            "JBrowse MSA",
+            "Start MAFFT alignment",
+            "Audited subclustering",
+            "ESMFold & models",
+            "Nightingale features",
+            "Predict annotations",
+            "LoL-align structures",
+            "Import DeepClust results",
+        ),
+        key="wb-research-tool",
+    )
+    if tool == "JBrowse MSA":
+        render_alignment_viewer(config=config, config_path=config_path, database=database)
+        return
+    if tool == "Nightingale features":
+        render_feature_viewer(config=config, database=database)
+        return
+    if tool == "LoL-align structures":
+        render_structure_jobs(config=config)
+        return
+    if tool == "Import DeepClust results":
+        render_deepclust_import(config=config)
+        return
+    if tool in {"Start MAFFT alignment", "Audited subclustering"}:
+        st.subheader(tool)
+        uploads, sources = family_input(config=config, database=database)
+        if tool == "Start MAFFT alignment":
+            render_alignment_submit(
+                config=config,
+                config_path=config_path,
+                uploads=uploads,
+                sources=sources,
+                key="wb-research-mafft",
+            )
+        else:
+            render_subclustering(
+                config=config,
+                config_path=config_path,
+                uploads=uploads,
+                sources=sources,
+            )
+        return
+    model = tool == "ESMFold & models"
+    st.subheader(tool)
+    if model:
+        st.caption(
+            f"Predict up to 20 models, one per exact sequence of at most "
+            f"{config.esm_max_length} residues."
+        )
+        render_predicted_models(config=config)
+        render_imported_model(config=config)
+        if not config.esm_endpoint:
+            st.info(
+                "Configure esm_endpoint for predictions on this worker. "
+                "You can still prepare an exact FASTA or portable request below."
+            )
+        engine = "esmfold"
+    else:
+        st.caption(
+            "Predict features for proteins with little existing annotation. Local Pfam remains "
+            "available in Analyse family; only that route supplies frozen-signature Pfam evidence."
+        )
+        engines = {
+            "Local InterProScan": "interpro_local",
+            "EBI InterProScan service": "interpro_remote",
+            "Local eggNOG-mapper": "eggnog",
+        }
+        engine = engines[
+            st.selectbox("Annotation provider", list(engines), key="wb-annotation-engine")
+        ]
+    uploads, sources = family_input(config=config, database=database)
+    parameters = {
+        "selected_ids": parse_ids(
+            text=st.text_area(
+                "Exact protein IDs, one per line (blank selects the whole bounded input)",
+                key=f"wb-selected-{engine}",
+            )
+        ),
+    }
+    can_submit = "family" in (uploads | sources)
+    if model and not config.esm_endpoint:
+        can_submit = False
+    elif model or engine == "interpro_remote":
+        service = config.esm_endpoint if model else "the EBI InterProScan service"
+        parameters["remote_allowed"] = st.checkbox(
+            f"Send the selected amino-acid sequences to {service}",
+            key=f"wb-provider-consent-{engine}",
+        )
+        can_submit = can_submit and parameters["remote_allowed"]
+    if not model:
+        parameters["engine"] = engine
+    if engine == "interpro_remote":
+        email = st.text_input(
+            "Private EBI contact email",
+            type="password",
+            max_chars=254,
+            help="Used only for this EBI request. The contact is kept out of result files.",
+        ).strip()
+        if email:
+            valid = bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)) and email.isascii()
+            if valid:
+                uploads["ebi_email"] = email.encode()
+            else:
+                st.info("Enter a valid email address.")
+                can_submit = False
+        elif not config.interpro_email:
+            st.info("Enter an EBI contact for this request.")
+            can_submit = False
+    if engine == "eggnog":
+        parameters["tax_scope"] = st.text_input("eggNOG taxonomy scope", value="auto")
+        parameters["target_taxon"] = st.text_input("Optional exact target taxon ID")
+        if not config.eggnog_data:
+            st.info("Configure the local eggNOG database directory to enable this route.")
+            can_submit = False
+    execution = execution_choice(config_path=config_path, key=f"wb-execution-{engine}")
+    if st.button("Queue selected proteins", disabled=not can_submit, key=f"wb-queue-{engine}"):
+        st.session_state[f"wb-provider-last-{engine}"] = queue_job(
+            config_path=config_path,
+            execution=execution,
+            config=config,
+            operation="predict_models" if model else "annotate_proteins",
+            parameters=parameters,
+            uploads=uploads,
+            sources=sources,
+        )
+    show_progress(config=config, key=f"wb-provider-last-{engine}")
+    if model and "family" in (uploads | sources):
+        fingerprint = hashlib.sha256(
+            uploads.get("family", b"")
+            + uploads.get("context", b"")
+            + json.dumps(
+                [sources, parameters["selected_ids"], config.esm_max_length], sort_keys=True
+            ).encode()
+        ).hexdigest()
+        if st.button("Prepare exact FASTA and portable request", key="wb-model-prepare"):
+            prepared = portable_model_request(
+                config=config,
+                selected=parameters["selected_ids"],
+                uploads=uploads,
+                sources=sources,
+            )
+            st.session_state["wb-model-request"] = (fingerprint, *prepared)
+        ready = st.session_state.get("wb-model-request")
+        if ready and ready[0] == fingerprint:
+            st.download_button(
+                "Download exact FASTA", ready[1], "model_inputs.fasta", on_click="ignore"
+            )
+            st.download_button(
+                "Download portable ESMFold request",
+                ready[2],
+                "protein_signature_esmfold_request.zip",
+                on_click="ignore",
+            )
+
+
+def render_jobs(*, config: WorkbenchConfig, config_path: Path | None = None) -> None:
     """Show durable progress, bounded previews and verified on-demand downloads.
 
     Args:
         config: Job workspace.
+        config_path: Trusted launch profile for starting an exact waiting job.
     """
     st.subheader("Jobs & results")
+    render_storage(config=config)
     st.button(label="Refresh job status")
     st.caption(
         (
@@ -699,12 +908,21 @@ def render_jobs(*, config: WorkbenchConfig) -> None:
         hide_index=True,
         width="stretch",
     )
-    options = {
-        f"{job['operation']} · {job['status']} · {job['created_at']} · {job['job_id']}": job
-        for job in jobs
-    }
+    options = {job_label(job=job, with_status=True): job for job in jobs}
     selected = st.selectbox(label="Inspect job", options=list(options), key="wb-inspect-job")
     job = options[selected]
+    if job["status"] == "QUEUED" and config_path is not None:
+        if st.button("Start this queued job on the app host"):
+            start_local_job(config=config, config_path=config_path, job_id=job["job_id"])
+            st.success("App-host start requested. Refresh to see its state.")
+        if job.get("execution") == "app":
+            st.caption("This request is reserved for an exact app-host start.")
+        with st.expander("Start this request from a server terminal"):
+            st.code(
+                f"protein-signature-workbench --config {shlex.quote(str(config_path))} "
+                f"--action worker --once --job-id {job['job_id']}",
+                language="bash",
+            )
     if job["status"] == "QUEUED" and st.button(label="Cancel this waiting job"):
         cancel_job(config=config, job_id=job["job_id"])
         st.success("Waiting job cancelled.")
@@ -729,6 +947,68 @@ def render_jobs(*, config: WorkbenchConfig) -> None:
                     )
                 )
         return
+    route = {
+        "align": ("JBrowse MSA", "wb-jb-source", "Completed MAFFT job", "wb-jb-job", "wb-jb-open"),
+        "annotate": (
+            "Nightingale features",
+            "wb-feature-source",
+            "Completed annotation job",
+            "wb-feature-job",
+            "wb-feature-open",
+        ),
+        "annotate_proteins": (
+            "Nightingale features",
+            "wb-feature-source",
+            "Completed annotation job",
+            "wb-feature-job",
+            "wb-feature-open",
+        ),
+    }.get(job["operation"])
+    if route:
+        tool, source_key, source, job_key, open_key = route
+        selected_label = job_label(job=job)
+        st.button(
+            label=f"Open in {tool}",
+            on_click=open_research_tool,
+            kwargs={
+                "tool": tool,
+                "selection": {source_key: source, job_key: selected_label, open_key: True},
+            },
+        )
+    if job["operation"] == "subcluster":
+        st.button(
+            "Inspect audited subclusters",
+            on_click=open_research_tool,
+            kwargs={
+                "tool": "Audited subclustering",
+                "selection": {"wb-subcluster-job": job_label(job=job)},
+            },
+        )
+    family = next(
+        (
+            name
+            for name in ("candidates.fasta", "family.fasta", "sequences.fasta", "expanded.fasta")
+            if name in job["artifacts"] and job["artifacts"][name]["bytes"]
+        ),
+        "",
+    )
+    if family:
+        selection = {"wb-family-source": job_label(job=job, artifact=family)}
+        st.button(
+            label="Use this FASTA for audited subclustering",
+            on_click=open_research_tool,
+            kwargs={"tool": "Audited subclustering", "selection": selection},
+        )
+        st.button(
+            label="Use this FASTA in ESMFold",
+            on_click=open_research_tool,
+            kwargs={"tool": "ESMFold & models", "selection": selection},
+        )
+        st.button(
+            label="Use this FASTA for annotation",
+            on_click=open_research_tool,
+            kwargs={"tool": "Predict annotations", "selection": selection},
+        )
     if job["operation"] == "align":
         with st.expander("Inspect the alignment and tree", expanded=False):
             alignment_path = artifact_path(
@@ -806,7 +1086,8 @@ def render_jobs(*, config: WorkbenchConfig) -> None:
             )
     else:
         remote_path = job_directory(config=config, job_id=job["job_id"]) / "outputs" / name
-        st.code(body=f"rsync -av --progress 'denbi:{remote_path}' ./")
+        st.code(body=f"rsync -av --progress {shlex.quote(f'SSH_ALIAS:{remote_path}')} ./")
+        st.caption("Replace SSH_ALIAS with the Mac SSH alias for this host (for example stefan).")
         st.caption(
             "This file exceeds the browser download limit. Transfer it directly from the server."
         )

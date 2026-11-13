@@ -90,7 +90,6 @@ def test_representative_search_and_build_buttons_queue_named_operations(
     "task,operation",
     [
         ("Screen members against seeds", "screen"),
-        ("Alignment and tree", "align"),
         ("Local Pfam domains", "annotate"),
         ("Frozen signature evidence", "score"),
         ("Prepare expanded campaign inputs", "prepare"),
@@ -123,10 +122,11 @@ def test_completed_family_sources_and_verified_job_download(workbench_config, ui
     )
     run_next(config=workbench_config)
     record = read_job(config=workbench_config, job_id=identifier)
-    label = f"retrieve · family.fasta · {record['created_at']} · {identifier}"
+    label = ui.job_label(job=record, artifact="family.fasta")
     ui_surface.choices["Family FASTA from a completed job"] = label
     uploads, sources = ui.family_input(config=workbench_config)
     assert not uploads and sources["family"]["job_id"] == identifier
+    assert sources["context"]["job_id"] == identifier
     ui_surface.choices["Result file"] = "clusters.tsv"
     ui_surface.clicks.add("Prepare verified download")
     ui_surface.ticks.add("Show table preview (first 1000 rows)")

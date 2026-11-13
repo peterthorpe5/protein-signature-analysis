@@ -22,6 +22,7 @@ LAUNCHER = Path(__file__).parents[2] / "launch_protein_signature_denbi.sh"
         ["--status", "--stop-tunnel"],
         ["--status", "--restart-app"],
         ["--environment"],
+        ["--server", "unknown"],
     ],
 )
 def test_launcher_named_option_validation(arguments):
@@ -32,7 +33,8 @@ def test_launcher_named_option_validation(arguments):
     assert result.returncode == (0 if arguments[0] in {"--help", "--version"} else 2)
 
 
-def test_launcher_preserves_remote_paths_and_dedicated_forward(tmp_path):
+@pytest.mark.parametrize("server,host", [("sabrina", "denbi"), ("stefan", "stefan")])
+def test_launcher_preserves_remote_paths_and_dedicated_forward(tmp_path, server, host):
     """SSH setup uses quoted paths and the requested loopback ports, with no code upload."""
     binary = tmp_path / "bin"
     binary.mkdir()
@@ -63,6 +65,8 @@ def test_launcher_preserves_remote_paths_and_dedicated_forward(tmp_path):
             "bash",
             str(LAUNCHER),
             "--no-browser",
+            "--server",
+            server,
             "--local-port",
             "8521",
             "--remote-port",
@@ -79,7 +83,14 @@ def test_launcher_preserves_remote_paths_and_dedicated_forward(tmp_path):
     text = log.read_text()
     assert "127.0.0.1:8521:127.0.0.1:8522" in text
     assert "profile\\ with\\ spaces.toml" in text
+    assert f"\n{host}\n" in text
+    assert (
+        "/data/pete/software/miniforge3/" in text
+        if server == "stefan"
+        else "/home/ubuntu/data/pete/software/miniforge3/" in text
+    )
     assert "http://127.0.0.1:8521" in result.stdout
     assert subprocess.run(args=["bash", "-n", str(remote)], check=False).returncode == 0
     assert "python -" not in remote.read_text()
     assert "protein-signatures" in remote.read_text()
+    assert 'PS_LOG_ROOT="$PS_WORKSPACE/logs"' in remote.read_text()

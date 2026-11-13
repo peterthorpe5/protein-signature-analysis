@@ -9,7 +9,7 @@ sequence, domain, fold and structural features that are common in—and statisti
 associated with—a reviewed protein type. It publishes an immutable, file-first scientific
 result bundle plus a Streamlit application for interrogation and optional family expansion.
 
-## DeepClust workbench on de.NBI
+## Protein research workbench on Stefan and Sabrina
 
 Version 0.3.0 adds a guided **Protein research workbench**: choose seeds from protein
 FASTA or a completed result, map exact DeepClust membership or search global representatives,
@@ -17,10 +17,20 @@ retrieve complete families, screen members against seeds, align sequences, infer
 scan local Pfam domains and inspect frozen signature evidence. New server jobs and expanded
 campaign starters stay outside immutable reference results.
 
-Start with [de.NBI setup, Mac launch and update commands](docs/DENBI_WORKBENCH.md).
-The Mac launcher is `launch_protein_signature_denbi.sh`; it reuses the established
-Sabrina data-disk paths and imports installed resources from the E3 research profile.
-The workbench also runs without a copied completed signature result.
+Version 0.5.0 includes the 0.4.0 local LoL-align structural comparisons, an immutable-input
+[structural rerun](docs/STRUCTURAL_RERUN.md), offline JBrowse MSA and Nightingale,
+bounded ESMFold requests, InterProScan and eggNOG predictions, and portable DeepClust
+imports. The reference result and the new jobs remain separate.
+
+The 0.5.0 workbench brings over the published HOG workflows from E3 v0.23.10:
+choose released members, browse their features, and carry exact sequences and
+species metadata between tools. Review alignment identity, infer a tree from a
+saved matrix, or audit stricter DIAMOND subclusters against their centroids.
+Jobs can start on the app host or wait for the server worker. See the
+[family analysis and execution guide](docs/FAMILY_RESEARCH.md).
+
+Start with the [Stefan and Sabrina setup and Mac launch commands](docs/SERVER_WORKBENCH.md).
+The workbench also runs without a copied signature result.
 
 The bundled default profile is a detailed core plant/human E3-system hierarchy. E3 is a use
 case, not an architectural assumption: a custom YAML profile can describe any protein family,

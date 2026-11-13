@@ -15,6 +15,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from protein_signature_app import __version__
 from protein_signature_app.backend import (
     canonical_table_names,
     canonical_table_preview,
@@ -40,6 +41,7 @@ from protein_signature_app.help_content import (
     metric_reading,
     status_explanation,
 )
+from protein_signature_app.hog_ui import choose_hog, open_published_hog
 from protein_signature_app.structure_viewer import (
     ANNOTATION_COLUMNS,
     ModelTrace,
@@ -155,7 +157,7 @@ def main() -> None:
             st.stop()
     if arguments.resource is None:
         st.sidebar.title("Protein signatures")
-        st.sidebar.caption("Protein research workbench")
+        st.sidebar.caption(f"Workbench v{__version__}")
         render_workbench(config_path=arguments.workbench_config)
         return
     try:
@@ -172,7 +174,9 @@ def main() -> None:
     st.session_state["help-result-metadata"] = metadata
     st.sidebar.title("Protein signatures")
     st.sidebar.caption(f"Campaign: {campaign.get('campaign_id', 'unknown')}")
-    st.sidebar.caption(f"Package: {metadata.get('package_version', 'unknown')}")
+    st.sidebar.caption(
+        f"App v{__version__} · Result package {metadata.get('package_version', 'unknown')}"
+    )
     page = st.sidebar.radio(
         "Explore",
         (
@@ -189,6 +193,7 @@ def main() -> None:
             "Data quality & provenance",
             "Glossary & help",
         ),
+        key="signature-app-page",
     )
     with st.sidebar.expander("How to use this page"):
         st.markdown(PAGE_HELP[page])
@@ -210,7 +215,11 @@ def main() -> None:
     elif page == "Model & alignment explorer":
         _render_model_explorer(database=database)
     elif page == "Orthology & partitions":
-        _render_orthology(database=database, metadata=metadata)
+        _render_orthology(
+            database=database,
+            metadata=metadata,
+            workbench_enabled=arguments.workbench_config is not None,
+        )
     elif page == "Protein research workbench":
         render_workbench(config_path=arguments.workbench_config, database=database)
     elif page == "Canonical data & downloads":
@@ -3400,12 +3409,18 @@ def _render_glossary() -> None:
     _render_downloadable_table(frame=frame, download_name="protein_signature_glossary")
 
 
-def _render_orthology(*, database: Path, metadata: dict[str, object] | None = None) -> None:
+def _render_orthology(
+    *,
+    database: Path,
+    metadata: dict[str, object] | None = None,
+    workbench_enabled: bool = False,
+) -> None:
     """Render OrthoFinder context and leakage-safe data partitions.
 
     Args:
         database: Verified result database.
         metadata: Optional published evidence-availability states.
+        workbench_enabled: Whether the operator supplied a workbench profile.
     """
 
     st.title("Orthology & partitions")
@@ -3511,6 +3526,18 @@ def _render_orthology(*, database: Path, metadata: dict[str, object] | None = No
         ),
     )
     st.subheader("Published OrthoFinder group context")
+    if workbench_enabled:
+        scope = choose_hog(database=database, key="canonical-hog-research")
+        if scope is not None:
+            for label, tool in (
+                ("Align this HOG", "JBrowse MSA"),
+                ("Browse HOG features", "Nightingale features"),
+            ):
+                st.button(
+                    label,
+                    on_click=open_published_hog,
+                    kwargs={"scope": scope, "tool": tool},
+                )
     if context.empty:
         st.info(
             "No optional OrthoFinder group-context summary was supplied. The membership "

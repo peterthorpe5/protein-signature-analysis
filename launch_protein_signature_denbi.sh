@@ -1,41 +1,44 @@
 #!/usr/bin/env bash
-# Launch the signature GUI and independent worker on Sabrina through SSH.
+# Launch the signature GUI and independent worker on Sabrina or Stefan through SSH.
 # Bash 3.2+; Python belongs in the tested package, never inside this script.
 set -Eeuo pipefail
 
 PS_ACTION="start"
-PS_HOST="denbi"
-PS_LOCAL_PORT="8510"
+PS_SERVER="sabrina"
+PS_HOST=""
+PS_LOCAL_PORT=""
 PS_REMOTE_PORT="8505"
 PS_OPEN="yes"
 PS_RESTART="no"
-PS_ENV="/home/ubuntu/data/pete/software/miniforge3/envs/protein_signature_analysis"
-PS_CONFIG="/home/ubuntu/data/protein_signature_research/config/workbench.toml"
+PS_ENV=""
+PS_CONFIG=""
 
 while (($#)); do
     case "$1" in
         --help|-h)
             cat <<'USAGE'
-Run on your Mac after installing the update on Sabrina:
+Run on your Mac after installing the update on the chosen server:
   bash launch_protein_signature_denbi.sh
   bash launch_protein_signature_denbi.sh --no-browser
   bash launch_protein_signature_denbi.sh --status
   bash launch_protein_signature_denbi.sh --stop-tunnel
   bash launch_protein_signature_denbi.sh --restart-app
+  bash launch_protein_signature_denbi.sh --server stefan
 
 Optional named settings:
-  --ssh-host denbi       Existing SSH alias.
-  --local-port 8510     Mac port, independent of the E3 launcher.
-  --remote-port 8505    Sabrina loopback port.
-  --environment PATH   Absolute signature Conda environment path on Sabrina.
-  --config PATH        Absolute workbench TOML path on Sabrina.
+  --server NAME        sabrina (default) or stefan.
+  --ssh-host HOST      Existing SSH alias or user@host (denbi / stefan).
+  --local-port PORT    Mac port (Sabrina 8510, Stefan 8511).
+  --remote-port PORT   Server loopback port (default 8505).
+  --environment PATH   Absolute signature Conda environment path on that server.
+  --config PATH        Absolute workbench TOML path on that server.
 
 The separate protein-signatures tmux session keeps GUI and worker alive after
 disconnecting. Stopping the tunnel leaves jobs running. --restart-app affects
 only this launcher's GUI; the worker continues. See docs/DENBI_WORKBENCH.md.
 USAGE
             exit 0 ;;
-        --version) printf 'Protein signature de.NBI launcher 1.0.0\n'; exit 0 ;;
+        --version) printf 'Protein signature server launcher 1.1.0\n'; exit 0 ;;
         --no-browser) PS_OPEN="no" ;;
         --restart-app) PS_RESTART="yes" ;;
         --status|--stop-tunnel)
@@ -43,11 +46,16 @@ USAGE
                 printf 'Choose one launcher action.\n' >&2; exit 2
             fi
             PS_ACTION="${1#--}" ;;
-        --ssh-host|--local-port|--remote-port|--environment|--config)
+        --server|--ssh-host|--local-port|--remote-port|--environment|--config)
             if (($# < 2)) || [[ -z "$2" ]]; then
                 printf '%s requires a value.\n' "$1" >&2; exit 2
             fi
             case "$1" in
+                --server)
+                    if [[ "$2" != "sabrina" && "$2" != "stefan" ]]; then
+                        printf '%s\n' '--server must be sabrina or stefan.' >&2; exit 2
+                    fi
+                    PS_SERVER="$2" ;;
                 --ssh-host)
                     if [[ ! "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._@-]*$ ]]; then
                         printf 'Invalid SSH host/alias.\n' >&2; exit 2
@@ -69,6 +77,18 @@ USAGE
     esac
     shift
 done
+
+if [[ "$PS_SERVER" == "stefan" ]]; then
+    PS_HOST="${PS_HOST:-stefan}"
+    PS_LOCAL_PORT="${PS_LOCAL_PORT:-8511}"
+    PS_ENV="${PS_ENV:-/data/pete/software/miniforge3/envs/protein_signature_analysis}"
+    PS_CONFIG="${PS_CONFIG:-/data/pete/protein_signature_research/config/workbench.toml}"
+else
+    PS_HOST="${PS_HOST:-denbi}"
+    PS_LOCAL_PORT="${PS_LOCAL_PORT:-8510}"
+    PS_ENV="${PS_ENV:-/home/ubuntu/data/pete/software/miniforge3/envs/protein_signature_analysis}"
+    PS_CONFIG="${PS_CONFIG:-/home/ubuntu/data/protein_signature_research/config/workbench.toml}"
+fi
 
 if [[ "$PS_ACTION" != "start" && "$PS_RESTART" == "yes" ]]; then
     printf '%s\n' '--restart-app applies only to a normal launch.' >&2; exit 2
@@ -111,25 +131,29 @@ PS_SESSION="protein-signatures"
 PS_TMUX="$PS_PREFIX/bin/tmux"
 PS_APP="$PS_PREFIX/bin/protein-signature-app"
 PS_WORKER="$PS_PREFIX/bin/protein-signature-workbench"
-PS_LOG_ROOT="/home/ubuntu/data/protein_signature_research/logs"
-PS_TEMP="/home/ubuntu/data/pete/tmp/protein_signatures"
-PS_CACHE="/home/ubuntu/data/pete/cache/xdg"
 PS_HEALTH="http://127.0.0.1:$PS_PORT/_stcore/health"
 PS_APP_TARGET="$PS_SESSION:=app"
 PS_WORKER_TARGET="$PS_SESSION:=worker"
 
 for PS_BINARY in "$PS_TMUX" "$PS_APP" "$PS_WORKER"; do
     if [[ ! -x "$PS_BINARY" ]]; then
-        printf 'Missing executable: %s. Complete the de.NBI installation first.\n' "$PS_BINARY" >&2
+        printf 'Missing executable: %s. Complete the server installation first.\n' "$PS_BINARY" >&2
         exit 1
     fi
 done
 if [[ ! -r "$PS_PROFILE" ]]; then
-    printf 'Missing profile: %s. Run --action configure-denbi first.\n' "$PS_PROFILE" >&2; exit 1
+    printf 'Missing profile: %s. Configure the installed release first.\n' "$PS_PROFILE" >&2; exit 1
 fi
 if ! command -v curl >/dev/null 2>&1; then
-    printf 'curl is required on Sabrina.\n' >&2; exit 1
+    printf 'curl is required on the server.\n' >&2; exit 1
 fi
+PS_WORKSPACE="$("$PS_WORKER" --config "$PS_PROFILE" --action workspace)"
+if [[ "$PS_WORKSPACE" != /* || "$PS_WORKSPACE" == *$'\n'* ]]; then
+    printf 'The profile must report one absolute workspace path.\n' >&2; exit 1
+fi
+PS_LOG_ROOT="$PS_WORKSPACE/logs"
+PS_TEMP="$PS_WORKSPACE/temporary"
+PS_CACHE="$PS_WORKSPACE/cache"
 mkdir -p "$PS_LOG_ROOT" "$PS_TEMP" "$PS_CACHE"
 export TMPDIR="$PS_TEMP" XDG_CACHE_HOME="$PS_CACHE" PYTHONUNBUFFERED=1
 # tmux may have been started before a Conda environment was activated.
@@ -230,7 +254,7 @@ if [[ "$PS_READY" != "yes" || "$(ps_pane_state "$PS_WORKER_TARGET")" != "0" ]]; 
     tail -n 60 "$PS_LOG_ROOT/app.log" "$PS_LOG_ROOT/worker.log" >&2 || true
     printf 'Server services did not become ready. Check logs above.\n' >&2; exit 1
 fi
-printf 'Protein signature app and worker are running on Sabrina.\n'
+printf 'Protein signature app and worker are running on %s.\n' "$(hostname)"
 PS_REMOTE
 
 if [[ "$PS_ACTION" == "status" ]]; then

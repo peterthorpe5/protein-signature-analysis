@@ -19,6 +19,7 @@ import pyarrow.parquet as pq
 from protein_signatures.errors import InputValidationError
 
 from .config import WorkbenchConfig
+from .storage import temporary_root
 
 LOGGER = logging.getLogger(__name__)
 RESIDUES = frozenset("ABCDEFGHIKLMNOPQRSTUVWXYZ")
@@ -108,8 +109,7 @@ def open_catalogue(*, config: WorkbenchConfig, with_index: bool = True) -> Itera
     Yields:
         Private DuckDB connection; source files remain unchanged.
     """
-    spill = Path(config.workspace) / "temporary"
-    spill.mkdir(parents=True, exist_ok=True, mode=0o700)
+    spill = temporary_root(config=config)
     connection = duckdb.connect(
         config={
             "threads": config.threads,
@@ -330,28 +330,26 @@ def retrieve_clusters(*, config: WorkbenchConfig, values: Sequence[str], output:
         summary["published_members"] = summary.cluster_id.map(arg=expected)
         summary["physical_row_groups_read"] = len(groups)
         summary.to_csv(path_or_buf=output / "clusters.tsv", sep="\t", index=False)
+        from .context import reviewed_taxonomy, save_context
+
+        reviewed_taxonomy(connection=connection, path=config.taxonomy)
         if config.taxonomy:
-            source_view(connection=connection, path=config.taxonomy, name="taxonomy_source")
-            # Conflicting/unreviewed metadata stays unclassified; names are never inferred.
-            columns = connection.execute("SELECT * FROM taxonomy_source LIMIT 0").description
-            reviewed = (
-                "WHERE mapping_status='REVIEWED'"
-                if "mapping_status" in {c[0] for c in columns}
-                else ""
-            )
-            connection.execute(
-                "CREATE VIEW taxonomy AS SELECT sequence_id,min(species) AS species,"
-                "min(taxon_id) AS taxon_id FROM taxonomy_source "
-                + reviewed
-                + " GROUP BY sequence_id HAVING count(DISTINCT taxon_id)=1"
-            )
-            taxa = connection.sql(
-                query=(
-                    "SELECT m.cluster_id,coalesce(t.species,'Unclassified') AS species,"
-                    "t.taxon_id,count(*) AS sequence_count FROM members m LEFT JOIN taxonomy t "
-                    "USING(sequence_id) GROUP BY m.cluster_id,t.species,t.taxon_id "
-                    "ORDER BY m.cluster_id,sequence_count DESC"
-                )
-            )
-            taxa.write_csv(file_name=str(output / "taxonomy_summary.tsv"), sep="\t", header=True)
+            connection.sql(
+                "SELECT m.cluster_id,coalesce(t.reviewed_species,'Unclassified') AS species,"
+                "t.reviewed_taxon_id AS taxon_id,count(*) AS sequence_count "
+                "FROM members m LEFT JOIN reviewed_taxonomy t USING(sequence_id) "
+                "GROUP BY m.cluster_id,t.reviewed_species,t.reviewed_taxon_id "
+                "ORDER BY m.cluster_id,sequence_count DESC"
+            ).write_csv(file_name=str(output / "taxonomy_summary.tsv"), sep="\t", header=True)
+        save_context(
+            connection=connection,
+            output=output,
+            sequence_count=sum(counts.values()),
+            query=(
+                "SELECT m.sequence_id,m.sequence_sha256,m.cluster_id AS source_group,"
+                "'DEEPCLUST' AS group_type,'' AS run_id,'' AS hierarchy_node,"
+                "'' AS released_species,t.reviewed_species,t.reviewed_taxon_id "
+                "FROM members m LEFT JOIN reviewed_taxonomy t USING(sequence_id)"
+            ),
+        )
     LOGGER.info("Retrieved %d complete clusters, %d sequences", len(selected), sum(counts.values()))

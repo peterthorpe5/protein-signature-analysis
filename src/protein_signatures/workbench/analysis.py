@@ -8,10 +8,13 @@ import json
 import logging
 import math
 import os
+import selectors
 import signal
 import subprocess
+import time
 from collections import Counter
 from collections.abc import Iterator, Sequence
+from contextlib import nullcontext
 from pathlib import Path
 
 import pyarrow as pa
@@ -21,6 +24,7 @@ from protein_signatures.io_utils import write_json_atomic
 
 from .catalogue import identifiers, normalise_sequence, open_catalogue
 from .config import WorkbenchConfig, bounded_number
+from .storage import temporary_root
 
 LOGGER = logging.getLogger(__name__)
 HIT_FIELDS = (
@@ -155,6 +159,9 @@ def run_command(
     arguments: Sequence[str],
     output: Path,
     stdout_name: str | None = None,
+    stdin_path: Path | None = None,
+    stdout_path: Path | None = None,
+    stdout_limit: int | None = None,
 ) -> None:
     """Run an argument vector, retaining logs and terminating its process group on timeout.
 
@@ -163,6 +170,9 @@ def run_command(
         arguments: Explicit executable and arguments; no shell interpolation.
         output: Owned output directory.
         stdout_name: Optional output receiving stdout, for MAFFT and FastTree.
+        stdin_path: Optional finite binary request file.
+        stdout_path: Optional private scratch destination.
+        stdout_limit: Optional maximum response size in bytes.
 
     Raises:
         ExternalToolError: If a command cannot run, fails or times out.
@@ -179,15 +189,17 @@ def run_command(
             + "\n"
         )
     environment = dict(os.environ)
-    environment["TMPDIR"] = str(Path(config.workspace) / "temporary")
+    environment["TMPDIR"] = str(temporary_root(config=config))
     with (
-        (output / (stdout_name or "tool_stdout.log")).open(mode="ab") as stdout,
+        (stdout_path or output / (stdout_name or "tool_stdout.log")).open(mode="ab") as stdout,
         (output / "tool_stderr.log").open(mode="ab") as stderr,
+        stdin_path.open(mode="rb") if stdin_path else nullcontext(subprocess.DEVNULL) as stdin,
     ):
         try:
             process = subprocess.Popen(
                 args=list(arguments),
-                stdout=stdout,
+                stdin=stdin,
+                stdout=subprocess.PIPE if stdout_limit is not None else stdout,
                 stderr=stderr,
                 env=environment,
                 start_new_session=True,
@@ -199,7 +211,16 @@ def run_command(
             write_json_atomic(
                 path=marker, value={"process_group": process.pid, "argv": list(arguments)}
             )
-            status = process.wait(timeout=config.command_timeout)
+            status = (
+                _bounded_stdout(
+                    process=process,
+                    destination=stdout,
+                    limit=stdout_limit,
+                    timeout=config.command_timeout,
+                )
+                if stdout_limit is not None
+                else process.wait(timeout=config.command_timeout)
+            )
         except subprocess.TimeoutExpired as error:
             terminate_process(process=process)
             raise ExternalToolError(f"Command timed out: {arguments[0]}") from error
@@ -209,10 +230,32 @@ def run_command(
             raise
         finally:
             marker.unlink(missing_ok=True)
+            if stdout_limit is not None and process.stdout is not None:
+                process.stdout.close()
     if status != 0:
         raise ExternalToolError(
             f"{arguments[0]} exited with status {status}; inspect tool_stderr.log."
         )
+
+
+def _bounded_stdout(*, process: subprocess.Popen, destination, limit: int, timeout: int) -> int:
+    """Drain a binary response with a shared deadline and a byte ceiling."""
+    deadline = time.monotonic() + timeout
+    count = 0
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(timeout=remaining):
+                raise subprocess.TimeoutExpired(cmd=process.args, timeout=timeout)
+            block = os.read(process.stdout.fileno(), min(1024 * 1024, limit - count + 1))
+            if not block:
+                break
+            count += len(block)
+            if count > limit:
+                raise ExternalToolError("Scientific command exceeded its response size limit.")
+            destination.write(block)
+    return process.wait(timeout=max(0.0, deadline - time.monotonic()))
 
 
 def terminate_process(*, process: subprocess.Popen) -> None:
@@ -333,7 +376,7 @@ def search_sequences(
             "--threads",
             str(config.threads),
             "--tmpdir",
-            str(Path(config.workspace) / "temporary"),
+            str(temporary_root(config=config)),
             "--block-size",
             str(min(0.4, config.memory_gb / 12)),
             "--index-chunks",
@@ -394,21 +437,34 @@ def search_sequences(
     return result
 
 
-def align_family(*, config: WorkbenchConfig, source: Path, parameters: dict, output: Path) -> None:
+def align_family(
+    *,
+    config: WorkbenchConfig,
+    source: Path,
+    parameters: dict,
+    output: Path,
+    context: Path | None = None,
+) -> None:
     """Align a bounded explicit selection and optionally infer a WAG+gamma tree.
 
     Args:
         config: MAFFT, FastTree and alignment resource limits.
         source: Unaligned source proteins.
-        parameters: Optional exact selected IDs and tree Boolean.
+        parameters: Optional exact selected IDs, reference ID and tree Boolean.
         output: Owned job directory.
+        context: Optional sequence-bound source context.
 
     Raises:
         InputValidationError: If selection, alignment or output contracts fail.
     """
+    from .alignment_study import infer_aligned_tree, write_alignment_study
+    from .context import CONTEXT_FILE, carry_context
+
     with open_catalogue(config=config, with_index=False) as connection:
         index_fasta(connection=connection, path=source, name="family", maximum=config.max_sequences)
         selected = parameters.get("selected_ids", [])
+        if not isinstance(selected, list):
+            raise InputValidationError("Alignment selection must be a list of exact IDs.")
         if selected:
             values = identifiers(values=selected, maximum=config.max_alignment_sequences)
             connection.execute(
@@ -444,6 +500,11 @@ def align_family(*, config: WorkbenchConfig, source: Path, parameters: dict, out
         rows = connection.execute(
             "SELECT sequence_id,sequence FROM alignment_input ORDER BY sequence_id"
         ).fetchall()
+    reference = parameters.get("reference_id", "")
+    if not isinstance(reference, str) or (reference and reference not in {row[0] for row in rows}):
+        raise InputValidationError("The reference ID must be in the alignment selection.")
+    reference = reference or rows[0][0]
+    rows.sort(key=lambda row: (row[0] != reference, row[0]))
     mapping = {f"seq_{i:06d}": identifier for i, (identifier, _) in enumerate(rows)}
     input_path = output / "tool_input.fasta"
     input_path.write_text(
@@ -535,22 +596,23 @@ def align_family(*, config: WorkbenchConfig, source: Path, parameters: dict, out
                     entropy,
                 ]
             )
+    if context is not None:
+        carry_context(
+            config=config, context=context, sequences=output / "sequences.fasta", output=output
+        )
+    write_alignment_study(
+        records={mapping[key]: value for key, value in alignment.items()},
+        reference_id=reference,
+        output=output,
+    )
     tree = parameters.get("tree", False)
     if not isinstance(tree, bool):
         raise InputValidationError("tree must be a Boolean.")
     if tree:
-        if count < 3:
-            raise InputValidationError("Tree inference requires at least three sequences.")
-        run_command(
+        infer_aligned_tree(
             config=config,
+            alignment=output / "alignment.internal.fasta",
+            labels=mapping,
             output=output,
-            stdout_name="tree.nwk",
-            arguments=[
-                config.fasttree,
-                "-wag",
-                "-gamma",
-                str(output / "alignment.internal.fasta"),
-            ],
+            context=output / CONTEXT_FILE if context is not None else None,
         )
-        if not (output / "tree.nwk").read_text(encoding="utf-8").strip().endswith(";"):
-            raise InputValidationError("FastTree did not return a complete Newick tree.")

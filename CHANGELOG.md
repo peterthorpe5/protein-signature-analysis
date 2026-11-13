@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.5.0 - 2026-11-12
+
+- Port the shared research workflows from E3 Python app v0.23.10. Search released
+  HOGs by exact run and hierarchy, align all available sequences or an explicit
+  subset, and browse recorded features by member in Nightingale.
+- Hand off exact unaligned inputs and sequence-bound species context from HOGs,
+  retrieval, screening, alignment and audited subclusters. Keep released names
+  and reviewed NCBI taxon IDs distinct.
+- Review reference and column metrics, inspect pairwise identity with its exact
+  comparable-residue counts, and infer FastTree from saved alignments. Export
+  Newick, Auspice v2 divergence JSON and reviewed species-display mappings.
+- Run stricter DIAMOND DeepClust on the app host, normal worker or configured
+  SSH analysis host. Audit every assignment by exact centroid realignment,
+  compare complete partitions and export the displayed network as GraphML.
+- Start specific queued jobs from the app, supply a private contact for EBI
+  InterProScan, and preview retention cleanup of owned job scratch.
+- Cumulative upgrade from 0.3.0: includes the LoL-align, offline viewers and
+  portable model, annotation and DeepClust tools from 0.4.0.
+
+## 0.4.0 - 2026-11-11
+
+- Add LoL-align via a capability-checked Foldseek build for explicit monomer pairs.
+- Rerun original US-align/TM-align pairs in a separate directory with original model
+  SHA-256 checks, original/new evidence columns, local correspondence and transforms.
+- Add offline JBrowse MSA and Nightingale with the E3 v0.23.1 example, compact sizing
+  and direct handoffs from selected seeds and completed jobs.
+- Add an opt-in, bounded ESMFold API route, exact FASTA and portable request exports,
+  and sequence-checked viewing of models made on another machine.
+- Add local and optional EBI InterProScan, local eggNOG-mapper, exact residue
+  coordinate validation and explicit per-protein no-hit records.
+- Import portable DeepClust result Parquet files and reuse their exact FASTA.
+- Add Stefan and Sabrina launcher profiles with distinct Mac ports and per-workspace
+  logs, temporary files and caches. Reuse existing read-only DeepClust mounts.
+
 ## 0.3.0 - 2026-10-22
 
 - Add a generic guided protein research workbench and a separate durable server queue.

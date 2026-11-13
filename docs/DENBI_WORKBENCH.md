@@ -1,5 +1,8 @@
 # Protein research workbench on de.NBI
 
+For the current update and Stefan deployment, use the
+[Stefan and Sabrina runbook](SERVER_WORKBENCH.md). This page records the v0.3.0 setup.
+
 Version 0.3.0 adds a generic family-expansion workbench alongside the completed-result
 viewer. E3 is an example profile, not a requirement. Your Mac supplies the browser and
 SSH tunnel. Sabrina reads its installed DeepClust resources and runs the analyses.
